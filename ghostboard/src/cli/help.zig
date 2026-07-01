@@ -34,7 +34,7 @@ pub fn run(alloc: Allocator) !u8 {
     var stdout_writer = std.fs.File.stdout().writer(&buffer);
     const stdout = &stdout_writer.interface;
     try stdout.writeAll(
-        \\Usage: termsurf [+action] [options]
+        \\Usage: ghostboard [+action] [options]
         \\
         \\Run the TermSurf terminal emulator or a specific helper action.
         \\

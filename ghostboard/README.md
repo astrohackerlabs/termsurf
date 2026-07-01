@@ -171,7 +171,7 @@ was generated.
 
 > [!NOTE]
 >
-> Use the `ghostty +crash-report` CLI command to get a list of available crash
+> Use the `ghostboard +crash-report` CLI command to get a list of available crash
 > reports. A future version of Ghostty will make the contents of the crash
 > reports more easily viewable through the CLI and GUI.
 
@@ -179,7 +179,7 @@ Crash reports end in the `.ghosttycrash` extension. The crash reports are in
 [Sentry envelope format](https://develop.sentry.dev/sdk/envelopes/). You can
 upload these to your own Sentry account to view their contents, but the format
 is also publicly documented so any other available tools can also be used. The
-`ghostty +crash-report` CLI command can be used to list any crash reports. A
+`ghostboard +crash-report` CLI command can be used to list any crash reports. A
 future version of Ghostty will show you the contents of the crash report
 directly in the terminal.
 

@@ -55,7 +55,7 @@ The file format is documented below as an example:
     palette = 15=#fbf1c7
 
 You can view all available configuration options and their documentation by
-executing the command `ghostty +show-config --default --docs`. Note that this will
+executing the command `ghostboard +show-config --default --docs`. Note that this will
 output the full default configuration with docs to stdout, so you may want to
 pipe that through a pager, an editor, etc.
 

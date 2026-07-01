@@ -9,25 +9,27 @@ LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Versions/A/Framewo
 GHOSTBOARD_RELEASE_APP="$REPO_DIR/ghostboard/macos/build/Release/TermSurf.app"
 APPLICATIONS_DIR="${TERMSURF_APPLICATIONS_DIR:-/Applications}"
 ROAMIUM_INSTALL_DIR="${TERMSURF_ROAMIUM_INSTALL_DIR:-/opt/homebrew/opt/termsurf-roamium}"
+GTUI_BIN_DIR="${TERMSURF_GTUI_BIN_DIR:-/usr/local/bin}"
+GTUI_INSTALL_DIR="${TERMSURF_GTUI_INSTALL_DIR:-/usr/local/share/termsurf/gtui}"
 
 COMPONENT="${1:-}"
 
 if [ -z "$COMPONENT" ]; then
   echo "Usage: $0 <component>"
-  echo "Components: ghostboard, roamium, webtui, all"
+  echo "Components: ghostboard, roamium, webtui, gtui, all"
   exit 1
 fi
 
 case "$COMPONENT" in
-  roamium | ghostboard | webtui | all) ;;
+  roamium | ghostboard | webtui | gtui | all) ;;
   *)
     echo "Unknown component: $COMPONENT"
-    echo "Components: ghostboard, roamium, webtui, all"
+    echo "Components: ghostboard, roamium, webtui, gtui, all"
     exit 1
     ;;
 esac
 
-if [ "$COMPONENT" = "ghostboard" ] && [ ! -x "$GHOSTBOARD_RELEASE_APP/Contents/MacOS/termsurf" ]; then
+if [ "$COMPONENT" = "ghostboard" ] && [ ! -x "$GHOSTBOARD_RELEASE_APP/Contents/MacOS/ghostboard" ]; then
   echo "Error: Release app not found at $GHOSTBOARD_RELEASE_APP"
   echo "Run: scripts/build.sh ghostboard --release"
   exit 1
@@ -52,6 +54,11 @@ needs_root() {
     echo "Error: TERMSURF_APPLICATIONS_DIR is not writable: $APPLICATIONS_DIR"
     exit 1
   fi
+  if [ "$COMPONENT" = "gtui" ]; then
+    mkdir -p "$GTUI_BIN_DIR" "$GTUI_INSTALL_DIR" 2>/dev/null || return 0
+    [ -w "$GTUI_BIN_DIR" ] && [ -w "$GTUI_INSTALL_DIR" ] && return 1
+    return 0
+  fi
   return 0
 }
 
@@ -60,6 +67,8 @@ if [ "$(id -u)" -ne 0 ] && needs_root; then
   exec sudo env \
     TERMSURF_APPLICATIONS_DIR="$APPLICATIONS_DIR" \
     TERMSURF_ROAMIUM_INSTALL_DIR="$ROAMIUM_INSTALL_DIR" \
+    TERMSURF_GTUI_BIN_DIR="$GTUI_BIN_DIR" \
+    TERMSURF_GTUI_INSTALL_DIR="$GTUI_INSTALL_DIR" \
     "$0" "$@"
 fi
 
@@ -99,7 +108,7 @@ install_ghostboard() {
   fi
   local APP="$APP_DIR/TermSurf.app"
 
-  if [ ! -x "$APP_SRC/Contents/MacOS/termsurf" ]; then
+  if [ ! -x "$APP_SRC/Contents/MacOS/ghostboard" ]; then
     echo "Error: Release app not found at $APP_SRC"
     echo "Run: scripts/build.sh ghostboard --release"
     exit 1
@@ -135,14 +144,36 @@ install_webtui() {
   echo "  Bin: /usr/local/bin/web"
 }
 
+install_gtui() {
+  local TERMSURF_CLI="$REPO_DIR/target/release/termsurf"
+
+  if [ ! -f "$TERMSURF_CLI" ]; then
+    echo "Error: Release build not found at $TERMSURF_CLI"
+    echo "Run: scripts/build.sh gtui --release"
+    exit 1
+  fi
+
+  echo "==> Installing TermSurf GTUI to $GTUI_BIN_DIR/termsurf..."
+  mkdir -p "$GTUI_BIN_DIR" "$GTUI_INSTALL_DIR"
+  cp "$TERMSURF_CLI" "$GTUI_BIN_DIR/termsurf"
+  rm -rf "$GTUI_INSTALL_DIR/app"
+  cp -R "$REPO_DIR/gtui/app" "$GTUI_INSTALL_DIR/app"
+  codesign --force --sign - "$GTUI_BIN_DIR/termsurf" || true
+
+  echo "  Bin: $GTUI_BIN_DIR/termsurf"
+  echo "  App: $GTUI_INSTALL_DIR/app"
+}
+
 case "$COMPONENT" in
   roamium)    install_roamium ;;
   ghostboard) install_ghostboard ;;
   webtui)     install_webtui ;;
+  gtui)       install_gtui ;;
   all)
     install_roamium
     install_ghostboard
     install_webtui
+    install_gtui
     echo ""
     echo "Done (all)."
     ;;

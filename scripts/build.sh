@@ -16,7 +16,7 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ghostboard, roamium, webtui, chromium, webkit, surfari-lib, surfari, all"
+  echo "Components: ghostboard, roamium, webtui, gtui, chromium, webkit, surfari-lib, surfari, all"
 }
 
 configuration() {
@@ -88,6 +88,23 @@ build_webtui() {
     echo "==> Building webtui (debug)..."
     cargo build -p webtui
     echo "  webtui: $REPO_DIR/target/debug/web"
+  fi
+}
+
+build_gtui() {
+  cd "$REPO_DIR"
+  if $CLEAN; then
+    echo "==> Cleaning gtui..."
+    cargo clean -p gtui
+  fi
+  if $RELEASE; then
+    echo "==> Building gtui (release)..."
+    cargo build --release -p gtui
+    echo "  gtui: $REPO_DIR/target/release/termsurf"
+  else
+    echo "==> Building gtui (debug)..."
+    cargo build -p gtui
+    echo "  gtui: $REPO_DIR/target/debug/termsurf"
   fi
 }
 
@@ -229,12 +246,13 @@ build_ghostboard() {
     codesign --force --deep --sign - "build/$CONFIGURATION/TermSurf.app"
   fi
   echo "  Ghostboard: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf.app"
-  echo "  Ghostboard executable: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf.app/Contents/MacOS/termsurf"
+  echo "  Ghostboard executable: $REPO_DIR/ghostboard/macos/build/$CONFIGURATION/TermSurf.app/Contents/MacOS/ghostboard"
 }
 
 case "$COMPONENT" in
   chromium)   build_chromium ;;
   webtui)     build_webtui ;;
+  gtui)       build_gtui ;;
   roamium)    build_roamium ;;
   webkit)     build_webkit ;;
   surfari-lib) build_surfari_lib ;;
@@ -243,6 +261,7 @@ case "$COMPONENT" in
   all)
     build_chromium
     build_webtui
+    build_gtui
     build_roamium
     build_webkit
     build_surfari

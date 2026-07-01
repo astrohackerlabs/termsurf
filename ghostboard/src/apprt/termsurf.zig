@@ -17,6 +17,8 @@ const max_frame_size: usize = 1024 * 1024;
 const max_clients: usize = 128;
 const max_panes: usize = 256;
 const max_servers: usize = 64;
+const max_apps: usize = 16;
+const max_app_frontends: usize = 128;
 const max_tab_lookups: usize = 512;
 const max_devtools_reservations: usize = 256;
 const max_closed_panes: usize = max_panes;
@@ -25,6 +27,9 @@ const max_pane_id_len: usize = 128;
 const max_profile_len: usize = 128;
 const max_browser_len: usize = std.fs.max_path_bytes;
 const max_url_len: usize = 2048;
+const max_app_id_len: usize = 64;
+const max_app_url_len: usize = max_url_len;
+const max_app_frontend_id_len: usize = 64;
 const max_homepage_len: usize = max_url_len;
 const max_listen_socket_len: usize = std.fs.max_path_bytes;
 const default_browser = "roamium";
@@ -40,6 +45,33 @@ const installed_roamium_path_env = "TERMSURF_INSTALLED_ROAMIUM_PATH";
 const installed_surfari_path_env = "TERMSURF_INSTALLED_SURFARI_PATH";
 const installed_roamium_path = "/opt/homebrew/opt/termsurf-roamium/roamium";
 const installed_surfari_path = "/opt/homebrew/opt/termsurf-surfari/surfari";
+const gtui_app_id = "gtui";
+const gtui_app_path_env = "TERMSURF_GTUI_APP_PATH";
+const deno_path_env = "TERMSURF_DENO_PATH";
+
+const AppRuntime = enum {
+    deno,
+};
+
+const AppDescriptor = struct {
+    app_id: []const u8,
+    runtime: AppRuntime,
+    app_path_env: [:0]const u8,
+    runtime_path_env: [:0]const u8,
+    default_runtime_path: []const u8,
+    readiness_timeout_ms: u64,
+};
+
+const app_descriptors = [_]AppDescriptor{
+    .{
+        .app_id = gtui_app_id,
+        .runtime = .deno,
+        .app_path_env = gtui_app_path_env,
+        .runtime_path_env = deno_path_env,
+        .default_runtime_path = "deno",
+        .readiness_timeout_ms = 15_000,
+    },
+};
 
 const termsurf_open_split = if (builtin.is_test) testTermsurfOpenSplit else @extern(*const fn (
     pane_id: [*:0]const u8,
@@ -203,6 +235,86 @@ const ServerState = struct {
     fn listenSocket(self: *const ServerState) []const u8 {
         return self.listen_socket[0..self.listen_socket_len];
     }
+};
+
+const AppState = struct {
+    in_use: bool = false,
+    starting: bool = false,
+    app_id: [max_app_id_len]u8 = undefined,
+    app_id_len: usize = 0,
+    url: [max_app_url_len]u8 = undefined,
+    url_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    port: u16 = 0,
+
+    fn appId(self: *const AppState) []const u8 {
+        return self.app_id[0..self.app_id_len];
+    }
+
+    fn appUrl(self: *const AppState) []const u8 {
+        return self.url[0..self.url_len];
+    }
+};
+
+const AppFrontendState = struct {
+    in_use: bool = false,
+    app_id: [max_app_id_len]u8 = undefined,
+    app_id_len: usize = 0,
+    frontend_id: [max_app_frontend_id_len]u8 = undefined,
+    frontend_id_len: usize = 0,
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    tui_fd: std.posix.fd_t = -1,
+
+    fn appId(self: *const AppFrontendState) []const u8 {
+        return self.app_id[0..self.app_id_len];
+    }
+
+    fn frontendId(self: *const AppFrontendState) []const u8 {
+        return self.frontend_id[0..self.frontend_id_len];
+    }
+
+    fn paneId(self: *const AppFrontendState) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+};
+
+const AppShutdownSnapshot = struct {
+    app_id: [max_app_id_len]u8 = undefined,
+    app_id_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+
+    fn appId(self: *const AppShutdownSnapshot) []const u8 {
+        return self.app_id[0..self.app_id_len];
+    }
+};
+
+const AppFrontendCloseSnapshot = struct {
+    tui_fd: std.posix.fd_t = -1,
+    app_id: [max_app_id_len]u8 = undefined,
+    app_id_len: usize = 0,
+    frontend_id: [max_app_frontend_id_len]u8 = undefined,
+    frontend_id_len: usize = 0,
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+
+    fn appId(self: *const AppFrontendCloseSnapshot) []const u8 {
+        return self.app_id[0..self.app_id_len];
+    }
+
+    fn frontendId(self: *const AppFrontendCloseSnapshot) []const u8 {
+        return self.frontend_id[0..self.frontend_id_len];
+    }
+
+    fn paneId(self: *const AppFrontendCloseSnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+};
+
+const AppReadyResult = enum {
+    ready,
+    exited,
+    timeout,
 };
 
 const TabLookupState = struct {
@@ -526,6 +638,8 @@ var clients: [max_clients]ClientSlot = [_]ClientSlot{.{}} ** max_clients;
 var panes: [max_panes]PaneState = [_]PaneState{.{}} ** max_panes;
 var closed_panes: [max_closed_panes]ClosedPaneState = [_]ClosedPaneState{.{}} ** max_closed_panes;
 var servers: [max_servers]ServerState = [_]ServerState{.{}} ** max_servers;
+var apps: [max_apps]AppState = [_]AppState{.{}} ** max_apps;
+var app_frontends: [max_app_frontends]AppFrontendState = [_]AppFrontendState{.{}} ** max_app_frontends;
 var tab_lookups: [max_tab_lookups]TabLookupState = [_]TabLookupState{.{}} ** max_tab_lookups;
 var devtools_reservations: [max_devtools_reservations]DevtoolsReservationState = [_]DevtoolsReservationState{.{}} ** max_devtools_reservations;
 var last_browser_pane: [max_pane_id_len]u8 = undefined;
@@ -604,6 +718,7 @@ pub fn stop() void {
     for (client_threads) |maybe_thread| {
         if (maybe_thread) |t| t.join();
     }
+    stopAllApps();
 
     if (socket_path_len > 0) {
         const path = socket_path_buf[0..socket_path_len];
@@ -652,7 +767,10 @@ fn acceptLoop(fd: std.posix.fd_t) void {
 fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
     var conn_type: ConnType = .unknown;
     defer {
-        if (conn_type == .tui) cleanupTuiPanes(fd);
+        if (conn_type == .tui) {
+            cleanupAppFrontendsForFd(fd);
+            cleanupTuiPanes(fd);
+        }
         if (conn_type == .browser) cleanupBrowserConnection(fd);
         markClientDone(slot_index);
         std.posix.close(fd);
@@ -757,6 +875,12 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_SPLIT => {
                     handleOpenSplit(msg.*.unnamed_0.open_split);
+                },
+                c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP => {
+                    handleOpenApp(fd, msg.*.unnamed_0.open_app);
+                },
+                c.TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND => {
+                    handleCloseAppFrontend(msg.*.unnamed_0.close_app_frontend);
                 },
                 else => {
                     log.info("TermSurf message ignored type={s}", .{msgTypeName(msg.*.msg_case)});
@@ -1742,6 +1866,67 @@ fn handleOpenSplit(req: ?*c.Termsurf__OpenSplit) void {
     termsurf_open_split(pane_id, direction, command);
 }
 
+fn handleOpenApp(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__OpenApp) void {
+    const open_app = req orelse {
+        sendOpenAppReply(tui_fd, "", "", "", "", "missing OpenApp payload") catch {};
+        return;
+    };
+    const pane_id = cString(open_app.*.pane_id);
+    const app_id = cString(open_app.*.app_id);
+    const browser = cString(open_app.*.browser);
+    const profile = cString(open_app.*.profile);
+    const entrypoint = cString(open_app.*.entrypoint);
+
+    log.info("OpenApp: pane_id={s} app_id={s}", .{ pane_id, app_id });
+
+    const descriptor = findAppDescriptor(app_id) orelse {
+        sendOpenAppReply(tui_fd, pane_id, app_id, "", "", "unsupported app_id") catch |err| {
+            log.warn("OpenAppReply unsupported failed pane_id={s} app_id={s} err={}", .{ pane_id, app_id, err });
+        };
+        return;
+    };
+
+    var frontend_id_buf: [max_app_frontend_id_len]u8 = undefined;
+    var frontend_id_len: usize = 0;
+    var url_buf: [max_app_url_len]u8 = undefined;
+    var url_len: usize = 0;
+    var error_buf: [256]u8 = undefined;
+
+    const result = openOrReuseApp(descriptor, tui_fd, pane_id, app_id, browser, profile, entrypoint, &frontend_id_buf, &frontend_id_len, &url_buf, &url_len, &error_buf);
+    if (result) {
+        sendOpenAppReply(
+            tui_fd,
+            pane_id,
+            app_id,
+            frontend_id_buf[0..frontend_id_len],
+            url_buf[0..url_len],
+            "",
+        ) catch |err| {
+            log.warn("OpenAppReply failed pane_id={s} app_id={s} err={}", .{ pane_id, app_id, err });
+        };
+    } else {
+        sendOpenAppReply(tui_fd, pane_id, app_id, "", "", std.mem.sliceTo(&error_buf, 0)) catch |err| {
+            log.warn("OpenAppReply error failed pane_id={s} app_id={s} err={}", .{ pane_id, app_id, err });
+        };
+    }
+}
+
+fn handleCloseAppFrontend(req: ?*c.Termsurf__CloseAppFrontend) void {
+    const close_app = req orelse {
+        log.warn("CloseAppFrontend: missing payload", .{});
+        return;
+    };
+    const app_id = cString(close_app.*.app_id);
+    const frontend_id = cString(close_app.*.frontend_id);
+
+    var shutdown: ?AppShutdownSnapshot = null;
+    state_mutex.lock();
+    removeAppFrontendLocked(app_id, frontend_id, null, &shutdown);
+    state_mutex.unlock();
+
+    if (shutdown) |*snapshot| stopAppBackend(snapshot);
+}
+
 fn updatePane(
     pane: *PaneState,
     overlay: *c.Termsurf__SetOverlay,
@@ -2230,6 +2415,10 @@ pub fn forwardKeyEvent(
     utf8: []const u8,
     modifiers: u64,
 ) bool {
+    if (isCtrlCDown(event_type, windows_key_code, modifiers)) {
+        if (closeAppFrontendForPaneShortcut(pane_id)) return true;
+    }
+
     const snapshot = snapshotBrowserInput(pane_id, true) orelse return false;
 
     var key_event: c.Termsurf__KeyEvent = undefined;
@@ -2254,6 +2443,42 @@ pub fn forwardKeyEvent(
         .{ snapshot.paneId(), snapshot.tab_id, event_type, windows_key_code, utf8.len, modifiers },
     );
     return true;
+}
+
+fn isCtrlCDown(event_type: []const u8, windows_key_code: i64, modifiers: u64) bool {
+    return std.mem.eql(u8, event_type, "down") and windows_key_code == 67 and (modifiers & 2) != 0;
+}
+
+fn closeAppFrontendForPaneShortcut(pane_id: []const u8) bool {
+    var close_snapshot: ?AppFrontendCloseSnapshot = null;
+    var shutdown: ?AppShutdownSnapshot = null;
+
+    state_mutex.lock();
+    for (&app_frontends) |*frontend| {
+        if (!frontend.in_use or !std.mem.eql(u8, frontend.paneId(), pane_id)) continue;
+        var snapshot: AppFrontendCloseSnapshot = .{ .tui_fd = frontend.tui_fd };
+        if (copyText(&snapshot.app_id, &snapshot.app_id_len, frontend.appId()) and
+            copyText(&snapshot.frontend_id, &snapshot.frontend_id_len, frontend.frontendId()) and
+            copyText(&snapshot.pane_id, &snapshot.pane_id_len, frontend.paneId()))
+        {
+            close_snapshot = snapshot;
+            const app_id_copy = snapshot.appId();
+            frontend.* = .{};
+            shutdown = maybeSnapshotAppShutdownLocked(app_id_copy);
+        }
+        break;
+    }
+    state_mutex.unlock();
+
+    if (close_snapshot) |*snapshot| {
+        sendCloseAppFrontendToTui(snapshot) catch |err| {
+            log.warn("App Ctrl+C close notify failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+        };
+        if (shutdown) |*app_shutdown| stopAppBackend(app_shutdown);
+        log.info("App Ctrl+C close pane_id={s} app_id={s}", .{ snapshot.paneId(), snapshot.appId() });
+        return true;
+    }
+    return false;
 }
 
 pub fn forwardMouseEvent(
@@ -3064,6 +3289,8 @@ fn cleanupTuiPanes(fd: std.posix.fd_t) void {
 }
 
 pub fn paneClosed(pane_id: []const u8) void {
+    cleanupAppFrontendsForPane(pane_id);
+
     var close_tab: ?CloseTabSnapshot = null;
     var clear_overlay: ?ClearOverlaySnapshot = null;
     var server_shutdown: ?ServerShutdownSnapshot = null;
@@ -3428,6 +3655,546 @@ fn reserveServer() ?usize {
     return null;
 }
 
+fn reserveApp() ?usize {
+    for (&apps, 0..) |*app, i| {
+        if (!app.in_use) return i;
+    }
+    return null;
+}
+
+fn reserveAppFrontend() ?usize {
+    for (&app_frontends, 0..) |*frontend, i| {
+        if (!frontend.in_use) return i;
+    }
+    return null;
+}
+
+fn findApp(app_id: []const u8) ?usize {
+    for (&apps, 0..) |*app, i| {
+        if (app.in_use and std.mem.eql(u8, app.appId(), app_id)) return i;
+    }
+    return null;
+}
+
+fn findAppFrontendById(app_id: []const u8, frontend_id: []const u8) ?usize {
+    for (&app_frontends, 0..) |*frontend, i| {
+        if (frontend.in_use and
+            std.mem.eql(u8, frontend.appId(), app_id) and
+            std.mem.eql(u8, frontend.frontendId(), frontend_id))
+        {
+            return i;
+        }
+    }
+    return null;
+}
+
+fn frontendCountForApp(app_id: []const u8) usize {
+    var count: usize = 0;
+    for (&app_frontends) |*frontend| {
+        if (frontend.in_use and std.mem.eql(u8, frontend.appId(), app_id)) count += 1;
+    }
+    return count;
+}
+
+fn setApp(app: *AppState, app_id: []const u8, url: []const u8, port: u16, child_pid: std.process.Child.Id) bool {
+    if (!copyText(&app.app_id, &app.app_id_len, app_id)) return false;
+    if (!copyText(&app.url, &app.url_len, url)) return false;
+    app.port = port;
+    app.child_pid = child_pid;
+    app.starting = false;
+    app.in_use = true;
+    return true;
+}
+
+fn setAppStarting(app: *AppState, app_id: []const u8) bool {
+    app.* = .{};
+    if (!copyText(&app.app_id, &app.app_id_len, app_id)) return false;
+    app.in_use = true;
+    app.starting = true;
+    return true;
+}
+
+fn setAppFrontend(frontend: *AppFrontendState, app_id: []const u8, frontend_id: []const u8, pane_id: []const u8, tui_fd: std.posix.fd_t) bool {
+    if (!copyText(&frontend.app_id, &frontend.app_id_len, app_id)) return false;
+    if (!copyText(&frontend.frontend_id, &frontend.frontend_id_len, frontend_id)) return false;
+    if (!copyText(&frontend.pane_id, &frontend.pane_id_len, pane_id)) return false;
+    frontend.tui_fd = tui_fd;
+    frontend.in_use = true;
+    return true;
+}
+
+fn findAppDescriptor(app_id: []const u8) ?*const AppDescriptor {
+    for (&app_descriptors) |*descriptor| {
+        if (std.mem.eql(u8, descriptor.app_id, app_id)) return descriptor;
+    }
+    return null;
+}
+
+fn openOrReuseApp(
+    descriptor: *const AppDescriptor,
+    tui_fd: std.posix.fd_t,
+    pane_id: []const u8,
+    app_id: []const u8,
+    browser: []const u8,
+    profile: []const u8,
+    entrypoint: []const u8,
+    frontend_id_buf: *[max_app_frontend_id_len]u8,
+    frontend_id_len: *usize,
+    url_buf: *[max_app_url_len]u8,
+    url_len: *usize,
+    error_buf: *[256]u8,
+) bool {
+    _ = browser;
+    _ = profile;
+    error_buf[0] = 0;
+
+    var app_url_copy: [max_app_url_len]u8 = undefined;
+    var app_url_copy_len: usize = 0;
+    var should_spawn = false;
+    var app_index: usize = undefined;
+    var port: u16 = 0;
+    var url_z_buf: [max_app_url_len]u8 = undefined;
+    var app_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var runtime_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+
+    const startup_deadline = std.time.milliTimestamp() + @as(i64, @intCast(descriptor.readiness_timeout_ms));
+    while (true) {
+        state_mutex.lock();
+        if (findApp(app_id)) |existing| {
+            if (apps[existing].starting) {
+                state_mutex.unlock();
+                if (std.time.milliTimestamp() >= startup_deadline) {
+                    _ = copyError(error_buf, "app startup timed out");
+                    return false;
+                }
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                continue;
+            } else if (appChildExited(apps[existing].child_pid)) {
+                log.warn("OpenApp: stale app backend exited app_id={s} pid={}", .{ app_id, apps[existing].child_pid });
+                apps[existing] = .{};
+                for (&app_frontends) |*frontend| {
+                    if (frontend.in_use and std.mem.eql(u8, frontend.appId(), app_id)) {
+                        frontend.* = .{};
+                    }
+                }
+                app_index = existing;
+                if (!setAppStarting(&apps[app_index], app_id)) {
+                    state_mutex.unlock();
+                    _ = copyError(error_buf, "failed to reserve app state");
+                    return false;
+                }
+                should_spawn = true;
+            } else {
+                app_index = existing;
+                if (!copyText(&app_url_copy, &app_url_copy_len, apps[existing].appUrl())) {
+                    state_mutex.unlock();
+                    _ = copyError(error_buf, "app URL too long");
+                    return false;
+                }
+            }
+        } else {
+            app_index = reserveApp() orelse {
+                state_mutex.unlock();
+                _ = copyError(error_buf, "app limit reached");
+                return false;
+            };
+            if (!setAppStarting(&apps[app_index], app_id)) {
+                state_mutex.unlock();
+                _ = copyError(error_buf, "failed to reserve app state");
+                return false;
+            }
+            should_spawn = true;
+        }
+        state_mutex.unlock();
+        break;
+    }
+
+    if (should_spawn) {
+        port = chooseLocalPort() orelse {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            _ = copyError(error_buf, "no local port available");
+            return false;
+        };
+        const url_z = std.fmt.bufPrintZ(&url_z_buf, "http://127.0.0.1:{d}/", .{port}) catch {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            _ = copyError(error_buf, "app URL too long");
+            return false;
+        };
+        const app_path_z = resolveAppPath(descriptor, entrypoint, &app_path_buf) orelse {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            _ = copyError(error_buf, "app entrypoint not found");
+            return false;
+        };
+        const runtime_path_z = resolveRuntimePath(descriptor, &runtime_path_buf) orelse {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            _ = copyError(error_buf, "app runtime executable not found");
+            return false;
+        };
+        const child_pid = spawnAppBackend(descriptor, runtime_path_z, app_path_z, port) orelse {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            _ = copyError(error_buf, "failed to spawn app backend");
+            return false;
+        };
+        const ready_result = waitForAppReady(child_pid, port, descriptor.readiness_timeout_ms);
+        if (ready_result != .ready) {
+            state_mutex.lock();
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            if (ready_result == .timeout) {
+                var snapshot: AppShutdownSnapshot = .{ .child_pid = child_pid };
+                _ = copyText(&snapshot.app_id, &snapshot.app_id_len, app_id);
+                stopAppBackend(&snapshot);
+            }
+            _ = copyError(error_buf, "app backend did not become ready");
+            return false;
+        }
+
+        state_mutex.lock();
+        if (!setApp(&apps[app_index], app_id, url_z, port, child_pid)) {
+            state_mutex.unlock();
+            var snapshot: AppShutdownSnapshot = .{ .child_pid = child_pid };
+            _ = copyText(&snapshot.app_id, &snapshot.app_id_len, app_id);
+            stopAppBackend(&snapshot);
+            _ = copyError(error_buf, "failed to record app state");
+            return false;
+        }
+        if (!copyText(&app_url_copy, &app_url_copy_len, apps[app_index].appUrl())) {
+            const snapshot = snapshotAppShutdown(&apps[app_index]);
+            apps[app_index] = .{};
+            state_mutex.unlock();
+            if (snapshot) |*s| stopAppBackend(s);
+            _ = copyError(error_buf, "app URL too long");
+            return false;
+        }
+        state_mutex.unlock();
+    }
+
+    const frontend_id_z = std.fmt.bufPrintZ(frontend_id_buf, "{s}-{d}-{d}", .{ app_id, std.c.getpid(), std.crypto.random.int(u32) }) catch {
+        _ = copyError(error_buf, "frontend id too long");
+        return false;
+    };
+    frontend_id_len.* = frontend_id_z.len;
+
+    state_mutex.lock();
+    const frontend_index = reserveAppFrontend() orelse {
+        const shutdown = maybeSnapshotAppShutdownLocked(app_id);
+        state_mutex.unlock();
+        if (shutdown) |*snapshot| stopAppBackend(snapshot);
+        _ = copyError(error_buf, "app frontend limit reached");
+        return false;
+    };
+    if (!setAppFrontend(&app_frontends[frontend_index], app_id, frontend_id_z, pane_id, tui_fd)) {
+        app_frontends[frontend_index] = .{};
+        state_mutex.unlock();
+        _ = copyError(error_buf, "failed to record app frontend");
+        return false;
+    }
+    state_mutex.unlock();
+
+    if (!copyText(url_buf, url_len, app_url_copy[0..app_url_copy_len])) {
+        _ = copyError(error_buf, "app URL too long");
+        return false;
+    }
+    return true;
+}
+
+fn copyError(buf: *[256]u8, message: []const u8) bool {
+    var len: usize = 0;
+    return copyText(buf, &len, message);
+}
+
+fn resolveRuntimePath(descriptor: *const AppDescriptor, buf: []u8) ?[:0]u8 {
+    if (std.posix.getenv(descriptor.runtime_path_env)) |path| {
+        return std.fmt.bufPrintZ(buf, "{s}", .{path}) catch null;
+    }
+    return std.fmt.bufPrintZ(buf, "{s}", .{descriptor.default_runtime_path}) catch null;
+}
+
+fn resolveAppPath(descriptor: *const AppDescriptor, entrypoint: []const u8, buf: []u8) ?[:0]u8 {
+    if (entrypoint.len > 0 and std.fs.path.isAbsolute(entrypoint)) {
+        return std.fmt.bufPrintZ(buf, "{s}", .{entrypoint}) catch null;
+    }
+    if (std.posix.getenv(descriptor.app_path_env)) |path| {
+        return std.fmt.bufPrintZ(buf, "{s}", .{path}) catch null;
+    }
+
+    switch (descriptor.runtime) {
+        .deno => {
+            const candidates = [_][:0]const u8{
+                "gtui/app/server.ts",
+                "../gtui/app/server.ts",
+            };
+            return resolveFirstExistingPath(&candidates, buf);
+        },
+    }
+}
+
+fn resolveFirstExistingPath(candidates: []const [:0]const u8, buf: []u8) ?[:0]u8 {
+    for (candidates) |candidate| {
+        if (std.fs.cwd().realpathZ(candidate, buf)) |resolved| {
+            if (resolved.len >= buf.len) return null;
+            buf[resolved.len] = 0;
+            return buf[0..resolved.len :0];
+        } else |_| {}
+    }
+    return null;
+}
+
+fn chooseLocalPort() ?u16 {
+    for (0..128) |_| {
+        const port = std.crypto.random.intRangeAtMost(u16, 49152, 60999);
+        if (!canConnectLocalPort(port)) return port;
+    }
+    return null;
+}
+
+fn canConnectLocalPort(port: u16) bool {
+    const stream = std.net.tcpConnectToHost(std.heap.c_allocator, "127.0.0.1", port) catch return false;
+    stream.close();
+    return true;
+}
+
+fn waitForAppReady(child_pid: std.process.Child.Id, port: u16, timeout_ms: u64) AppReadyResult {
+    const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    while (std.time.milliTimestamp() < deadline) {
+        if (appChildExited(child_pid)) return .exited;
+        if (httpHealthzOk(port)) return .ready;
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+    return .timeout;
+}
+
+fn httpHealthzOk(port: u16) bool {
+    const stream = std.net.tcpConnectToHost(std.heap.c_allocator, "127.0.0.1", port) catch return false;
+    defer stream.close();
+
+    const request = "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    writeAll(stream.handle, request) catch return false;
+
+    var response_buf: [512]u8 = undefined;
+    const n = std.posix.read(stream.handle, &response_buf) catch return false;
+    const response = response_buf[0..n];
+    return std.mem.indexOf(u8, response, "200 OK") != null and
+        std.mem.indexOf(u8, response, "\r\n\r\nok") != null;
+}
+
+fn appChildExited(pid: std.process.Child.Id) bool {
+    if (pid == 0) return true;
+    const res = std.posix.waitpid(pid, std.c.W.NOHANG);
+    return res.pid != 0;
+}
+
+fn spawnAppBackend(descriptor: *const AppDescriptor, runtime_path_z: [:0]const u8, app_path_z: [:0]const u8, port: u16) ?std.process.Child.Id {
+    var port_buf: [16]u8 = undefined;
+    const port_arg = std.fmt.bufPrintZ(&port_buf, "{d}", .{port}) catch return null;
+    switch (descriptor.runtime) {
+        .deno => {
+            const argv = [_][]const u8{
+                runtime_path_z,
+                "run",
+                "--allow-net=127.0.0.1",
+                "--no-check",
+                app_path_z,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                port_arg,
+            };
+            return spawnAppBackendArgv(descriptor, app_path_z, port, argv[0..]);
+        },
+    }
+}
+
+fn spawnAppBackendArgv(descriptor: *const AppDescriptor, app_path_z: [:0]const u8, port: u16, argv: []const []const u8) ?std.process.Child.Id {
+    var child = std.process.Child.init(argv, std.heap.c_allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    child.spawn() catch |err| {
+        log.warn("app backend spawn failed app_id={s} app={s} err={}", .{ descriptor.app_id, app_path_z, err });
+        return null;
+    };
+    log.info("app backend spawned app_id={s} pid={} port={}", .{ descriptor.app_id, child.id, port });
+    return child.id;
+}
+
+fn stopAppBackend(snapshot: *const AppShutdownSnapshot) void {
+    if (snapshot.child_pid == 0) return;
+    std.posix.kill(snapshot.child_pid, std.posix.SIG.TERM) catch |err| {
+        log.info("app backend kill skipped app={s} pid={} err={}", .{ snapshot.appId(), snapshot.child_pid, err });
+    };
+    for (0..50) |_| {
+        const res = std.posix.waitpid(snapshot.child_pid, std.c.W.NOHANG);
+        if (res.pid != 0) {
+            log.info("app backend reaped app={s} pid={}", .{ snapshot.appId(), snapshot.child_pid });
+            return;
+        }
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+    }
+    log.warn("app backend reap timed out app={s} pid={} sending SIGKILL", .{ snapshot.appId(), snapshot.child_pid });
+    std.posix.kill(snapshot.child_pid, std.posix.SIG.KILL) catch |err| {
+        log.warn("app backend SIGKILL failed app={s} pid={} err={}", .{ snapshot.appId(), snapshot.child_pid, err });
+        return;
+    };
+    _ = std.posix.waitpid(snapshot.child_pid, 0);
+    log.info("app backend killed app={s} pid={}", .{ snapshot.appId(), snapshot.child_pid });
+}
+
+fn snapshotAppShutdown(app: *const AppState) ?AppShutdownSnapshot {
+    if (app.child_pid == 0) return null;
+    var snapshot: AppShutdownSnapshot = .{ .child_pid = app.child_pid };
+    if (!copyText(&snapshot.app_id, &snapshot.app_id_len, app.appId())) return null;
+    return snapshot;
+}
+
+fn maybeSnapshotAppShutdownLocked(app_id: []const u8) ?AppShutdownSnapshot {
+    if (frontendCountForApp(app_id) != 0) return null;
+    const app_index = findApp(app_id) orelse return null;
+    const snapshot = snapshotAppShutdown(&apps[app_index]);
+    apps[app_index] = .{};
+    return snapshot;
+}
+
+fn removeAppFrontendLocked(app_id: []const u8, frontend_id: []const u8, pane_id: ?[]const u8, shutdown: *?AppShutdownSnapshot) void {
+    var removed = false;
+    if (frontend_id.len > 0) {
+        if (findAppFrontendById(app_id, frontend_id)) |index| {
+            app_frontends[index] = .{};
+            removed = true;
+        }
+    } else if (pane_id) |pid| {
+        for (&app_frontends) |*frontend| {
+            if (frontend.in_use and
+                std.mem.eql(u8, frontend.appId(), app_id) and
+                std.mem.eql(u8, frontend.paneId(), pid))
+            {
+                frontend.* = .{};
+                removed = true;
+            }
+        }
+    }
+    if (removed) {
+        shutdown.* = maybeSnapshotAppShutdownLocked(app_id);
+    }
+}
+
+fn cleanupAppFrontendsForFd(fd: std.posix.fd_t) void {
+    var shutdowns: [max_apps]AppShutdownSnapshot = undefined;
+    var shutdown_count: usize = 0;
+
+    state_mutex.lock();
+    for (&app_frontends) |*frontend| {
+        if (!frontend.in_use or frontend.tui_fd != fd) continue;
+        var app_id_buf: [max_app_id_len]u8 = undefined;
+        var app_id_len: usize = 0;
+        if (!copyText(&app_id_buf, &app_id_len, frontend.appId())) continue;
+        frontend.* = .{};
+        if (maybeSnapshotAppShutdownLocked(app_id_buf[0..app_id_len])) |snapshot| {
+            shutdowns[shutdown_count] = snapshot;
+            shutdown_count += 1;
+        }
+    }
+    state_mutex.unlock();
+
+    for (shutdowns[0..shutdown_count]) |*snapshot| stopAppBackend(snapshot);
+}
+
+fn cleanupAppFrontendsForPane(pane_id: []const u8) void {
+    var shutdowns: [max_apps]AppShutdownSnapshot = undefined;
+    var shutdown_count: usize = 0;
+
+    state_mutex.lock();
+    for (&app_frontends) |*frontend| {
+        if (!frontend.in_use or !std.mem.eql(u8, frontend.paneId(), pane_id)) continue;
+        var app_id_buf: [max_app_id_len]u8 = undefined;
+        var app_id_len: usize = 0;
+        if (!copyText(&app_id_buf, &app_id_len, frontend.appId())) continue;
+        frontend.* = .{};
+        if (maybeSnapshotAppShutdownLocked(app_id_buf[0..app_id_len])) |snapshot| {
+            shutdowns[shutdown_count] = snapshot;
+            shutdown_count += 1;
+        }
+    }
+    state_mutex.unlock();
+
+    for (shutdowns[0..shutdown_count]) |*snapshot| stopAppBackend(snapshot);
+}
+
+fn stopAllApps() void {
+    var shutdowns: [max_apps]AppShutdownSnapshot = undefined;
+    var shutdown_count: usize = 0;
+
+    state_mutex.lock();
+    for (&apps) |*app| {
+        if (!app.in_use) continue;
+        if (snapshotAppShutdown(app)) |snapshot| {
+            shutdowns[shutdown_count] = snapshot;
+            shutdown_count += 1;
+        }
+        app.* = .{};
+    }
+    app_frontends = [_]AppFrontendState{.{}} ** max_app_frontends;
+    state_mutex.unlock();
+
+    for (shutdowns[0..shutdown_count]) |*snapshot| stopAppBackend(snapshot);
+}
+
+fn sendOpenAppReply(fd: std.posix.fd_t, pane_id: []const u8, app_id: []const u8, frontend_id: []const u8, url: []const u8, err_text: []const u8) !void {
+    var pane_buf: [max_pane_id_len]u8 = undefined;
+    var pane_len: usize = 0;
+    var app_buf: [max_app_id_len]u8 = undefined;
+    var app_len: usize = 0;
+    var frontend_buf: [max_app_frontend_id_len]u8 = undefined;
+    var frontend_len: usize = 0;
+    var url_buf: [max_app_url_len]u8 = undefined;
+    var url_len: usize = 0;
+    var error_buf: [256]u8 = undefined;
+    var error_len: usize = 0;
+    if (!copyText(&pane_buf, &pane_len, pane_id)) return error.PaneIdTooLong;
+    if (!copyText(&app_buf, &app_len, app_id)) return error.AppIdTooLong;
+    if (!copyText(&frontend_buf, &frontend_len, frontend_id)) return error.FrontendIdTooLong;
+    if (!copyText(&url_buf, &url_len, url)) return error.UrlTooLong;
+    if (!copyText(&error_buf, &error_len, err_text)) return error.AppErrorTooLong;
+
+    var reply: c.Termsurf__OpenAppReply = undefined;
+    c.termsurf__open_app_reply__init(&reply);
+    reply.pane_id = @constCast(pane_buf[0..pane_len :0].ptr);
+    reply.app_id = @constCast(app_buf[0..app_len :0].ptr);
+    reply.frontend_id = @constCast(frontend_buf[0..frontend_len :0].ptr);
+    reply.url = @constCast(url_buf[0..url_len :0].ptr);
+    @field(reply, "error") = @constCast(error_buf[0..error_len :0].ptr);
+
+    var wrapper: c.Termsurf__TermSurfMessage = undefined;
+    c.termsurf__term_surf_message__init(&wrapper);
+    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY;
+    wrapper.unnamed_0.open_app_reply = &reply;
+    try sendProtobuf(fd, &wrapper);
+}
+
+fn sendCloseAppFrontendToTui(snapshot: *const AppFrontendCloseSnapshot) !void {
+    var close_app: c.Termsurf__CloseAppFrontend = undefined;
+    c.termsurf__close_app_frontend__init(&close_app);
+    close_app.pane_id = @constCast(snapshot.pane_id[0..snapshot.pane_id_len :0].ptr);
+    close_app.app_id = @constCast(snapshot.app_id[0..snapshot.app_id_len :0].ptr);
+    close_app.frontend_id = @constCast(snapshot.frontend_id[0..snapshot.frontend_id_len :0].ptr);
+
+    var wrapper: c.Termsurf__TermSurfMessage = undefined;
+    c.termsurf__term_surf_message__init(&wrapper);
+    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND;
+    wrapper.unnamed_0.close_app_frontend = &close_app;
+    try sendProtobuf(snapshot.tui_fd, &wrapper);
+}
+
 fn cString(ptr: [*c]u8) []const u8 {
     if (ptr) |value| return std.mem.span(value);
     return "";
@@ -3502,6 +4269,9 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SET_OVERLAY => "SetOverlay",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SET_DEVTOOLS_OVERLAY => "SetDevtoolsOverlay",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_SPLIT => "OpenSplit",
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP => "OpenApp",
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY => "OpenAppReply",
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND => "CloseAppFrontend",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_BROWSER_READY => "BrowserReady",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_JAVASCRIPT_DIALOG_REQUEST => "JavascriptDialogRequest",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_JAVASCRIPT_DIALOG_REPLY => "JavascriptDialogReply",
@@ -3516,6 +4286,7 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
 fn classifyConnection(msg_case: c.Termsurf__TermSurfMessage__MsgCase) ConnType {
     return switch (msg_case) {
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SERVER_REGISTER => .browser,
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP => .tui,
         else => .tui,
     };
 }
@@ -3746,6 +4517,8 @@ fn resetTermsurfStateForTest() void {
     panes = [_]PaneState{.{}} ** max_panes;
     closed_panes = [_]ClosedPaneState{.{}} ** max_closed_panes;
     servers = [_]ServerState{.{}} ** max_servers;
+    apps = [_]AppState{.{}} ** max_apps;
+    app_frontends = [_]AppFrontendState{.{}} ** max_app_frontends;
     tab_lookups = [_]TabLookupState{.{}} ** max_tab_lookups;
     devtools_reservations = [_]DevtoolsReservationState{.{}} ** max_devtools_reservations;
     last_browser_pane_len = 0;
@@ -3813,6 +4586,241 @@ test "termsurf create devtools tab snapshots tracked color scheme" {
     }
 }
 
+test "termsurf open app messages are tui connections" {
+    const testing = std.testing;
+
+    try testing.expectEqual(ConnType.tui, classifyConnection(c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP));
+}
+
+test "termsurf open app rejects unknown app id" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    var open_app: c.Termsurf__OpenApp = undefined;
+    c.termsurf__open_app__init(&open_app);
+    open_app.pane_id = @constCast("pane-app");
+    open_app.app_id = @constCast("unknown");
+    open_app.browser = @constCast("roamium");
+    open_app.profile = @constCast("default");
+    handleOpenApp(tui[0], &open_app);
+
+    const reply = try readTestMessage(tui[1], testing.allocator);
+    defer c.termsurf__term_surf_message__free_unpacked(reply, null);
+    try testing.expectEqual(
+        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY),
+        reply.*.msg_case,
+    );
+    try testing.expectEqualStrings("pane-app", cString(reply.*.unnamed_0.open_app_reply.*.pane_id));
+    try testing.expectEqualStrings("unknown", cString(reply.*.unnamed_0.open_app_reply.*.app_id));
+    try testing.expectEqualStrings("unsupported app_id", cString(@field(reply.*.unnamed_0.open_app_reply.*, "error")));
+}
+
+test "termsurf app descriptors select trusted runtimes" {
+    const testing = std.testing;
+
+    const gtui = findAppDescriptor(gtui_app_id).?;
+    try testing.expectEqual(AppRuntime.deno, gtui.runtime);
+    try testing.expectEqualStrings(gtui_app_path_env, gtui.app_path_env);
+    try testing.expectEqualStrings(deno_path_env, gtui.runtime_path_env);
+
+    try testing.expect(findAppDescriptor("unknown") == null);
+}
+
+test "termsurf open app reuses existing backend for another frontend" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const argv = [_][]const u8{ "/bin/sleep", "30" };
+    var child = std.process.Child.init(&argv, testing.allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    defer {
+        std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
+        _ = std.posix.waitpid(child.id, 0);
+    }
+
+    try testSetApp(0, gtui_app_id, "http://127.0.0.1:50000/", 50000, child.id);
+
+    var frontend_id_buf: [max_app_frontend_id_len]u8 = undefined;
+    var frontend_id_len: usize = 0;
+    var url_buf: [max_app_url_len]u8 = undefined;
+    var url_len: usize = 0;
+    var error_buf: [256]u8 = undefined;
+
+    try testing.expect(openOrReuseApp(
+        findAppDescriptor(gtui_app_id).?,
+        10,
+        "pane-b",
+        gtui_app_id,
+        "roamium",
+        "default",
+        "",
+        &frontend_id_buf,
+        &frontend_id_len,
+        &url_buf,
+        &url_len,
+        &error_buf,
+    ));
+    try testing.expectEqual(@as(usize, 1), frontendCountForApp(gtui_app_id));
+    try testing.expectEqual(child.id, apps[0].child_pid);
+    try testing.expectEqualStrings("http://127.0.0.1:50000/", url_buf[0..url_len]);
+    try testing.expect(frontend_id_len > 0);
+}
+
+test "termsurf app frontend cleanup is idempotent and stops after last frontend" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    try testSetApp(0, gtui_app_id, "http://127.0.0.1:50000/", 50000, 0);
+    try testSetAppFrontend(0, gtui_app_id, "gtui-a", "pane-a", 10);
+    try testSetAppFrontend(1, gtui_app_id, "gtui-b", "pane-b", 11);
+
+    var shutdown: ?AppShutdownSnapshot = null;
+    removeAppFrontendLocked(gtui_app_id, "gtui-a", null, &shutdown);
+    try testing.expect(shutdown == null);
+    try testing.expect(apps[0].in_use);
+    try testing.expect(!app_frontends[0].in_use);
+    try testing.expect(app_frontends[1].in_use);
+
+    shutdown = null;
+    removeAppFrontendLocked(gtui_app_id, "gtui-a", null, &shutdown);
+    try testing.expect(shutdown == null);
+    try testing.expect(apps[0].in_use);
+    try testing.expect(app_frontends[1].in_use);
+
+    shutdown = null;
+    removeAppFrontendLocked(gtui_app_id, "gtui-b", null, &shutdown);
+    try testing.expect(shutdown == null);
+    try testing.expect(!apps[0].in_use);
+    try testing.expect(!app_frontends[1].in_use);
+}
+
+test "termsurf app cleanup by fd keeps shared backend until final frontend" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    try testSetApp(0, gtui_app_id, "http://127.0.0.1:50000/", 50000, 0);
+    try testSetAppFrontend(0, gtui_app_id, "gtui-a", "pane-a", 10);
+    try testSetAppFrontend(1, gtui_app_id, "gtui-b", "pane-b", 11);
+
+    cleanupAppFrontendsForFd(10);
+    try testing.expect(apps[0].in_use);
+    try testing.expect(!app_frontends[0].in_use);
+    try testing.expect(app_frontends[1].in_use);
+
+    cleanupAppFrontendsForFd(10);
+    try testing.expect(apps[0].in_use);
+    try testing.expect(app_frontends[1].in_use);
+
+    cleanupAppFrontendsForFd(11);
+    try testing.expect(!apps[0].in_use);
+    try testing.expect(!app_frontends[1].in_use);
+}
+
+test "termsurf app cleanup by pane removes the pane frontend only" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    try testSetApp(0, gtui_app_id, "http://127.0.0.1:50000/", 50000, 0);
+    try testSetAppFrontend(0, gtui_app_id, "gtui-a", "pane-a", 10);
+    try testSetAppFrontend(1, gtui_app_id, "gtui-b", "pane-b", 11);
+
+    cleanupAppFrontendsForPane("pane-a");
+    try testing.expect(apps[0].in_use);
+    try testing.expect(!app_frontends[0].in_use);
+    try testing.expect(app_frontends[1].in_use);
+
+    cleanupAppFrontendsForPane("pane-b");
+    try testing.expect(!apps[0].in_use);
+    try testing.expect(!app_frontends[1].in_use);
+}
+
+test "termsurf app ctrl-c closes app frontend instead of forwarding to browser" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetApp(0, gtui_app_id, "http://127.0.0.1:50000/", 50000, 0);
+    try testSetAppFrontend(0, gtui_app_id, "gtui-a", "pane-a", tui[0]);
+
+    try testing.expect(closeAppFrontendForPaneShortcut("pane-a"));
+    try testing.expect(!apps[0].in_use);
+    try testing.expect(!app_frontends[0].in_use);
+
+    const close = try readTestMessage(tui[1], testing.allocator);
+    defer c.termsurf__term_surf_message__free_unpacked(close, null);
+    try testing.expectEqual(
+        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND),
+        close.*.msg_case,
+    );
+    try testing.expectEqualStrings("pane-a", cString(close.*.unnamed_0.close_app_frontend.*.pane_id));
+    try testing.expectEqualStrings(gtui_app_id, cString(close.*.unnamed_0.close_app_frontend.*.app_id));
+    try testing.expectEqualStrings("gtui-a", cString(close.*.unnamed_0.close_app_frontend.*.frontend_id));
+}
+
+test "termsurf app backend early exit returns failure without retained state" {
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+    try testWithRestoredEnv(deno_path_env, testOpenAppEarlyExitWithRestoredTsgtuiPath);
+}
+
+fn testOpenAppEarlyExitWithRestoredTsgtuiPath() !void {
+    try testWithRestoredEnv(gtui_app_path_env, testOpenAppEarlyExitTsgtui);
+}
+
+fn testOpenAppEarlyExitTsgtui() !void {
+    const testing = std.testing;
+
+    if (c.setenv(deno_path_env, "/usr/bin/false", 1) != 0) return error.SetenvFailed;
+    if (c.setenv(gtui_app_path_env, "/tmp/termsurf-gtui-test-server.ts", 1) != 0) return error.SetenvFailed;
+    const descriptor = findAppDescriptor(gtui_app_id).?;
+
+    var frontend_id_buf: [max_app_frontend_id_len]u8 = undefined;
+    var frontend_id_len: usize = 0;
+    var url_buf: [max_app_url_len]u8 = undefined;
+    var url_len: usize = 0;
+    var error_buf: [256]u8 = undefined;
+
+    try testing.expect(!openOrReuseApp(
+        descriptor,
+        10,
+        "pane-app",
+        gtui_app_id,
+        "roamium",
+        "default",
+        "/tmp/termsurf-gtui-test-server.ts",
+        &frontend_id_buf,
+        &frontend_id_len,
+        &url_buf,
+        &url_len,
+        &error_buf,
+    ));
+    try testing.expectEqual(@as(usize, 0), frontend_id_len);
+    try testing.expectEqual(@as(usize, 0), url_len);
+    try testing.expect(findApp(gtui_app_id) == null);
+    try testing.expectEqual(@as(usize, 0), frontendCountForApp(gtui_app_id));
+    try testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(error_buf[0..], 0), "ready") != null);
+}
+
 fn testSocketPair() ![2]std.posix.fd_t {
     var fds: [2]c_int = undefined;
     if (c.socketpair(c.AF_UNIX, c.SOCK_STREAM, 0, &fds) != 0) return error.SocketPairFailed;
@@ -3858,6 +4866,16 @@ fn testSetPane(
     panes[index].height = 24;
     panes[index].browsing = true;
     panes[index].tui_fd = tui_fd;
+}
+
+fn testSetApp(index: usize, app_id: []const u8, url: []const u8, port: u16, child_pid: std.process.Child.Id) !void {
+    apps[index] = .{};
+    if (!setApp(&apps[index], app_id, url, port, child_pid)) return error.TestValueTooLong;
+}
+
+fn testSetAppFrontend(index: usize, app_id: []const u8, frontend_id: []const u8, pane_id: []const u8, tui_fd: std.posix.fd_t) !void {
+    app_frontends[index] = .{};
+    if (!setAppFrontend(&app_frontends[index], app_id, frontend_id, pane_id, tui_fd)) return error.TestValueTooLong;
 }
 
 fn testingCopyText(buf: []u8, len: *usize, value: []const u8) !void {

@@ -3,7 +3,7 @@ members = [
     "webtui",
     "roamium",
     "surfari",
-    "roastty",
+    "gtui",
 ]
 exclude = [
     "vendor",

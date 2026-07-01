@@ -68,6 +68,11 @@ message TermSurfMessage {
 
     // Renderer crash recovery (Chromium → TUI / automation harness)
     RendererCrashed renderer_crashed = 39;
+
+    // TermSurf app lifecycle (TUI ↔ GUI)
+    OpenApp open_app = 40;
+    OpenAppReply open_app_reply = 41;
+    CloseAppFrontend close_app_frontend = 42;
   }
 }
 
@@ -298,6 +303,28 @@ message OpenSplit {
   string pane_id = 1;
   string direction = 2;  // "horizontal" or "vertical"
   string command = 3;
+}
+
+message OpenApp {
+  string pane_id = 1;
+  string app_id = 2;
+  string browser = 3;
+  string profile = 4;
+  string entrypoint = 5;
+}
+
+message OpenAppReply {
+  string pane_id = 1;
+  string app_id = 2;
+  string frontend_id = 3;
+  string url = 4;
+  string error = 5;
+}
+
+message CloseAppFrontend {
+  string pane_id = 1;
+  string app_id = 2;
+  string frontend_id = 3;
 }
 
 // --- GUI → TUI ---

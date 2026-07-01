@@ -11,7 +11,7 @@ const ghostty_terminfo = @import("../terminfo/main.zig").ghostty;
 const log = std.log.scoped(.ssh);
 
 const usage =
-    \\Usage: ghostty +ssh [flags] [--] <ssh args...>
+    \\Usage: ghostboard +ssh [flags] [--] <ssh args...>
     \\
     \\Flags:
     \\  --forward-env[=bool]  Enable TERM / SendEnv forwarding. Default: true.
@@ -110,10 +110,10 @@ pub const Options = struct {
 /// `shell-integration-features` includes `ssh-env` or `ssh-terminfo`,
 /// each shell defines an `ssh` function that runs:
 ///
-///     ghostty +ssh <flags> -- "$@"
+///     ghostboard +ssh <flags> -- "$@"
 ///
-/// You can also run `ghostty +ssh` directly, or alias it yourself (e.g.
-/// `alias ssh='ghostty +ssh --'`) if you prefer not to use the shell
+/// You can also run `ghostboard +ssh` directly, or alias it yourself (e.g.
+/// `alias ssh='ghostboard +ssh --'`) if you prefer not to use the shell
 /// integration.
 ///
 /// `+ssh` performs up to two pieces of setup before launching `ssh`:
@@ -129,7 +129,7 @@ pub const Options = struct {
 ///      given destination, installs Ghostty's terminfo entry on the remote
 ///      host using `infocmp -x xterm-ghostty | ssh tic -x -` over a
 ///      shared `ControlMaster` connection. Successful installs are cached
-///      (see `ghostty +ssh-cache`) so subsequent connections skip this
+///      (see `ghostboard +ssh-cache`) so subsequent connections skip this
 ///      step. When terminfo is successfully installed or already cached,
 ///      `TERM` is set to `xterm-ghostty` instead of `xterm-256color`.
 ///
@@ -149,7 +149,7 @@ pub const Options = struct {
 ///     When `false`, both the cache read (skip-if-installed) and the
 ///     cache write (record-on-success) are bypassed, and every
 ///     connection performs the install. To one-shot reinstall a single
-///     host while keeping the cache in use, prefer `ghostty +ssh-cache
+///     host while keeping the cache in use, prefer `ghostboard +ssh-cache
 ///     --remove=<host>` followed by a normal connection.
 ///
 ///   * `--ssh=<path>`: Path to the `ssh` binary to execute. Default: the
@@ -161,19 +161,19 @@ pub const Options = struct {
 /// Examples:
 ///
 ///   # Basic invocation using defaults:
-///   ghostty +ssh user@example.com
+///   ghostboard +ssh user@example.com
 ///
 ///   # Forward Ghostty env vars but skip the terminfo install:
-///   ghostty +ssh --terminfo=false user@example.com
+///   ghostboard +ssh --terminfo=false user@example.com
 ///
 ///   # `ssh` flags (short-form `-p`, etc.) pass through unchanged:
-///   ghostty +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
+///   ghostboard +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
 ///
 ///   # Use `--` explicitly if your ssh args might collide with our flags:
-///   ghostty +ssh -- --some-rare-ssh-arg user@example.com
+///   ghostboard +ssh -- --some-rare-ssh-arg user@example.com
 ///
 /// Pass `--verbose` to see what `+ssh` is doing. For cache inspection
-/// and management, see `ghostty +ssh-cache`.
+/// and management, see `ghostboard +ssh-cache`.
 ///
 /// Available since: 1.4.0
 pub fn run(alloc_gpa: Allocator) !u8 {

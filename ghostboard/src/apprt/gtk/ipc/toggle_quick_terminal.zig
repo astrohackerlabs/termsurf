@@ -6,7 +6,7 @@ const DBus = @import("DBus.zig");
 
 /// Use a D-Bus method call to toggle the quick terminal on GTK.
 ///
-/// `ghostty +toggle-quick-terminal` is equivalent to the following command
+/// `ghostboard +toggle-quick-terminal` is equivalent to the following command
 /// (on a release build):
 ///
 /// ```sh

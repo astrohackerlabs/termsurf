@@ -12,7 +12,7 @@ install_step: *std.Build.Step.InstallArtifact,
 
 pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty {
     const exe: *std.Build.Step.Compile = b.addExecutable(.{
-        .name = "termsurf",
+        .name = "ghostboard",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = cfg.target,
@@ -95,7 +95,7 @@ fn checkNixShell(exe: *std.Build.Step.Compile, cfg: *const Config) !void {
             "\x1b[" ++ color_map.get("d").? ++
             \\Detected building on and for NixOS outside of the Nix shell environment.
             \\
-            \\The resulting termsurf binary will likely fail on launch because it is
+            \\The resulting ghostboard binary will likely fail on launch because it is
             \\unable to dynamically load the windowing libs (X11, Wayland, etc.).
             \\We highly recommend running only within the Nix build environment
             \\and the resulting binary will be portable across your system.

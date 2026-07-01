@@ -10,4 +10,4 @@ For user documentation, see the main README or [ghostty.org](https://ghostty.org
 
 Each cli action is defined in it's own file. Documentation for each action is defined
 in the doc comment associated with the `run` function. For example the `run` function
-in `list_keybinds.zig` contains the help text for `ghostty +list-keybinds`.
+in `list_keybinds.zig` contains the help text for `ghostboard +list-keybinds`.

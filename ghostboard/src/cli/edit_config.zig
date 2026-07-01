@@ -74,7 +74,7 @@ fn runInner(alloc: Allocator, stderr: *std.Io.Writer) !u8 {
     // We don't currently support Windows because we use the exec syscall.
     if (comptime builtin.os.tag == .windows) {
         try stderr.print(
-            \\The `termsurf +edit-config` command is not supported on Windows.
+            \\The `ghostboard +edit-config` command is not supported on Windows.
             \\Please edit the configuration file manually at the following path:
             \\
             \\{s}

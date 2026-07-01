@@ -44,7 +44,7 @@ pub fn main() !MainReturn {
             error.InvalidAction => try stderr.print(
                 "Error: unknown CLI action specified. CLI actions are specified with\n" ++
                     "the '+' character.\n\n" ++
-                    "All valid CLI actions can be listed with `termsurf +help`\n",
+                    "All valid CLI actions can be listed with `ghostboard +help`\n",
                 .{},
             ),
 
@@ -75,7 +75,7 @@ pub fn main() !MainReturn {
         var buffer: [2048]u8 = undefined;
         var stdout_writer = std.fs.File.stdout().writer(&buffer);
         const stdout = &stdout_writer.interface;
-        try stdout.print("Usage: termsurf +<action> [flags]\n\n", .{});
+        try stdout.print("Usage: ghostboard +<action> [flags]\n\n", .{});
         try stdout.print(
             \\This is the TermSurf helper CLI that accompanies the graphical TermSurf app.
             \\To launch the terminal directly, please launch the graphical app

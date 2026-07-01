@@ -24,14 +24,19 @@ The cask installs:
 
 - `TermSurf.app` to `/Applications/TermSurf.app`;
 - `web` to the Homebrew binary path;
+- `termsurf` to the Homebrew binary path;
 - Roamium and Chromium runtime resources to
   `/opt/homebrew/opt/termsurf-roamium/`;
-- Surfari and WebKit runtime resources to `/opt/homebrew/opt/termsurf-surfari/`.
+- Surfari and WebKit runtime resources to
+  `/opt/homebrew/opt/termsurf-surfari/`;
+- GTUI Deno app assets to `/opt/homebrew/opt/termsurf-gtui/`.
 
 The release tarball contains the same top-level package contract:
 
 - `TermSurf.app/`;
 - `web`;
+- `termsurf`;
+- `gtui/`;
 - `roamium/`;
 - `surfari/`.
 

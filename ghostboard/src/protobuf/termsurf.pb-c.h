@@ -45,6 +45,9 @@ typedef struct Termsurf__RendererCrashed Termsurf__RendererCrashed;
 typedef struct Termsurf__SetOverlay Termsurf__SetOverlay;
 typedef struct Termsurf__SetDevtoolsOverlay Termsurf__SetDevtoolsOverlay;
 typedef struct Termsurf__OpenSplit Termsurf__OpenSplit;
+typedef struct Termsurf__OpenApp Termsurf__OpenApp;
+typedef struct Termsurf__OpenAppReply Termsurf__OpenAppReply;
+typedef struct Termsurf__CloseAppFrontend Termsurf__CloseAppFrontend;
 typedef struct Termsurf__ModeChanged Termsurf__ModeChanged;
 typedef struct Termsurf__BrowserReady Termsurf__BrowserReady;
 typedef struct Termsurf__HelloRequest Termsurf__HelloRequest;
@@ -103,7 +106,10 @@ typedef enum {
   TERMSURF__TERM_SURF_MESSAGE__MSG_CONSOLE_MESSAGE = 36,
   TERMSURF__TERM_SURF_MESSAGE__MSG_HTTP_AUTH_REQUEST = 37,
   TERMSURF__TERM_SURF_MESSAGE__MSG_HTTP_AUTH_REPLY = 38,
-  TERMSURF__TERM_SURF_MESSAGE__MSG_RENDERER_CRASHED = 39
+  TERMSURF__TERM_SURF_MESSAGE__MSG_RENDERER_CRASHED = 39,
+  TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP = 40,
+  TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY = 41,
+  TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND = 42
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(TERMSURF__TERM_SURF_MESSAGE__MSG__CASE)
 } Termsurf__TermSurfMessage__MsgCase;
 
@@ -120,6 +126,7 @@ struct  Termsurf__TermSurfMessage
      */
     Termsurf__BrowserReady *browser_ready;
     Termsurf__CaContext *ca_context;
+    Termsurf__CloseAppFrontend *close_app_frontend;
     Termsurf__CloseTab *close_tab;
     /*
      * Console capture (Chromium → TUI / automation harness)
@@ -165,6 +172,11 @@ struct  Termsurf__TermSurfMessage
      * Navigation (GUI → Chromium, TUI → GUI)
      */
     Termsurf__Navigate *navigate;
+    /*
+     * TermSurf app lifecycle (TUI ↔ GUI)
+     */
+    Termsurf__OpenApp *open_app;
+    Termsurf__OpenAppReply *open_app_reply;
     Termsurf__OpenSplit *open_split;
     Termsurf__QueryDevtoolsReply *query_devtools_reply;
     Termsurf__QueryDevtoolsRequest *query_devtools_request;
@@ -642,6 +654,46 @@ struct  Termsurf__OpenSplit
 };
 #define TERMSURF__OPEN_SPLIT__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&termsurf__open_split__descriptor) \
+, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+
+
+struct  Termsurf__OpenApp
+{
+  ProtobufCMessage base;
+  char *pane_id;
+  char *app_id;
+  char *browser;
+  char *profile;
+  char *entrypoint;
+};
+#define TERMSURF__OPEN_APP__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&termsurf__open_app__descriptor) \
+, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+
+
+struct  Termsurf__OpenAppReply
+{
+  ProtobufCMessage base;
+  char *pane_id;
+  char *app_id;
+  char *frontend_id;
+  char *url;
+  char *error;
+};
+#define TERMSURF__OPEN_APP_REPLY__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&termsurf__open_app_reply__descriptor) \
+, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+
+
+struct  Termsurf__CloseAppFrontend
+{
+  ProtobufCMessage base;
+  char *pane_id;
+  char *app_id;
+  char *frontend_id;
+};
+#define TERMSURF__CLOSE_APP_FRONTEND__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&termsurf__close_app_frontend__descriptor) \
 , (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
 
 
@@ -1354,6 +1406,63 @@ Termsurf__OpenSplit *
 void   termsurf__open_split__free_unpacked
                      (Termsurf__OpenSplit *message,
                       ProtobufCAllocator *allocator);
+/* Termsurf__OpenApp methods */
+void   termsurf__open_app__init
+                     (Termsurf__OpenApp         *message);
+size_t termsurf__open_app__get_packed_size
+                     (const Termsurf__OpenApp   *message);
+size_t termsurf__open_app__pack
+                     (const Termsurf__OpenApp   *message,
+                      uint8_t             *out);
+size_t termsurf__open_app__pack_to_buffer
+                     (const Termsurf__OpenApp   *message,
+                      ProtobufCBuffer     *buffer);
+Termsurf__OpenApp *
+       termsurf__open_app__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   termsurf__open_app__free_unpacked
+                     (Termsurf__OpenApp *message,
+                      ProtobufCAllocator *allocator);
+/* Termsurf__OpenAppReply methods */
+void   termsurf__open_app_reply__init
+                     (Termsurf__OpenAppReply         *message);
+size_t termsurf__open_app_reply__get_packed_size
+                     (const Termsurf__OpenAppReply   *message);
+size_t termsurf__open_app_reply__pack
+                     (const Termsurf__OpenAppReply   *message,
+                      uint8_t             *out);
+size_t termsurf__open_app_reply__pack_to_buffer
+                     (const Termsurf__OpenAppReply   *message,
+                      ProtobufCBuffer     *buffer);
+Termsurf__OpenAppReply *
+       termsurf__open_app_reply__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   termsurf__open_app_reply__free_unpacked
+                     (Termsurf__OpenAppReply *message,
+                      ProtobufCAllocator *allocator);
+/* Termsurf__CloseAppFrontend methods */
+void   termsurf__close_app_frontend__init
+                     (Termsurf__CloseAppFrontend         *message);
+size_t termsurf__close_app_frontend__get_packed_size
+                     (const Termsurf__CloseAppFrontend   *message);
+size_t termsurf__close_app_frontend__pack
+                     (const Termsurf__CloseAppFrontend   *message,
+                      uint8_t             *out);
+size_t termsurf__close_app_frontend__pack_to_buffer
+                     (const Termsurf__CloseAppFrontend   *message,
+                      ProtobufCBuffer     *buffer);
+Termsurf__CloseAppFrontend *
+       termsurf__close_app_frontend__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   termsurf__close_app_frontend__free_unpacked
+                     (Termsurf__CloseAppFrontend *message,
+                      ProtobufCAllocator *allocator);
 /* Termsurf__ModeChanged methods */
 void   termsurf__mode_changed__init
                      (Termsurf__ModeChanged         *message);
@@ -1655,6 +1764,15 @@ typedef void (*Termsurf__SetDevtoolsOverlay_Closure)
 typedef void (*Termsurf__OpenSplit_Closure)
                  (const Termsurf__OpenSplit *message,
                   void *closure_data);
+typedef void (*Termsurf__OpenApp_Closure)
+                 (const Termsurf__OpenApp *message,
+                  void *closure_data);
+typedef void (*Termsurf__OpenAppReply_Closure)
+                 (const Termsurf__OpenAppReply *message,
+                  void *closure_data);
+typedef void (*Termsurf__CloseAppFrontend_Closure)
+                 (const Termsurf__CloseAppFrontend *message,
+                  void *closure_data);
 typedef void (*Termsurf__ModeChanged_Closure)
                  (const Termsurf__ModeChanged *message,
                   void *closure_data);
@@ -1724,6 +1842,9 @@ extern const ProtobufCMessageDescriptor termsurf__renderer_crashed__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__set_overlay__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__set_devtools_overlay__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__open_split__descriptor;
+extern const ProtobufCMessageDescriptor termsurf__open_app__descriptor;
+extern const ProtobufCMessageDescriptor termsurf__open_app_reply__descriptor;
+extern const ProtobufCMessageDescriptor termsurf__close_app_frontend__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__mode_changed__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__browser_ready__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__hello_request__descriptor;

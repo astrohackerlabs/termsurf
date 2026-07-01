@@ -1,0 +1,16 @@
+[package]
+name = "gtui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "termsurf"
+path = "src/main.rs"
+
+[dependencies]
+crossterm = "0.29"
+ctrlc = "3.5"
+prost = "0.14"
+
+[build-dependencies]
+prost-build = "0.14"

@@ -153,7 +153,7 @@ in {
       };
     };
     testScript = {...}: ''
-      machine.succeed("su - ghostty -c 'ghostty +version'")
+      machine.succeed("su - ghostty -c 'ghostboard +version'")
     '';
   };
 

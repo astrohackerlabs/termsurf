@@ -78,10 +78,10 @@
 
   # SSH Integration
   #
-  # Wrap `ssh` with `ghostty +ssh` and translate the shell-integration
+  # Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
   # feature flags into command options.
   fn ssh-integration {|@args|
-    var ghostty = $E:GHOSTTY_BIN_DIR/"ghostty"
+    var ghostboard = $E:GHOSTTY_BIN_DIR/"ghostboard"
     var flags = []
     if (not (has-value $features ssh-env)) {
       set flags = (conj $flags --forward-env=false)
@@ -89,7 +89,7 @@
     if (not (has-value $features ssh-terminfo)) {
       set flags = (conj $flags --terminfo=false)
     }
-    $ghostty +ssh $@flags -- $@args
+    $ghostboard +ssh $@flags -- $@args
   }
 
   defer {

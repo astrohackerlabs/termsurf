@@ -40,4 +40,4 @@ RUN zig build \
     -Doptimize=Debug \
     -Dcpu=baseline
 
-RUN ./zig-out/bin/ghostty +version
+RUN ./zig-out/bin/ghostboard +version

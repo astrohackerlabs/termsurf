@@ -70,7 +70,7 @@ check_ghostboard_version() {
   local build_version
   local first_line
 
-  cli_version="$("$GHOSTBOARD_APP/Contents/MacOS/termsurf" +version 2>&1)"
+  cli_version="$("$GHOSTBOARD_APP/Contents/MacOS/ghostboard" +version 2>&1)"
   first_line="$(printf '%s\n' "$cli_version" | sed -n '1p')"
   short_version="$(/usr/bin/defaults read "$GHOSTBOARD_APP/Contents/Info" CFBundleShortVersionString)"
   build_version="$(/usr/bin/defaults read "$GHOSTBOARD_APP/Contents/Info" CFBundleVersion)"
@@ -103,7 +103,8 @@ check_ghostboard_version() {
 # Check release builds exist
 for f in \
   "$REPO_DIR/target/release/web" \
-  "$GHOSTBOARD_APP/Contents/MacOS/termsurf" \
+  "$REPO_DIR/target/release/termsurf" \
+  "$GHOSTBOARD_APP/Contents/MacOS/ghostboard" \
   "$REPO_DIR/target/release/roamium" \
   "$REPO_DIR/target/release/surfari" \
   "$SURFARI_LIB"; do
@@ -129,12 +130,15 @@ done
 rm -rf "$STAGING_DIR"
 mkdir -p "$STAGING_DIR/roamium"
 mkdir -p "$STAGING_DIR/surfari"
+mkdir -p "$STAGING_DIR/gtui"
 
 # Copy binaries
 echo "==> Copying binaries..."
 cp "$REPO_DIR/target/release/web" "$STAGING_DIR/"
+cp "$REPO_DIR/target/release/termsurf" "$STAGING_DIR/"
 cp "$REPO_DIR/target/release/roamium" "$STAGING_DIR/roamium/"
 cp "$REPO_DIR/target/release/surfari" "$STAGING_DIR/surfari/"
+cp -R "$REPO_DIR/gtui/app" "$STAGING_DIR/gtui/"
 
 # Copy Chromium dylibs and resources
 copy_roamium_runtime_resources "$CHROMIUM_OUT" "$STAGING_DIR/roamium"
