@@ -4,8 +4,12 @@ mod ipc;
 mod proto;
 
 use std::ffi::{c_void, CString};
+use std::fs::{create_dir_all, OpenOptions};
+use std::io::Write;
+use std::path::PathBuf;
 use std::ptr;
 use std::sync::OnceLock;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use proto::{Msg, TermSurfMessage};
 
@@ -16,6 +20,7 @@ static LISTEN_PATH: OnceLock<String> = OnceLock::new();
 static PROFILE_NAME: OnceLock<String> = OnceLock::new();
 static BROWSER_NAME: OnceLock<String> = OnceLock::new();
 static INCOGNITO: OnceLock<bool> = OnceLock::new();
+static STARTUP_TRACE_START: OnceLock<Instant> = OnceLock::new();
 
 static mut BROWSER_CONTEXT: ffi::TsBrowserContext = ptr::null_mut();
 
@@ -26,6 +31,8 @@ pub fn browser_context() -> ffi::TsBrowserContext {
 // --- Callbacks ---
 
 unsafe extern "C" fn on_initialized(_user_data: *mut c_void) {
+    startup_trace("on_initialized_entry");
+
     // Create browser context.
     unsafe {
         BROWSER_CONTEXT = if *INCOGNITO.get().unwrap_or(&false) {
@@ -34,16 +41,21 @@ unsafe extern "C" fn on_initialized(_user_data: *mut c_void) {
             ffi::ts_create_browser_context(ptr::null())
         };
     }
+    startup_trace("browser_context_created");
 
     // Connect to GUI socket.
     let Some(path) = SOCKET_PATH.get() else {
         eprintln!("[Roamium] No --ipc-socket, skipping IPC");
+        startup_trace("ipc_socket_missing");
         return;
     };
 
+    startup_trace("ipc_connect_start");
     let Some(reader) = ipc::connect(path) else {
+        startup_trace("ipc_connect_failed");
         return;
     };
+    startup_trace("ipc_connect_done");
 
     // Send ServerRegister.
     let profile = PROFILE_NAME.get().cloned().unwrap_or_default();
@@ -58,22 +70,73 @@ unsafe extern "C" fn on_initialized(_user_data: *mut c_void) {
         })),
     };
     ipc::send(&msg);
+    startup_trace("server_register_sent");
 
     // Start reader thread.
     std::thread::spawn(move || {
         ipc::reader_loop(reader);
     });
+    startup_trace("reader_thread_started");
 
     // Start listener if --listen-socket was provided.
     if let Some(path) = LISTEN_PATH.get() {
+        startup_trace("listener_start");
         ipc::listen(path);
+        startup_trace("listener_exit");
+    }
+}
+
+fn startup_trace_enabled() -> bool {
+    matches!(
+        std::env::var("TERMSURF_ENGINE_STARTUP_TRACE"),
+        Ok(value) if value != "0" && value != "false"
+    )
+}
+
+fn startup_wall_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn startup_trace(event: &str) {
+    let start = STARTUP_TRACE_START.get_or_init(Instant::now);
+    if !startup_trace_enabled() {
+        return;
+    }
+
+    let elapsed_ms = start.elapsed().as_millis();
+    let pid = std::process::id();
+    let profile = PROFILE_NAME.get().map(String::as_str).unwrap_or("");
+    let browser = BROWSER_NAME.get().map(String::as_str).unwrap_or("roamium");
+    let listen_socket = LISTEN_PATH.get().map(String::as_str).unwrap_or("");
+    let ipc_socket = SOCKET_PATH.get().map(String::as_str).unwrap_or("");
+    let line = format!(
+        "TermSurfEngineStartup event={event} engine=roamium browser={browser} profile={profile} pid={pid} wall_ms={} elapsed_ms={elapsed_ms} listen_socket={listen_socket} ipc_socket={ipc_socket}",
+        startup_wall_ms()
+    );
+
+    eprintln!("{line}");
+
+    if let Some(path) = std::env::var_os("TERMSURF_ENGINE_STARTUP_TRACE_FILE") {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            let _ = create_dir_all(parent);
+        }
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(file, "{line}");
+        }
     }
 }
 
 // --- main ---
 
 fn main() {
+    let _ = STARTUP_TRACE_START.set(Instant::now());
+    startup_trace("main_entry");
     dispatch::init_pdf_input_trace();
+    startup_trace("dispatch_trace_initialized");
 
     // Parse --ipc-socket= and --user-data-dir= from argv.
     for arg in std::env::args().skip(1) {
@@ -94,10 +157,17 @@ fn main() {
     if *INCOGNITO.get().unwrap_or(&false) && PROFILE_NAME.get().is_none() {
         let _ = PROFILE_NAME.set("incognito".to_string());
     }
+    startup_trace("args_parsed");
+
+    if std::env::args().any(|arg| arg == "--termsurf-warmup") {
+        startup_trace("warmup_exit");
+        return;
+    }
 
     // Build argc/argv for ts_content_main.
     let args: Vec<CString> = std::env::args().map(|a| CString::new(a).unwrap()).collect();
     let argv: Vec<*const i8> = args.iter().map(|a| a.as_ptr()).collect();
+    startup_trace("argv_built");
 
     // Register callbacks before entering the message loop.
     unsafe {
@@ -117,8 +187,11 @@ fn main() {
         ffi::ts_set_on_http_auth_request(Some(dispatch::on_http_auth_request), ptr::null_mut());
         ffi::ts_set_on_renderer_crashed(Some(dispatch::on_renderer_crashed), ptr::null_mut());
     }
+    startup_trace("callbacks_registered");
 
     // Enter Chromium's message loop (blocks until shutdown).
+    startup_trace("ts_content_main_entry");
     let ret = unsafe { ffi::ts_content_main(argv.len() as i32, argv.as_ptr()) };
+    startup_trace("ts_content_main_exit");
     std::process::exit(ret);
 }

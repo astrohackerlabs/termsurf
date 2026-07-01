@@ -39,6 +39,7 @@ const default_homepage = "https://termsurf.com/welcome";
 const fallback_cell_width: u64 = 10;
 const fallback_cell_height: u64 = 20;
 const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
+const browser_startup_trace_env = "TERMSURF_BROWSER_STARTUP_TRACE";
 const devtools_reservation_timeout_env = "TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_MS";
 const default_devtools_reservation_timeout_ms: i64 = 15_000;
 const roamium_path_env = "TERMSURF_ROAMIUM_PATH";
@@ -226,6 +227,7 @@ const ServerState = struct {
     pane_count: usize = 0,
     attached_fd: std.posix.fd_t = -1,
     child_pid: std.process.Child.Id = 0,
+    set_overlay_wall_ms: i64 = 0,
 
     fn profileName(self: *const ServerState) []const u8 {
         return self.profile[0..self.profile_len];
@@ -411,14 +413,22 @@ const BrowserReadySnapshot = struct {
     tui_fd: std.posix.fd_t = -1,
     pane_id: [max_pane_id_len]u8 = undefined,
     pane_id_len: usize = 0,
+    profile: [max_profile_len]u8 = undefined,
+    profile_len: usize = 0,
     browser: [max_browser_len]u8 = undefined,
     browser_len: usize = 0,
     browser_socket: [max_listen_socket_len]u8 = undefined,
     browser_socket_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    set_overlay_wall_ms: i64 = 0,
     tab_id: i64 = 0,
 
     fn paneId(self: *const BrowserReadySnapshot) []const u8 {
         return self.pane_id[0..self.pane_id_len];
+    }
+
+    fn profileName(self: *const BrowserReadySnapshot) []const u8 {
+        return self.profile[0..self.profile_len];
     }
 
     fn browserName(self: *const BrowserReadySnapshot) []const u8 {
@@ -493,6 +503,14 @@ const BrowserInputSnapshot = struct {
 const OverlaySnapshot = struct {
     pane_id: [max_pane_id_len]u8 = undefined,
     pane_id_len: usize = 0,
+    profile: [max_profile_len]u8 = undefined,
+    profile_len: usize = 0,
+    browser: [max_browser_len]u8 = undefined,
+    browser_len: usize = 0,
+    listen_socket: [max_listen_socket_len]u8 = undefined,
+    listen_socket_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    set_overlay_wall_ms: i64 = 0,
     context_id: u64 = 0,
     col: u64 = 0,
     row: u64 = 0,
@@ -503,6 +521,18 @@ const OverlaySnapshot = struct {
 
     fn paneId(self: *const OverlaySnapshot) []const u8 {
         return self.pane_id[0..self.pane_id_len];
+    }
+
+    fn profileName(self: *const OverlaySnapshot) []const u8 {
+        return self.profile[0..self.profile_len];
+    }
+
+    fn browserName(self: *const OverlaySnapshot) []const u8 {
+        return self.browser[0..self.browser_len];
+    }
+
+    fn listenSocket(self: *const OverlaySnapshot) []const u8 {
+        return self.listen_socket[0..self.listen_socket_len];
     }
 };
 
@@ -536,6 +566,33 @@ const TitleSnapshot = struct {
 fn geometryTraceEnabled() bool {
     const value = std.posix.getenv(geometry_trace_env) orelse return false;
     return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+}
+
+fn browserStartupTraceEnabled() bool {
+    const value = std.posix.getenv(browser_startup_trace_env) orelse return false;
+    return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+}
+
+fn wallMs() i64 {
+    return std.time.milliTimestamp();
+}
+
+fn traceBrowserStartup(
+    event: []const u8,
+    profile: []const u8,
+    browser: []const u8,
+    pane_id: []const u8,
+    listen_socket: []const u8,
+    pid: std.process.Child.Id,
+    set_overlay_wall_ms: i64,
+) void {
+    if (!browserStartupTraceEnabled()) return;
+    const now = wallMs();
+    const elapsed_ms = if (set_overlay_wall_ms > 0) now - set_overlay_wall_ms else -1;
+    log.info(
+        "TermSurfBrowserStartup event={s} layer=ghostboard wall_ms={} elapsed_from_set_overlay_ms={} profile={s} browser={s} pane_id={s} listen_socket={s} pid={}",
+        .{ event, now, elapsed_ms, profile, browser, pane_id, listen_socket, pid },
+    );
 }
 
 fn geometryTracePane(event: []const u8, pane: *const PaneState, note: []const u8) void {
@@ -1520,6 +1577,15 @@ fn handleServerRegister(fd: std.posix.fd_t, req: ?*c.Termsurf__ServerRegister) v
 
     if (findAttachableServer(profile, browser)) |index| {
         servers[index].attached_fd = fd;
+        traceBrowserStartup(
+            "server_register",
+            profile,
+            browser,
+            "",
+            servers[index].listenSocket(),
+            servers[index].child_pid,
+            servers[index].set_overlay_wall_ms,
+        );
         log.info(
             "ServerRegister: matched server key={s}/{s}",
             .{ servers[index].profileName(), servers[index].browserName() },
@@ -1558,11 +1624,13 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
     const requested_browser = cString(overlay.*.browser);
     const browser = if (requested_browser.len == 0) default_browser else requested_browser;
     const url = cString(overlay.*.url);
+    const set_overlay_wall_ms = wallMs();
 
     log.info(
         "SetOverlay: pane_id={s} profile={s} browser={s} url={s}",
         .{ pane_id, profile, browser, url },
     );
+    traceBrowserStartup("set_overlay", profile, browser, pane_id, "", 0, set_overlay_wall_ms);
 
     var should_spawn = false;
     var spawn_profile_buf: [max_profile_len]u8 = undefined;
@@ -1617,6 +1685,15 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
 
     if (findServer(profile, browser)) |server_index| {
         servers[server_index].pane_count += 1;
+        traceBrowserStartup(
+            "server_reuse",
+            profile,
+            browser,
+            pane_id,
+            servers[server_index].listenSocket(),
+            servers[server_index].child_pid,
+            servers[server_index].set_overlay_wall_ms,
+        );
         log.info(
             "SetOverlay: reused pending server key={s}/{s} pane_count={} has_fd={}",
             .{ servers[server_index].profileName(), servers[server_index].browserName(), servers[server_index].pane_count, servers[server_index].attached_fd >= 0 },
@@ -1643,6 +1720,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
             state_mutex.unlock();
             return;
         }
+        servers[server_index].set_overlay_wall_ms = set_overlay_wall_ms;
         if (buildListenSocket(&servers[server_index])) {
             if (!copyText(&spawn_profile_buf, &spawn_profile_len, servers[server_index].profileName()) or
                 !copyText(&spawn_browser_name_buf, &spawn_browser_name_len, servers[server_index].browserName()) or
@@ -1668,6 +1746,15 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
             "SetOverlay: created pending server key={s}/{s} pane_count={} listen_socket={s}",
             .{ servers[server_index].profileName(), servers[server_index].browserName(), servers[server_index].pane_count, servers[server_index].listenSocket() },
         );
+        traceBrowserStartup(
+            "pending_server_created",
+            profile,
+            browser,
+            pane_id,
+            servers[server_index].listenSocket(),
+            0,
+            set_overlay_wall_ms,
+        );
     }
     state_mutex.unlock();
 
@@ -1676,7 +1763,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         const browser_name_z = spawn_browser_name_buf[0..spawn_browser_name_len :0];
         const browser_executable_z = spawn_browser_executable_buf[0..spawn_browser_executable_len :0];
         const listen_socket_z = spawn_listen_socket_buf[0..spawn_listen_socket_len :0];
-        if (spawnBrowserProcess(profile_z, browser_name_z, browser_executable_z, listen_socket_z)) |pid| {
+        if (spawnBrowserProcess(profile_z, browser_name_z, browser_executable_z, listen_socket_z, set_overlay_wall_ms)) |pid| {
             if (should_record_child) recordServerChild(profile_z, browser, pid);
         }
     }
@@ -2049,6 +2136,15 @@ fn sendCreateTab(fd: std.posix.fd_t, pane: *const PaneState) !void {
     create_tab.pixel_height = pane.height * fallback_cell_height;
     create_tab.dark = if (current_color_scheme_dark) 1 else 0;
 
+    var set_overlay_wall_ms: i64 = 0;
+    var listen_socket: []const u8 = "";
+    var child_pid: std.process.Child.Id = 0;
+    if (findServer(pane.profileName(), pane.browserName())) |server_index| {
+        set_overlay_wall_ms = servers[server_index].set_overlay_wall_ms;
+        listen_socket = servers[server_index].listenSocket();
+        child_pid = servers[server_index].child_pid;
+    }
+
     var wrapper: c.Termsurf__TermSurfMessage = undefined;
     c.termsurf__term_surf_message__init(&wrapper);
     wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_CREATE_TAB;
@@ -2060,6 +2156,15 @@ fn sendCreateTab(fd: std.posix.fd_t, pane: *const PaneState) !void {
         pane.url[0..pane.url_len],
         current_color_scheme_dark,
     });
+    traceBrowserStartup(
+        "create_tab",
+        pane.profileName(),
+        pane.browserName(),
+        pane.paneId(),
+        listen_socket,
+        child_pid,
+        set_overlay_wall_ms,
+    );
     geometryTracePane("create_tab", pane, "sent-create-tab");
 }
 
@@ -2828,6 +2933,17 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
     }
     browser_ready = snapshotBrowserReady(&panes[pane_index], tab_id);
     geometryTracePane("tab_ready", &panes[pane_index], "mapped-browser-tab-to-pane");
+    if (findServer(panes[pane_index].profileName(), panes[pane_index].browserName())) |server_index| {
+        traceBrowserStartup(
+            "tab_ready",
+            panes[pane_index].profileName(),
+            panes[pane_index].browserName(),
+            pane_id,
+            servers[server_index].listenSocket(),
+            servers[server_index].child_pid,
+            servers[server_index].set_overlay_wall_ms,
+        );
+    }
 
     log.info(
         "TabReady lookup: key={s}/{s} tab_id={} pane_id={s}",
@@ -2858,8 +2974,11 @@ fn snapshotBrowserReady(pane: *const PaneState, tab_id: i64) ?BrowserReadySnapsh
         .tab_id = tab_id,
     };
     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    if (!copyText(&snapshot.profile, &snapshot.profile_len, pane.profileName())) return null;
     if (!copyText(&snapshot.browser, &snapshot.browser_len, pane.browserName())) return null;
     if (!copyText(&snapshot.browser_socket, &snapshot.browser_socket_len, servers[server_index].listenSocket())) return null;
+    snapshot.child_pid = servers[server_index].child_pid;
+    snapshot.set_overlay_wall_ms = servers[server_index].set_overlay_wall_ms;
     return snapshot;
 }
 
@@ -2880,6 +2999,15 @@ fn sendBrowserReady(snapshot: *const BrowserReadySnapshot) !void {
     log.info(
         "BrowserReady: pane_id={s} tab_id={} socket={s} browser={s}",
         .{ snapshot.paneId(), snapshot.tab_id, snapshot.browserSocket(), snapshot.browserName() },
+    );
+    traceBrowserStartup(
+        "browser_ready",
+        snapshot.profileName(),
+        snapshot.browserName(),
+        snapshot.paneId(),
+        snapshot.browserSocket(),
+        snapshot.child_pid,
+        snapshot.set_overlay_wall_ms,
     );
 }
 
@@ -2924,6 +3052,15 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
     panes[pane_index].ca_pixel_height = ca_context.*.pixel_height;
     overlay_snapshot = snapshotOverlay(&panes[pane_index]);
     geometryTracePane("ca_context", &panes[pane_index], "received-ca-context");
+    traceBrowserStartup(
+        "ca_context",
+        profile,
+        browser,
+        pane_id,
+        servers[server_index].listenSocket(),
+        servers[server_index].child_pid,
+        servers[server_index].set_overlay_wall_ms,
+    );
 
     log.info(
         "CaContext: tab_id={} pane_id={s} context_id={} pixel={}x{}",
@@ -3066,11 +3203,27 @@ fn snapshotOverlay(pane: *const PaneState) ?OverlaySnapshot {
         .pixel_height = pane.ca_pixel_height,
     };
     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    if (!copyText(&snapshot.profile, &snapshot.profile_len, pane.profileName())) return null;
+    if (!copyText(&snapshot.browser, &snapshot.browser_len, pane.browserName())) return null;
+    if (findServer(pane.profileName(), pane.browserName())) |server_index| {
+        if (!copyText(&snapshot.listen_socket, &snapshot.listen_socket_len, servers[server_index].listenSocket())) return null;
+        snapshot.child_pid = servers[server_index].child_pid;
+        snapshot.set_overlay_wall_ms = servers[server_index].set_overlay_wall_ms;
+    }
     return snapshot;
 }
 
 fn presentOverlay(snapshot: *const OverlaySnapshot) void {
     geometryTraceOverlay("present_overlay_call", snapshot, "calling-appkit-bridge");
+    traceBrowserStartup(
+        "present_overlay",
+        snapshot.profileName(),
+        snapshot.browserName(),
+        snapshot.paneId(),
+        snapshot.listenSocket(),
+        snapshot.child_pid,
+        snapshot.set_overlay_wall_ms,
+    );
     termsurf_present_overlay(
         snapshot.pane_id[0..snapshot.pane_id_len :0].ptr,
         snapshot.context_id,
@@ -3193,6 +3346,15 @@ fn recordServerChild(profile: []const u8, browser: []const u8, pid: std.process.
 
     if (findServer(profile, browser)) |index| {
         servers[index].child_pid = pid;
+        traceBrowserStartup(
+            "child_recorded",
+            profile,
+            browser,
+            "",
+            servers[index].listenSocket(),
+            pid,
+            servers[index].set_overlay_wall_ms,
+        );
     }
 }
 
@@ -3426,6 +3588,7 @@ fn spawnBrowserProcess(
     browser_name_z: [:0]const u8,
     browser_executable_z: [:0]const u8,
     listen_socket_z: [:0]const u8,
+    set_overlay_wall_ms: i64,
 ) ?std.process.Child.Id {
     const gui_socket = socket_path_buf[0..socket_path_len];
     if (gui_socket.len == 0) {
@@ -3512,10 +3675,37 @@ fn spawnBrowserProcess(
         }
         child.env_map = env;
     }
+    traceBrowserStartup(
+        "spawn_start",
+        profile_z,
+        browser_name_z,
+        "",
+        listen_socket_z,
+        0,
+        set_overlay_wall_ms,
+    );
     child.spawn() catch |err| {
         log.warn("browser spawn failed path={s} profile={s} browser={s} err={}", .{ browser_executable_z, profile_z, browser_name_z, err });
+        traceBrowserStartup(
+            "spawn_failed",
+            profile_z,
+            browser_name_z,
+            "",
+            listen_socket_z,
+            0,
+            set_overlay_wall_ms,
+        );
         return null;
     };
+    traceBrowserStartup(
+        "spawn_returned",
+        profile_z,
+        browser_name_z,
+        "",
+        listen_socket_z,
+        child.id,
+        set_overlay_wall_ms,
+    );
 
     log.info(
         "spawned browser path={s} pid={} profile={s} browser={s} argv={s} {s} {s} {s} {s} --hidden --no-sandbox --enable-logging {s}",
@@ -3585,6 +3775,7 @@ fn setServer(server: *ServerState, profile: []const u8, browser: []const u8) boo
     server.attached_fd = -1;
     server.listen_socket_len = 0;
     server.child_pid = 0;
+    server.set_overlay_wall_ms = 0;
     return true;
 }
 
@@ -3658,6 +3849,13 @@ fn findServer(profile: []const u8, browser: []const u8) ?usize {
 fn findServerByFd(fd: std.posix.fd_t) ?usize {
     for (&servers, 0..) |*server, i| {
         if (server.in_use and server.attached_fd == fd) return i;
+    }
+    return null;
+}
+
+fn findServerByListenSocket(listen_socket: []const u8) ?usize {
+    for (&servers, 0..) |*server, i| {
+        if (server.in_use and std.mem.eql(u8, server.listenSocket(), listen_socket)) return i;
     }
     return null;
 }
