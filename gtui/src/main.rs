@@ -14,6 +14,7 @@ mod proto {
 use proto::{term_surf_message::Msg, CloseAppFrontend, OpenApp, SetOverlay, TermSurfMessage};
 
 const APP_ID: &str = "gtui";
+const BROWSER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum AppEvent {
     BrowserReady,
@@ -135,7 +136,7 @@ fn wait_for_browser_ready(
     frontend_id: &str,
 ) -> io::Result<()> {
     loop {
-        match exit_rx.recv_timeout(Duration::from_secs(30)) {
+        match exit_rx.recv_timeout(BROWSER_READY_TIMEOUT) {
             Ok(AppEvent::BrowserReady) => return Ok(()),
             Ok(AppEvent::GuiClosed) => {
                 return Err(io::Error::new(
