@@ -2,6 +2,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::mpsc;
+use std::time::Duration;
 
 use crossterm::terminal;
 use prost::Message;
@@ -14,7 +15,8 @@ use proto::{term_surf_message::Msg, CloseAppFrontend, OpenApp, SetOverlay, TermS
 
 const APP_ID: &str = "gtui";
 
-enum ExitReason {
+enum AppEvent {
+    BrowserReady,
     CtrlC,
     GuiClosed,
 }
@@ -66,6 +68,34 @@ fn main() -> io::Result<()> {
         ));
     }
 
+    let (exit_tx, exit_rx) = mpsc::channel();
+    let ctrlc_tx = exit_tx.clone();
+    ctrlc::set_handler(move || {
+        let _ = ctrlc_tx.send(AppEvent::CtrlC);
+    })
+    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
+
+    let gui_tx = exit_tx.clone();
+    let expected_pane_id = pane_id.clone();
+    let expected_frontend_id = reply.frontend_id.clone();
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        while let Ok(message) = read_message(&mut reader) {
+            match message.msg {
+                Some(Msg::BrowserReady(ready)) if ready.pane_id == expected_pane_id => {
+                    let _ = gui_tx.send(AppEvent::BrowserReady);
+                }
+                Some(Msg::CloseAppFrontend(close))
+                    if close.app_id == APP_ID && close.frontend_id == expected_frontend_id =>
+                {
+                    let _ = gui_tx.send(AppEvent::GuiClosed);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
     let (cols, rows) = terminal::size()?;
     send(
         &mut stream,
@@ -82,41 +112,74 @@ fn main() -> io::Result<()> {
         }),
     )?;
 
-    let (exit_tx, exit_rx) = mpsc::channel();
-    let ctrlc_tx = exit_tx.clone();
-    ctrlc::set_handler(move || {
-        let _ = ctrlc_tx.send(ExitReason::CtrlC);
-    })
-    .map_err(|err| io::Error::new(io::ErrorKind::Other, err.to_string()))?;
-
-    let gui_tx = exit_tx.clone();
-    let expected_frontend_id = reply.frontend_id.clone();
-    std::thread::spawn(move || {
-        let mut reader = reader;
-        while let Ok(message) = read_message(&mut reader) {
-            if let Some(Msg::CloseAppFrontend(close)) = message.msg {
-                if close.app_id == APP_ID && close.frontend_id == expected_frontend_id {
-                    let _ = gui_tx.send(ExitReason::GuiClosed);
-                    break;
-                }
-            }
-        }
-    });
+    wait_for_browser_ready(&exit_rx, &mut stream, &pane_id, &reply.frontend_id)?;
 
     println!("TermSurf is open. Press Ctrl+C to close.");
-    let reason = exit_rx.recv().unwrap_or(ExitReason::CtrlC);
+    let reason = loop {
+        match exit_rx.recv().unwrap_or(AppEvent::CtrlC) {
+            AppEvent::BrowserReady => continue,
+            event => break event,
+        }
+    };
 
-    if matches!(reason, ExitReason::CtrlC) {
-        send(
-            &mut stream,
-            Msg::CloseAppFrontend(CloseAppFrontend {
-                pane_id,
-                app_id: APP_ID.to_string(),
-                frontend_id: reply.frontend_id,
-            }),
-        )?;
+    if matches!(reason, AppEvent::CtrlC) {
+        send_close_app_frontend(&mut stream, pane_id, reply.frontend_id)?;
     }
     Ok(())
+}
+
+fn wait_for_browser_ready(
+    exit_rx: &mpsc::Receiver<AppEvent>,
+    stream: &mut UnixStream,
+    pane_id: &str,
+    frontend_id: &str,
+) -> io::Result<()> {
+    loop {
+        match exit_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(AppEvent::BrowserReady) => return Ok(()),
+            Ok(AppEvent::GuiClosed) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "TermSurf app closed before browser became ready",
+                ))
+            }
+            Ok(AppEvent::CtrlC) => {
+                send_close_app_frontend(stream, pane_id.to_string(), frontend_id.to_string())?;
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "TermSurf app canceled before browser became ready",
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                send_close_app_frontend(stream, pane_id.to_string(), frontend_id.to_string())?;
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "TermSurf app browser did not become ready",
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "TermSurf app connection closed before browser became ready",
+                ))
+            }
+        }
+    }
+}
+
+fn send_close_app_frontend(
+    stream: &mut UnixStream,
+    pane_id: String,
+    frontend_id: String,
+) -> io::Result<()> {
+    send(
+        stream,
+        Msg::CloseAppFrontend(CloseAppFrontend {
+            pane_id,
+            app_id: APP_ID.to_string(),
+            frontend_id,
+        }),
+    )
 }
 
 fn app_entrypoint() -> io::Result<String> {
