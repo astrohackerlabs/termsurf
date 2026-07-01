@@ -50,6 +50,7 @@ const installed_surfari_path = "/opt/homebrew/opt/termsurf-surfari/surfari";
 const gtui_app_id = "gtui";
 const gtui_app_path_env = "TERMSURF_GTUI_APP_PATH";
 const deno_path_env = "TERMSURF_DENO_PATH";
+const installed_deno_path = "/opt/homebrew/bin/deno";
 
 const AppRuntime = enum {
     deno,
@@ -3912,7 +3913,7 @@ fn openOrReuseApp(
                     ready_diagnostic.stderrSnippet(),
                 },
             );
-            _ = copyReadinessError(error_buf, ready_result, ready_diagnostic.term);
+            _ = copyReadinessError(error_buf, ready_result, ready_diagnostic.term, ready_diagnostic.stderrSnippet());
             return false;
         }
 
@@ -3976,7 +3977,7 @@ fn copyError(buf: *[256]u8, message: []const u8) bool {
     return copyText(buf, &len, message);
 }
 
-fn copyReadinessError(buf: *[256]u8, result: AppReadyResult, term: ?std.process.Child.Term) bool {
+fn copyReadinessError(buf: *[256]u8, result: AppReadyResult, term: ?std.process.Child.Term, stderr: []const u8) bool {
     var message_buf: [128]u8 = undefined;
     var term_buf: [32]u8 = undefined;
     const message = switch (result) {
@@ -3985,6 +3986,11 @@ fn copyReadinessError(buf: *[256]u8, result: AppReadyResult, term: ?std.process.
         .timeout => "app backend readiness timed out",
         .rejected => "app backend health check was rejected",
     };
+    if (stderr.len > 0) {
+        var combined_buf: [256]u8 = undefined;
+        const combined = std.fmt.bufPrint(&combined_buf, "{s}: {s}", .{ message, stderr }) catch message;
+        return copyError(buf, combined);
+    }
     return copyError(buf, message);
 }
 
@@ -4009,6 +4015,13 @@ fn formatAppTerm(buf: []u8, term: ?std.process.Child.Term) []const u8 {
 fn resolveRuntimePath(descriptor: *const AppDescriptor, buf: []u8) ?[:0]u8 {
     if (std.posix.getenv(descriptor.runtime_path_env)) |path| {
         return std.fmt.bufPrintZ(buf, "{s}", .{path}) catch null;
+    }
+    switch (descriptor.runtime) {
+        .deno => {
+            if (std.fs.accessAbsolute(installed_deno_path, .{ .mode = .read_only })) {
+                return std.fmt.bufPrintZ(buf, "{s}", .{installed_deno_path}) catch null;
+            } else |_| {}
+        },
     }
     return std.fmt.bufPrintZ(buf, "{s}", .{descriptor.default_runtime_path}) catch null;
 }
@@ -4209,6 +4222,7 @@ fn spawnAppBackendArgv(descriptor: *const AppDescriptor, app_path_z: [:0]const u
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Ignore;
     child.stderr_behavior = .Pipe;
+    logAppBackendLaunch(descriptor, app_path_z, port, argv);
     child.spawn() catch |err| {
         log.warn("app backend spawn failed app_id={s} app={s} err={}", .{ descriptor.app_id, app_path_z, err });
         return null;
@@ -4218,6 +4232,29 @@ fn spawnAppBackendArgv(descriptor: *const AppDescriptor, app_path_z: [:0]const u
         .child_pid = child.id,
         .stderr = child.stderr,
     };
+}
+
+fn logAppBackendLaunch(descriptor: *const AppDescriptor, app_path_z: [:0]const u8, port: u16, argv: []const []const u8) void {
+    const runtime = if (argv.len > 0) argv[0] else "";
+    log.info(
+        "app backend launch app_id={s} runtime={s} app={s} port={} path={s} home={s} deno_dir={s} tmpdir={s} xdg_data={s} xdg_state={s}",
+        .{
+            descriptor.app_id,
+            runtime,
+            app_path_z,
+            port,
+            envValue("PATH"),
+            envValue("HOME"),
+            envValue("DENO_DIR"),
+            envValue("TMPDIR"),
+            envValue("XDG_DATA_HOME"),
+            envValue("XDG_STATE_HOME"),
+        },
+    );
+}
+
+fn envValue(name: [:0]const u8) []const u8 {
+    return std.posix.getenv(name) orelse "<unset>";
 }
 
 fn stopAppBackend(snapshot: *const AppShutdownSnapshot) void {
@@ -4829,6 +4866,40 @@ test "termsurf app descriptors select trusted runtimes" {
     try testing.expectEqualStrings(deno_path_env, gtui.runtime_path_env);
 
     try testing.expect(findAppDescriptor("unknown") == null);
+}
+
+test "termsurf app runtime resolution prefers override then installed deno" {
+    const testing = std.testing;
+
+    const gtui = findAppDescriptor(gtui_app_id).?;
+    try testWithRestoredEnv(deno_path_env, struct {
+        fn run() !void {
+            const descriptor = findAppDescriptor(gtui_app_id).?;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
+
+            if (c.setenv(deno_path_env, "/tmp/termsurf-deno-override", 1) != 0) return error.SetenvFailed;
+            try std.testing.expectEqualStrings("/tmp/termsurf-deno-override", resolveRuntimePath(descriptor, &buf).?);
+
+            _ = c.unsetenv(deno_path_env);
+            const resolved = resolveRuntimePath(descriptor, &buf).?;
+            if (std.fs.accessAbsolute(installed_deno_path, .{ .mode = .read_only })) {
+                try std.testing.expectEqualStrings(installed_deno_path, resolved);
+            } else |_| {
+                try std.testing.expectEqualStrings(descriptor.default_runtime_path, resolved);
+            }
+        }
+    }.run);
+    try testing.expectEqualStrings(deno_path_env, gtui.runtime_path_env);
+}
+
+test "termsurf app readiness error includes backend stderr when available" {
+    const testing = std.testing;
+
+    var error_buf: [256]u8 = undefined;
+    try testing.expect(copyReadinessError(&error_buf, .exited, .{ .Exited = 1 }, "deno failed to start"));
+    const error_text = std.mem.sliceTo(error_buf[0..], 0);
+    try testing.expect(std.mem.indexOf(u8, error_text, "exit=1") != null);
+    try testing.expect(std.mem.indexOf(u8, error_text, "deno failed to start") != null);
 }
 
 test "termsurf app health response accepts any 2xx status" {
