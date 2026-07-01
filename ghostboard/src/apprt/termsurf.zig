@@ -30,6 +30,8 @@ const max_url_len: usize = 2048;
 const max_app_id_len: usize = 64;
 const max_app_url_len: usize = max_url_len;
 const max_app_frontend_id_len: usize = 64;
+const max_app_backend_stderr_len: usize = 512;
+const max_health_response_len: usize = 2048;
 const max_homepage_len: usize = max_url_len;
 const max_listen_socket_len: usize = std.fs.max_path_bytes;
 const default_browser = "roamium";
@@ -245,6 +247,7 @@ const AppState = struct {
     url: [max_app_url_len]u8 = undefined,
     url_len: usize = 0,
     child_pid: std.process.Child.Id = 0,
+    child_stderr_fd: std.posix.fd_t = -1,
     port: u16 = 0,
 
     fn appId(self: *const AppState) []const u8 {
@@ -283,6 +286,7 @@ const AppShutdownSnapshot = struct {
     app_id: [max_app_id_len]u8 = undefined,
     app_id_len: usize = 0,
     child_pid: std.process.Child.Id = 0,
+    child_stderr_fd: std.posix.fd_t = -1,
 
     fn appId(self: *const AppShutdownSnapshot) []const u8 {
         return self.app_id[0..self.app_id_len];
@@ -315,6 +319,35 @@ const AppReadyResult = enum {
     ready,
     exited,
     timeout,
+    rejected,
+};
+
+const AppReadyDiagnostic = struct {
+    term: ?std.process.Child.Term = null,
+    stderr: [max_app_backend_stderr_len]u8 = undefined,
+    stderr_len: usize = 0,
+    probe_response: [256]u8 = undefined,
+    probe_response_len: usize = 0,
+
+    fn stderrSnippet(self: *const AppReadyDiagnostic) []const u8 {
+        return self.stderr[0..self.stderr_len];
+    }
+
+    fn probeResponse(self: *const AppReadyDiagnostic) []const u8 {
+        return self.probe_response[0..self.probe_response_len];
+    }
+};
+
+const AppBackendProcess = struct {
+    child_pid: std.process.Child.Id = 0,
+    stderr: ?std.fs.File = null,
+
+    fn closeStderr(self: *AppBackendProcess) void {
+        if (self.stderr) |file| {
+            file.close();
+            self.stderr = null;
+        }
+    }
 };
 
 const TabLookupState = struct {
@@ -3696,11 +3729,12 @@ fn frontendCountForApp(app_id: []const u8) usize {
     return count;
 }
 
-fn setApp(app: *AppState, app_id: []const u8, url: []const u8, port: u16, child_pid: std.process.Child.Id) bool {
+fn setApp(app: *AppState, app_id: []const u8, url: []const u8, port: u16, child_pid: std.process.Child.Id, child_stderr_fd: std.posix.fd_t) bool {
     if (!copyText(&app.app_id, &app.app_id_len, app_id)) return false;
     if (!copyText(&app.url, &app.url_len, url)) return false;
     app.port = port;
     app.child_pid = child_pid;
+    app.child_stderr_fd = child_stderr_fd;
     app.starting = false;
     app.in_use = true;
     return true;
@@ -3771,6 +3805,7 @@ fn openOrReuseApp(
                 continue;
             } else if (appChildExited(apps[existing].child_pid)) {
                 log.warn("OpenApp: stale app backend exited app_id={s} pid={}", .{ app_id, apps[existing].child_pid });
+                closeAppBackendStderr(apps[existing].child_stderr_fd);
                 apps[existing] = .{};
                 for (&app_frontends) |*frontend| {
                     if (frontend.in_use and std.mem.eql(u8, frontend.appId(), app_id)) {
@@ -3838,36 +3873,64 @@ fn openOrReuseApp(
             _ = copyError(error_buf, "app runtime executable not found");
             return false;
         };
-        const child_pid = spawnAppBackend(descriptor, runtime_path_z, app_path_z, port) orelse {
+        var backend = spawnAppBackend(descriptor, runtime_path_z, app_path_z, port) orelse {
             state_mutex.lock();
             apps[app_index] = .{};
             state_mutex.unlock();
             _ = copyError(error_buf, "failed to spawn app backend");
             return false;
         };
-        const ready_result = waitForAppReady(child_pid, port, descriptor.readiness_timeout_ms);
+        var ready_diagnostic: AppReadyDiagnostic = .{};
+        const ready_result = waitForAppReady(&backend, port, descriptor.readiness_timeout_ms, &ready_diagnostic);
         if (ready_result != .ready) {
             state_mutex.lock();
             apps[app_index] = .{};
             state_mutex.unlock();
-            if (ready_result == .timeout) {
-                var snapshot: AppShutdownSnapshot = .{ .child_pid = child_pid };
+            if (ready_result == .timeout or ready_result == .rejected) {
+                var snapshot: AppShutdownSnapshot = .{
+                    .child_pid = backend.child_pid,
+                    .child_stderr_fd = if (backend.stderr) |file| file.handle else -1,
+                };
+                backend.stderr = null;
                 _ = copyText(&snapshot.app_id, &snapshot.app_id_len, app_id);
                 stopAppBackend(&snapshot);
+            } else {
+                backend.closeStderr();
             }
-            _ = copyError(error_buf, "app backend did not become ready");
+            var term_log_buf: [32]u8 = undefined;
+            log.warn(
+                "OpenApp: app backend readiness failed app_id={s} runtime={s} app={s} port={} pid={} result={s} term={s} probe={s} stderr={s}",
+                .{
+                    app_id,
+                    runtime_path_z,
+                    app_path_z,
+                    port,
+                    backend.child_pid,
+                    appReadyResultName(ready_result),
+                    formatAppTerm(&term_log_buf, ready_diagnostic.term),
+                    ready_diagnostic.probeResponse(),
+                    ready_diagnostic.stderrSnippet(),
+                },
+            );
+            _ = copyReadinessError(error_buf, ready_result, ready_diagnostic.term);
             return false;
         }
 
         state_mutex.lock();
-        if (!setApp(&apps[app_index], app_id, url_z, port, child_pid)) {
+        const backend_stderr_fd: std.posix.fd_t = if (backend.stderr) |file| file.handle else -1;
+        if (!setApp(&apps[app_index], app_id, url_z, port, backend.child_pid, backend_stderr_fd)) {
             state_mutex.unlock();
-            var snapshot: AppShutdownSnapshot = .{ .child_pid = child_pid };
+            var snapshot: AppShutdownSnapshot = .{
+                .child_pid = backend.child_pid,
+                .child_stderr_fd = backend_stderr_fd,
+            };
+            backend.stderr = null;
             _ = copyText(&snapshot.app_id, &snapshot.app_id_len, app_id);
             stopAppBackend(&snapshot);
             _ = copyError(error_buf, "failed to record app state");
             return false;
         }
+        backend.stderr = null;
         if (!copyText(&app_url_copy, &app_url_copy_len, apps[app_index].appUrl())) {
             const snapshot = snapshotAppShutdown(&apps[app_index]);
             apps[app_index] = .{};
@@ -3911,6 +3974,36 @@ fn openOrReuseApp(
 fn copyError(buf: *[256]u8, message: []const u8) bool {
     var len: usize = 0;
     return copyText(buf, &len, message);
+}
+
+fn copyReadinessError(buf: *[256]u8, result: AppReadyResult, term: ?std.process.Child.Term) bool {
+    var message_buf: [128]u8 = undefined;
+    var term_buf: [32]u8 = undefined;
+    const message = switch (result) {
+        .ready => "app backend ready",
+        .exited => std.fmt.bufPrint(&message_buf, "app backend exited before readiness ({s})", .{formatAppTerm(&term_buf, term)}) catch "app backend exited before readiness",
+        .timeout => "app backend readiness timed out",
+        .rejected => "app backend health check was rejected",
+    };
+    return copyError(buf, message);
+}
+
+fn appReadyResultName(result: AppReadyResult) []const u8 {
+    return switch (result) {
+        .ready => "ready",
+        .exited => "exited",
+        .timeout => "timeout",
+        .rejected => "rejected",
+    };
+}
+
+fn formatAppTerm(buf: []u8, term: ?std.process.Child.Term) []const u8 {
+    return switch (term orelse return "unknown") {
+        .Exited => |code| std.fmt.bufPrint(buf, "exit={}", .{code}) catch "exit=?",
+        .Signal => |sig| std.fmt.bufPrint(buf, "signal={}", .{sig}) catch "signal=?",
+        .Stopped => |sig| std.fmt.bufPrint(buf, "stopped={}", .{sig}) catch "stopped=?",
+        .Unknown => |status| std.fmt.bufPrint(buf, "status={}", .{status}) catch "status=?",
+    };
 }
 
 fn resolveRuntimePath(descriptor: *const AppDescriptor, buf: []u8) ?[:0]u8 {
@@ -3964,28 +4057,124 @@ fn canConnectLocalPort(port: u16) bool {
     return true;
 }
 
-fn waitForAppReady(child_pid: std.process.Child.Id, port: u16, timeout_ms: u64) AppReadyResult {
+fn waitForAppReady(process: *AppBackendProcess, port: u16, timeout_ms: u64, diagnostic: *AppReadyDiagnostic) AppReadyResult {
     const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
     while (std.time.milliTimestamp() < deadline) {
-        if (appChildExited(child_pid)) return .exited;
-        if (httpHealthzOk(port)) return .ready;
+        if (appChildTerm(process.child_pid)) |term| {
+            diagnostic.term = term;
+            readBackendStderr(process, diagnostic);
+            return .exited;
+        }
+        const probe = httpHealthzOk(port, diagnostic);
+        if (probe == .ready) return .ready;
+        if (probe == .rejected) return .rejected;
         std.Thread.sleep(100 * std.time.ns_per_ms);
     }
     return .timeout;
 }
 
-fn httpHealthzOk(port: u16) bool {
-    const stream = std.net.tcpConnectToHost(std.heap.c_allocator, "127.0.0.1", port) catch return false;
+fn httpHealthzOk(port: u16, diagnostic: *AppReadyDiagnostic) AppReadyResult {
+    const stream = std.net.tcpConnectToHost(std.heap.c_allocator, "127.0.0.1", port) catch return .timeout;
     defer stream.close();
+    setHealthProbeReadTimeout(stream.handle) catch {};
 
     const request = "GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    writeAll(stream.handle, request) catch return false;
+    writeAll(stream.handle, request) catch return .timeout;
 
-    var response_buf: [512]u8 = undefined;
-    const n = std.posix.read(stream.handle, &response_buf) catch return false;
-    const response = response_buf[0..n];
-    return std.mem.indexOf(u8, response, "200 OK") != null and
-        std.mem.indexOf(u8, response, "\r\n\r\nok") != null;
+    var response_buf: [max_health_response_len]u8 = undefined;
+    var response_len: usize = 0;
+    while (response_len < response_buf.len) {
+        const n = std.posix.read(stream.handle, response_buf[response_len..]) catch return .timeout;
+        if (n == 0) break;
+        response_len += n;
+        if (httpHealthResponseReady(response_buf[0..response_len])) {
+            diagnostic.probe_response_len = 0;
+            return .ready;
+        }
+        if (httpHealthResponseRejected(response_buf[0..response_len])) {
+            copyProbeResponse(diagnostic, response_buf[0..response_len]);
+            return .rejected;
+        }
+    }
+    copyProbeResponse(diagnostic, response_buf[0..response_len]);
+    return .timeout;
+}
+
+fn setHealthProbeReadTimeout(fd: std.posix.socket_t) !void {
+    var timeout = std.posix.timeval{
+        .sec = 0,
+        .usec = 250 * 1000,
+    };
+    try std.posix.setsockopt(fd, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, std.mem.asBytes(&timeout));
+}
+
+fn httpHealthResponseReady(response: []const u8) bool {
+    const status = parseHttpStatus(response) orelse return false;
+    return status >= 200 and status < 300;
+}
+
+fn httpHealthResponseRejected(response: []const u8) bool {
+    const line = httpStatusLine(response) orelse return false;
+    return parseHttpStatusLine(line) == null or !httpHealthResponseReady(response);
+}
+
+fn parseHttpStatus(response: []const u8) ?u16 {
+    const line = httpStatusLine(response) orelse return null;
+    return parseHttpStatusLine(line);
+}
+
+fn httpStatusLine(response: []const u8) ?[]const u8 {
+    if (std.mem.indexOf(u8, response, "\r\n")) |end| return response[0..end];
+    if (std.mem.indexOfScalar(u8, response, '\n')) |end| return std.mem.trimRight(u8, response[0..end], "\r");
+    return null;
+}
+
+fn parseHttpStatusLine(line: []const u8) ?u16 {
+    if (!std.mem.startsWith(u8, line, "HTTP/")) return null;
+    var parts = std.mem.tokenizeScalar(u8, line, ' ');
+    _ = parts.next() orelse return null;
+    const code_text = parts.next() orelse return null;
+    if (code_text.len != 3) return null;
+    return std.fmt.parseInt(u16, code_text, 10) catch null;
+}
+
+fn copyProbeResponse(diagnostic: *AppReadyDiagnostic, response: []const u8) void {
+    const max = @min(response.len, diagnostic.probe_response.len - 1);
+    var len: usize = 0;
+    while (len < max) : (len += 1) {
+        const ch = response[len];
+        diagnostic.probe_response[len] = if (ch == '\r' or ch == '\n') ' ' else ch;
+    }
+    diagnostic.probe_response[len] = 0;
+    diagnostic.probe_response_len = len;
+}
+
+fn readBackendStderr(process: *AppBackendProcess, diagnostic: *AppReadyDiagnostic) void {
+    const stderr = process.stderr orelse return;
+    var file = stderr;
+    process.stderr = null;
+    defer file.close();
+
+    while (diagnostic.stderr_len < diagnostic.stderr.len - 1) {
+        const n = file.read(diagnostic.stderr[diagnostic.stderr_len .. diagnostic.stderr.len - 1]) catch break;
+        if (n == 0) break;
+        diagnostic.stderr_len += n;
+    }
+    diagnostic.stderr[diagnostic.stderr_len] = 0;
+}
+
+fn appChildTerm(pid: std.process.Child.Id) ?std.process.Child.Term {
+    if (pid == 0) return .{ .Exited = 0 };
+    const res = std.posix.waitpid(pid, std.c.W.NOHANG);
+    if (res.pid == 0) return null;
+    return if (std.posix.W.IFEXITED(res.status))
+        .{ .Exited = std.posix.W.EXITSTATUS(res.status) }
+    else if (std.posix.W.IFSIGNALED(res.status))
+        .{ .Signal = std.posix.W.TERMSIG(res.status) }
+    else if (std.posix.W.IFSTOPPED(res.status))
+        .{ .Stopped = std.posix.W.STOPSIG(res.status) }
+    else
+        .{ .Unknown = res.status };
 }
 
 fn appChildExited(pid: std.process.Child.Id) bool {
@@ -3994,7 +4183,7 @@ fn appChildExited(pid: std.process.Child.Id) bool {
     return res.pid != 0;
 }
 
-fn spawnAppBackend(descriptor: *const AppDescriptor, runtime_path_z: [:0]const u8, app_path_z: [:0]const u8, port: u16) ?std.process.Child.Id {
+fn spawnAppBackend(descriptor: *const AppDescriptor, runtime_path_z: [:0]const u8, app_path_z: [:0]const u8, port: u16) ?AppBackendProcess {
     var port_buf: [16]u8 = undefined;
     const port_arg = std.fmt.bufPrintZ(&port_buf, "{d}", .{port}) catch return null;
     switch (descriptor.runtime) {
@@ -4015,20 +4204,24 @@ fn spawnAppBackend(descriptor: *const AppDescriptor, runtime_path_z: [:0]const u
     }
 }
 
-fn spawnAppBackendArgv(descriptor: *const AppDescriptor, app_path_z: [:0]const u8, port: u16, argv: []const []const u8) ?std.process.Child.Id {
+fn spawnAppBackendArgv(descriptor: *const AppDescriptor, app_path_z: [:0]const u8, port: u16, argv: []const []const u8) ?AppBackendProcess {
     var child = std.process.Child.init(argv, std.heap.c_allocator);
     child.stdin_behavior = .Ignore;
-    child.stdout_behavior = .Inherit;
-    child.stderr_behavior = .Inherit;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Pipe;
     child.spawn() catch |err| {
         log.warn("app backend spawn failed app_id={s} app={s} err={}", .{ descriptor.app_id, app_path_z, err });
         return null;
     };
     log.info("app backend spawned app_id={s} pid={} port={}", .{ descriptor.app_id, child.id, port });
-    return child.id;
+    return .{
+        .child_pid = child.id,
+        .stderr = child.stderr,
+    };
 }
 
 fn stopAppBackend(snapshot: *const AppShutdownSnapshot) void {
+    defer closeAppBackendStderr(snapshot.child_stderr_fd);
     if (snapshot.child_pid == 0) return;
     std.posix.kill(snapshot.child_pid, std.posix.SIG.TERM) catch |err| {
         log.info("app backend kill skipped app={s} pid={} err={}", .{ snapshot.appId(), snapshot.child_pid, err });
@@ -4050,9 +4243,16 @@ fn stopAppBackend(snapshot: *const AppShutdownSnapshot) void {
     log.info("app backend killed app={s} pid={}", .{ snapshot.appId(), snapshot.child_pid });
 }
 
+fn closeAppBackendStderr(fd: std.posix.fd_t) void {
+    if (fd >= 0) std.posix.close(fd);
+}
+
 fn snapshotAppShutdown(app: *const AppState) ?AppShutdownSnapshot {
     if (app.child_pid == 0) return null;
-    var snapshot: AppShutdownSnapshot = .{ .child_pid = app.child_pid };
+    var snapshot: AppShutdownSnapshot = .{
+        .child_pid = app.child_pid,
+        .child_stderr_fd = app.child_stderr_fd,
+    };
     if (!copyText(&snapshot.app_id, &snapshot.app_id_len, app.appId())) return null;
     return snapshot;
 }
@@ -4631,6 +4831,26 @@ test "termsurf app descriptors select trusted runtimes" {
     try testing.expect(findAppDescriptor("unknown") == null);
 }
 
+test "termsurf app health response accepts any 2xx status" {
+    const testing = std.testing;
+
+    try testing.expect(httpHealthResponseReady("HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok"));
+    try testing.expect(httpHealthResponseReady("HTTP/1.1 204 No Content\r\n\r\n"));
+    try testing.expect(httpHealthResponseReady("HTTP/1.1 200 OK\r\n"));
+    try testing.expect(httpHealthResponseReady("HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n"));
+}
+
+test "termsurf app health response rejects non-2xx and malformed status" {
+    const testing = std.testing;
+
+    try testing.expect(!httpHealthResponseReady("HTTP/1.1 500 Internal Server Error\r\n\r\nok"));
+    try testing.expect(httpHealthResponseRejected("HTTP/1.1 500 Internal Server Error\r\n\r\nok"));
+    try testing.expect(!httpHealthResponseReady("not http\r\n\r\nok"));
+    try testing.expect(httpHealthResponseRejected("not http\r\n\r\nok"));
+    try testing.expect(!httpHealthResponseReady(""));
+    try testing.expect(!httpHealthResponseRejected(""));
+}
+
 test "termsurf open app reuses existing backend for another frontend" {
     const testing = std.testing;
 
@@ -4818,7 +5038,9 @@ fn testOpenAppEarlyExitTsgtui() !void {
     try testing.expectEqual(@as(usize, 0), url_len);
     try testing.expect(findApp(gtui_app_id) == null);
     try testing.expectEqual(@as(usize, 0), frontendCountForApp(gtui_app_id));
-    try testing.expect(std.mem.indexOf(u8, std.mem.sliceTo(error_buf[0..], 0), "ready") != null);
+    const error_text = std.mem.sliceTo(error_buf[0..], 0);
+    try testing.expect(std.mem.indexOf(u8, error_text, "exited before readiness") != null);
+    try testing.expect(std.mem.indexOf(u8, error_text, "exit=1") != null);
 }
 
 fn testSocketPair() ![2]std.posix.fd_t {
@@ -4870,7 +5092,7 @@ fn testSetPane(
 
 fn testSetApp(index: usize, app_id: []const u8, url: []const u8, port: u16, child_pid: std.process.Child.Id) !void {
     apps[index] = .{};
-    if (!setApp(&apps[index], app_id, url, port, child_pid)) return error.TestValueTooLong;
+    if (!setApp(&apps[index], app_id, url, port, child_pid, -1)) return error.TestValueTooLong;
 }
 
 fn testSetAppFrontend(index: usize, app_id: []const u8, frontend_id: []const u8, pane_id: []const u8, tui_fd: std.posix.fd_t) !void {
