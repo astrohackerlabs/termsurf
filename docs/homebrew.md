@@ -27,8 +27,9 @@ The cask installs:
 - `termsurf` to the Homebrew binary path;
 - Roamium and Chromium runtime resources to
   `/opt/homebrew/opt/termsurf-roamium/`;
-- Surfari and WebKit runtime resources to
-  `/opt/homebrew/opt/termsurf-surfari/`;
+- Surfari and WebKit runtime resources to `/opt/homebrew/opt/termsurf-surfari/`;
+- Girlbat prototype and Ladybird runtime resources to
+  `/opt/homebrew/opt/termsurf-girlbat/`;
 - GTUI Deno app assets to `/opt/homebrew/opt/termsurf-gtui/`.
 
 The release tarball contains the same top-level package contract:
@@ -38,7 +39,8 @@ The release tarball contains the same top-level package contract:
 - `termsurf`;
 - `gtui/`;
 - `roamium/`;
-- `surfari/`.
+- `surfari/`;
+- `girlbat/`.
 
 ## Verification
 
@@ -58,5 +60,18 @@ evidence such as logs or screenshots showing:
 - `web --browser surfari https://example.com` opened and rendered the page;
 - Ghostboard resolved the installed Surfari path:
   `/opt/homebrew/opt/termsurf-surfari/surfari`;
-- neither smoke required `TERMSURF_ROAMIUM_PATH`, `TERMSURF_SURFARI_PATH`,
-  `TERMSURF_INSTALLED_ROAMIUM_PATH`, or `TERMSURF_INSTALLED_SURFARI_PATH`.
+- `web --browser girlbat http://127.0.0.1:<fixture>/` opened the local fixture
+  through the installed Girlbat prototype;
+- Ghostboard resolved the installed Girlbat path:
+  `/opt/homebrew/opt/termsurf-girlbat/bin/girlbat`;
+- the installed Girlbat prototype loaded its resources from
+  `/opt/homebrew/opt/termsurf-girlbat/Resources` and all non-system dylib
+  dependencies resolved from `/opt/homebrew/opt/termsurf-girlbat/lib`;
+- no smoke required `TERMSURF_ROAMIUM_PATH`, `TERMSURF_SURFARI_PATH`,
+  `TERMSURF_GIRLBAT_PATH`, `TERMSURF_INSTALLED_ROAMIUM_PATH`,
+  `TERMSURF_INSTALLED_SURFARI_PATH`, or `TERMSURF_INSTALLED_GIRLBAT_PATH`.
+
+Girlbat is included as a prototype only. Its Homebrew presence proves installed
+runtime packaging and gives us a testable Ladybird-backed engine, but it does
+not imply browser parity, PDF parity, visual screenshot parity, or production
+readiness.

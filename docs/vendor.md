@@ -5,12 +5,13 @@ committed to the TermSurf repo.
 
 ## vendor/
 
-| Repo                | URL                                    | Why                                                                                                              |
-| ------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `vendor/ghostty/`   | https://github.com/ghostty-org/ghostty | TermSurf GUI forks Ghostty. Reference for understanding upstream behavior, diffing changes, and planning merges. |
-| `vendor/wezterm/`   | https://github.com/wezterm/wezterm     | Terminal emulator evaluated in ts2–ts3. Reference for terminal internals and IPC patterns.                       |
-| `vendor/electron/`  | https://github.com/electron/electron   | Reference for Chromium embedding patterns, patch sets, and Content API usage.                                    |
-| `vendor/alacritty/` | https://github.com/alacritty/alacritty | Terminal emulator evaluated in ts4. Reference for Rust terminal architecture.                                    |
+| Repo                | URL                                         | Why                                                                                                              |
+| ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `vendor/ghostty/`   | https://github.com/ghostty-org/ghostty      | TermSurf GUI forks Ghostty. Reference for understanding upstream behavior, diffing changes, and planning merges. |
+| `vendor/wezterm/`   | https://github.com/wezterm/wezterm          | Terminal emulator evaluated in ts2–ts3. Reference for terminal internals and IPC patterns.                       |
+| `vendor/electron/`  | https://github.com/electron/electron        | Reference for Chromium embedding patterns, patch sets, and Content API usage.                                    |
+| `vendor/alacritty/` | https://github.com/alacritty/alacritty      | Terminal emulator evaluated in ts4. Reference for Rust terminal architecture.                                    |
+| `vendor/ladybird/`  | https://github.com/LadybirdBrowser/ladybird | Reference for Girlbat/Ladybird engine research, LibWebView embedding, and IOSurface/Metal rendering.             |
 
 ## libghostty dependency sources (Roastty proof-of-concept)
 

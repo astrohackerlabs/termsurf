@@ -31,6 +31,7 @@ typedef struct Termsurf__SetGuiActive Termsurf__SetGuiActive;
 typedef struct Termsurf__ServerRegister Termsurf__ServerRegister;
 typedef struct Termsurf__TabReady Termsurf__TabReady;
 typedef struct Termsurf__CaContext Termsurf__CaContext;
+typedef struct Termsurf__RenderSurface Termsurf__RenderSurface;
 typedef struct Termsurf__UrlChanged Termsurf__UrlChanged;
 typedef struct Termsurf__LoadingState Termsurf__LoadingState;
 typedef struct Termsurf__TitleChanged Termsurf__TitleChanged;
@@ -109,7 +110,8 @@ typedef enum {
   TERMSURF__TERM_SURF_MESSAGE__MSG_RENDERER_CRASHED = 39,
   TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP = 40,
   TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY = 41,
-  TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND = 42
+  TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND = 42,
+  TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE = 43
     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(TERMSURF__TERM_SURF_MESSAGE__MSG__CASE)
 } Termsurf__TermSurfMessage__MsgCase;
 
@@ -184,6 +186,10 @@ struct  Termsurf__TermSurfMessage
     Termsurf__QueryLastRequest *query_last_request;
     Termsurf__QueryTabsReply *query_tabs_reply;
     Termsurf__QueryTabsRequest *query_tabs_request;
+    /*
+     * Generic render surface metadata (engine → GUI)
+     */
+    Termsurf__RenderSurface *render_surface;
     /*
      * Renderer crash recovery (Chromium → TUI / automation harness)
      */
@@ -447,6 +453,25 @@ struct  Termsurf__CaContext
 #define TERMSURF__CA_CONTEXT__INIT \
  { PROTOBUF_C_MESSAGE_INIT (&termsurf__ca_context__descriptor) \
 , 0, 0, 0, 0 }
+
+
+struct  Termsurf__RenderSurface
+{
+  ProtobufCMessage base;
+  int64_t tab_id;
+  uint64_t pixel_width;
+  uint64_t pixel_height;
+  uint64_t bytes_per_row;
+  uint32_t pixel_format;
+  uint64_t generation;
+  /*
+   * 0 = metadata-only; no attachment match proved
+   */
+  uint64_t attachment_id;
+};
+#define TERMSURF__RENDER_SURFACE__INIT \
+ { PROTOBUF_C_MESSAGE_INIT (&termsurf__render_surface__descriptor) \
+, 0, 0, 0, 0, 0, 0, 0 }
 
 
 struct  Termsurf__UrlChanged
@@ -1140,6 +1165,25 @@ Termsurf__CaContext *
 void   termsurf__ca_context__free_unpacked
                      (Termsurf__CaContext *message,
                       ProtobufCAllocator *allocator);
+/* Termsurf__RenderSurface methods */
+void   termsurf__render_surface__init
+                     (Termsurf__RenderSurface         *message);
+size_t termsurf__render_surface__get_packed_size
+                     (const Termsurf__RenderSurface   *message);
+size_t termsurf__render_surface__pack
+                     (const Termsurf__RenderSurface   *message,
+                      uint8_t             *out);
+size_t termsurf__render_surface__pack_to_buffer
+                     (const Termsurf__RenderSurface   *message,
+                      ProtobufCBuffer     *buffer);
+Termsurf__RenderSurface *
+       termsurf__render_surface__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data);
+void   termsurf__render_surface__free_unpacked
+                     (Termsurf__RenderSurface *message,
+                      ProtobufCAllocator *allocator);
 /* Termsurf__UrlChanged methods */
 void   termsurf__url_changed__init
                      (Termsurf__UrlChanged         *message);
@@ -1722,6 +1766,9 @@ typedef void (*Termsurf__TabReady_Closure)
 typedef void (*Termsurf__CaContext_Closure)
                  (const Termsurf__CaContext *message,
                   void *closure_data);
+typedef void (*Termsurf__RenderSurface_Closure)
+                 (const Termsurf__RenderSurface *message,
+                  void *closure_data);
 typedef void (*Termsurf__UrlChanged_Closure)
                  (const Termsurf__UrlChanged *message,
                   void *closure_data);
@@ -1828,6 +1875,7 @@ extern const ProtobufCMessageDescriptor termsurf__set_gui_active__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__server_register__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__tab_ready__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__ca_context__descriptor;
+extern const ProtobufCMessageDescriptor termsurf__render_surface__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__url_changed__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__loading_state__descriptor;
 extern const ProtobufCMessageDescriptor termsurf__title_changed__descriptor;

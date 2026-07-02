@@ -31,52 +31,57 @@ claim is trusted.
 
 Ghostboard currently supports these browser selection rules:
 
-| Web command                                   | Browser field received by Ghostboard | Spawn behavior                                                              |
-| --------------------------------------------- | ------------------------------------ | --------------------------------------------------------------------------- |
-| `web --browser /absolute/path/to/browser URL` | absolute path                        | Spawn exactly that path.                                                    |
-| `web URL`                                     | named/default `roamium`              | Debug: resolve through `TERMSURF_ROAMIUM_PATH`; release: installed Roamium. |
-| `web --browser roamium URL`                   | named `roamium`                      | Debug: resolve through `TERMSURF_ROAMIUM_PATH`; release: installed Roamium. |
-| `web --browser surfari URL`                   | named `surfari`                      | Debug: resolve through `TERMSURF_SURFARI_PATH`; release: installed Surfari. |
-| `web --browser unsupported-name URL`          | unsupported named browser            | Fail as unsupported.                                                        |
+| Web command                                   | Browser field received by Ghostboard | Spawn behavior                                                                        |
+| --------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------- |
+| `web --browser /absolute/path/to/browser URL` | absolute path                        | Spawn exactly that path.                                                              |
+| `web URL`                                     | named/default `roamium`              | Debug: resolve through `TERMSURF_ROAMIUM_PATH`; release: installed Roamium.           |
+| `web --browser roamium URL`                   | named `roamium`                      | Debug: resolve through `TERMSURF_ROAMIUM_PATH`; release: installed Roamium.           |
+| `web --browser surfari URL`                   | named `surfari`                      | Debug: resolve through `TERMSURF_SURFARI_PATH`; release: installed Surfari.           |
+| `web --browser girlbat URL`                   | named `girlbat`                      | Debug: resolve through `TERMSURF_GIRLBAT_PATH`; release: installed Girlbat prototype. |
+| `web --browser unsupported-name URL`          | unsupported named browser            | Fail as unsupported.                                                                  |
 
-The supported named browsers are currently `roamium` and `surfari`. Any other
-relative browser name is unsupported; pass an absolute path when testing a
-custom browser executable.
+The supported named browsers are currently `roamium`, `surfari`, and the
+prototype `girlbat`. Any other relative browser name is unsupported; pass an
+absolute path when testing a custom browser executable.
 
 In debug builds, named browser paths are intentionally explicit:
 
 - `TERMSURF_ROAMIUM_PATH` must be set for named/default `roamium`;
 - `TERMSURF_SURFARI_PATH` must be set for named `surfari`;
+- `TERMSURF_GIRLBAT_PATH` must be set for named `girlbat`;
 - each value must be an absolute path;
 - debug harnesses set Roamium to `chromium/src/out/Default/roamium`;
 - debug harnesses set Surfari to the intended Surfari binary path and, when
   needed for debug-only WebKit framework discovery, configure the matching
   runtime environment in the Ghostboard app process;
+- debug harnesses set Girlbat to the intended repo-built Girlbat binary path;
 - missing, empty, or relative values fail with a clear
   `SetOverlay: named browser unresolved` log line; and
 - Ghostboard must not fall through to `/usr/local/roamium`,
   `/usr/local/bin/roamium`, `/opt/homebrew/opt/termsurf-roamium`, or
-  `/opt/homebrew/opt/termsurf-surfari` during debug testing.
+  `/opt/homebrew/opt/termsurf-surfari`, or `/opt/homebrew/opt/termsurf-girlbat`
+  during debug testing.
 
 In non-debug builds, named browsers first accept their developer override if one
 is present, then resolve through installed discovery:
 
-| Browser   | Developer override      | Installed override                | Installed default                            |
-| --------- | ----------------------- | --------------------------------- | -------------------------------------------- |
-| `roamium` | `TERMSURF_ROAMIUM_PATH` | `TERMSURF_INSTALLED_ROAMIUM_PATH` | `/opt/homebrew/opt/termsurf-roamium/roamium` |
-| `surfari` | `TERMSURF_SURFARI_PATH` | `TERMSURF_INSTALLED_SURFARI_PATH` | `/opt/homebrew/opt/termsurf-surfari/surfari` |
+| Browser   | Developer override      | Installed override                | Installed default                                |
+| --------- | ----------------------- | --------------------------------- | ------------------------------------------------ |
+| `roamium` | `TERMSURF_ROAMIUM_PATH` | `TERMSURF_INSTALLED_ROAMIUM_PATH` | `/opt/homebrew/opt/termsurf-roamium/roamium`     |
+| `surfari` | `TERMSURF_SURFARI_PATH` | `TERMSURF_INSTALLED_SURFARI_PATH` | `/opt/homebrew/opt/termsurf-surfari/surfari`     |
+| `girlbat` | `TERMSURF_GIRLBAT_PATH` | `TERMSURF_INSTALLED_GIRLBAT_PATH` | `/opt/homebrew/opt/termsurf-girlbat/bin/girlbat` |
 
-The `TERMSURF_ROAMIUM_PATH` and `TERMSURF_SURFARI_PATH` variables are
-Ghostboard-process developer overrides. They are read by the running TermSurf
-app when it spawns browser engine processes. Setting one of them only in an
-arbitrary shell that later runs `web` does not affect an already-running
-Ghostboard process.
+The `TERMSURF_ROAMIUM_PATH`, `TERMSURF_SURFARI_PATH`, and
+`TERMSURF_GIRLBAT_PATH` variables are Ghostboard-process developer overrides.
+They are read by the running TermSurf app when it spawns browser engine
+processes. Setting one of them only in an arbitrary shell that later runs `web`
+does not affect an already-running Ghostboard process.
 
-The `TERMSURF_INSTALLED_ROAMIUM_PATH` and `TERMSURF_INSTALLED_SURFARI_PATH`
-variables are release discovery test overrides. They let a release harness point
-installed discovery at a temporary absolute path. Normal Homebrew installs
-should not need these variables; the installed defaults above are the expected
-no-env path.
+The `TERMSURF_INSTALLED_ROAMIUM_PATH`, `TERMSURF_INSTALLED_SURFARI_PATH`, and
+`TERMSURF_INSTALLED_GIRLBAT_PATH` variables are release discovery test
+overrides. They let a release harness point installed discovery at a temporary
+absolute path. Normal Homebrew installs should not need these variables; the
+installed defaults above are the expected no-env path.
 
 When Ghostboard spawns Surfari, it preserves an inherited `DYLD_FRAMEWORK_PATH`
 if the Ghostboard app process already has one. This keeps debug harnesses in
@@ -115,8 +120,8 @@ Runtime coverage is provided by:
   release named/default `roamium` resolving through installed discovery without
   `TERMSURF_ROAMIUM_PATH`; and
 - `scripts/test-issue-867-release-no-env-browser-discovery.sh` for release named
-  `roamium` and `surfari` resolving through installed defaults without any
-  browser path environment variable.
+  `roamium`, `surfari`, and `girlbat` resolving through installed defaults
+  without any browser path environment variable.
 
 ## Boundary With Issue 819
 
@@ -127,5 +132,6 @@ is being tested from the repository.
 Issue 819 owns packaging identity and normal installed distribution behavior. It
 defines the installed Roamium location as
 `/opt/homebrew/opt/termsurf-roamium/roamium` and the installed Surfari location
-as `/opt/homebrew/opt/termsurf-surfari/surfari`, matching the Homebrew cask and
-manual install scripts.
+as `/opt/homebrew/opt/termsurf-surfari/surfari`. Issue 885 adds the installed
+Girlbat prototype location as `/opt/homebrew/opt/termsurf-girlbat/bin/girlbat`,
+matching the Homebrew cask and manual install scripts.

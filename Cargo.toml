@@ -3,6 +3,7 @@ members = [
     "webtui",
     "roamium",
     "surfari",
+    "girlbat",
     "gtui",
 ]
 exclude = [

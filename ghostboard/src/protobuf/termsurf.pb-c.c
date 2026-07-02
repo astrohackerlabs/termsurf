@@ -727,6 +727,51 @@ void   termsurf__ca_context__free_unpacked
   assert(message->base.descriptor == &termsurf__ca_context__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
+void   termsurf__render_surface__init
+                     (Termsurf__RenderSurface         *message)
+{
+  static const Termsurf__RenderSurface init_value = TERMSURF__RENDER_SURFACE__INIT;
+  *message = init_value;
+}
+size_t termsurf__render_surface__get_packed_size
+                     (const Termsurf__RenderSurface *message)
+{
+  assert(message->base.descriptor == &termsurf__render_surface__descriptor);
+  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
+}
+size_t termsurf__render_surface__pack
+                     (const Termsurf__RenderSurface *message,
+                      uint8_t       *out)
+{
+  assert(message->base.descriptor == &termsurf__render_surface__descriptor);
+  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
+}
+size_t termsurf__render_surface__pack_to_buffer
+                     (const Termsurf__RenderSurface *message,
+                      ProtobufCBuffer *buffer)
+{
+  assert(message->base.descriptor == &termsurf__render_surface__descriptor);
+  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
+}
+Termsurf__RenderSurface *
+       termsurf__render_surface__unpack
+                     (ProtobufCAllocator  *allocator,
+                      size_t               len,
+                      const uint8_t       *data)
+{
+  return (Termsurf__RenderSurface *)
+     protobuf_c_message_unpack (&termsurf__render_surface__descriptor,
+                                allocator, len, data);
+}
+void   termsurf__render_surface__free_unpacked
+                     (Termsurf__RenderSurface *message,
+                      ProtobufCAllocator *allocator)
+{
+  if(!message)
+    return;
+  assert(message->base.descriptor == &termsurf__render_surface__descriptor);
+  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+}
 void   termsurf__url_changed__init
                      (Termsurf__UrlChanged         *message)
 {
@@ -1987,7 +2032,7 @@ void   termsurf__query_tabs_reply__free_unpacked
   assert(message->base.descriptor == &termsurf__query_tabs_reply__descriptor);
   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
 }
-static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[42] =
+static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[43] =
 {
   {
     "create_tab",
@@ -2493,6 +2538,18 @@ static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descrip
     PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
     0,NULL,NULL    /* reserved1,reserved2, etc */
   },
+  {
+    "render_surface",
+    43,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_MESSAGE,
+    offsetof(Termsurf__TermSurfMessage, msg_case),
+    offsetof(Termsurf__TermSurfMessage, render_surface),
+    &termsurf__render_surface__descriptor,
+    NULL,
+    PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
 };
 static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
   30,   /* field[30] = browser_ready */
@@ -2525,6 +2582,7 @@ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
   24,   /* field[24] = query_last_request */
   29,   /* field[29] = query_tabs_reply */
   28,   /* field[28] = query_tabs_request */
+  42,   /* field[42] = render_surface */
   38,   /* field[38] = renderer_crashed */
   2,   /* field[2] = resize */
   7,   /* field[7] = scroll_event */
@@ -2541,7 +2599,7 @@ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
 static const ProtobufCIntRange termsurf__term_surf_message__number_ranges[1 + 1] =
 {
   { 1, 0 },
-  { 0, 42 }
+  { 0, 43 }
 };
 const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
 {
@@ -2551,7 +2609,7 @@ const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
   "Termsurf__TermSurfMessage",
   "termsurf",
   sizeof(Termsurf__TermSurfMessage),
-  42,
+  43,
   termsurf__term_surf_message__field_descriptors,
   termsurf__term_surf_message__field_indices_by_name,
   1,  termsurf__term_surf_message__number_ranges,
@@ -3750,6 +3808,122 @@ const ProtobufCMessageDescriptor termsurf__ca_context__descriptor =
   termsurf__ca_context__field_indices_by_name,
   1,  termsurf__ca_context__number_ranges,
   (ProtobufCMessageInit) termsurf__ca_context__init,
+  NULL,NULL,NULL    /* reserved[123] */
+};
+static const ProtobufCFieldDescriptor termsurf__render_surface__field_descriptors[7] =
+{
+  {
+    "tab_id",
+    1,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_INT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, tab_id),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "pixel_width",
+    2,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, pixel_width),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "pixel_height",
+    3,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, pixel_height),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "bytes_per_row",
+    4,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, bytes_per_row),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "pixel_format",
+    5,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT32,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, pixel_format),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "generation",
+    6,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, generation),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+  {
+    "attachment_id",
+    7,
+    PROTOBUF_C_LABEL_NONE,
+    PROTOBUF_C_TYPE_UINT64,
+    0,   /* quantifier_offset */
+    offsetof(Termsurf__RenderSurface, attachment_id),
+    NULL,
+    NULL,
+    0,             /* flags */
+    0,NULL,NULL    /* reserved1,reserved2, etc */
+  },
+};
+static const unsigned termsurf__render_surface__field_indices_by_name[] = {
+  6,   /* field[6] = attachment_id */
+  3,   /* field[3] = bytes_per_row */
+  5,   /* field[5] = generation */
+  4,   /* field[4] = pixel_format */
+  2,   /* field[2] = pixel_height */
+  1,   /* field[1] = pixel_width */
+  0,   /* field[0] = tab_id */
+};
+static const ProtobufCIntRange termsurf__render_surface__number_ranges[1 + 1] =
+{
+  { 1, 0 },
+  { 0, 7 }
+};
+const ProtobufCMessageDescriptor termsurf__render_surface__descriptor =
+{
+  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
+  "termsurf.RenderSurface",
+  "RenderSurface",
+  "Termsurf__RenderSurface",
+  "termsurf",
+  sizeof(Termsurf__RenderSurface),
+  7,
+  termsurf__render_surface__field_descriptors,
+  termsurf__render_surface__field_indices_by_name,
+  1,  termsurf__render_surface__number_ranges,
+  (ProtobufCMessageInit) termsurf__render_surface__init,
   NULL,NULL,NULL    /* reserved[123] */
 };
 static const ProtobufCFieldDescriptor termsurf__url_changed__field_descriptors[2] =

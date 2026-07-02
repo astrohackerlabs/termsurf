@@ -16,7 +16,7 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ghostboard, roamium, webtui, gtui, chromium, webkit, surfari-lib, surfari, all"
+  echo "Components: ghostboard, roamium, webtui, gtui, chromium, webkit, surfari-lib, surfari, girlbat-lib, girlbat, all"
 }
 
 configuration() {
@@ -214,6 +214,39 @@ build_surfari() {
   fi
 }
 
+build_girlbat() {
+  build_girlbat_lib
+
+  cd "$REPO_DIR"
+  if $CLEAN; then
+    echo "==> Cleaning Girlbat..."
+    cargo clean -p girlbat
+  fi
+  if $RELEASE; then
+    echo "==> Building Girlbat (release)..."
+    cargo build --release -p girlbat
+    echo "  Girlbat: $REPO_DIR/target/release/girlbat"
+  else
+    echo "==> Building Girlbat (debug)..."
+    cargo build -p girlbat
+    echo "  Girlbat: $REPO_DIR/target/debug/girlbat"
+  fi
+}
+
+build_girlbat_lib() {
+  local CONFIGURATION
+  CONFIGURATION="$(configuration)"
+
+  echo "==> Building libtermsurf_ladybird ($CONFIGURATION)..."
+  cd "$REPO_DIR"
+  local args=("--configuration" "$CONFIGURATION")
+  if $CLEAN; then
+    args+=("--clean")
+  fi
+  "$REPO_DIR/girlbat/libtermsurf_ladybird/build.sh" "${args[@]}"
+  echo "  libtermsurf_ladybird: $REPO_DIR/girlbat/libtermsurf_ladybird/build/libtermsurf_ladybird.dylib"
+}
+
 build_ghostboard() {
   local CONFIGURATION="Debug"
   local ZIG_OPTIMIZE="Debug"
@@ -257,6 +290,8 @@ case "$COMPONENT" in
   webkit)     build_webkit ;;
   surfari-lib) build_surfari_lib ;;
   surfari)    build_surfari ;;
+  girlbat-lib) build_girlbat_lib ;;
+  girlbat)    build_girlbat ;;
   ghostboard) build_ghostboard ;;
   all)
     build_chromium
@@ -265,6 +300,7 @@ case "$COMPONENT" in
     build_roamium
     build_webkit
     build_surfari
+    build_girlbat
     build_ghostboard
     echo ""
     echo "Done (all)."

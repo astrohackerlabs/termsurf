@@ -114,6 +114,7 @@ ts4/two-profiles-receiver/shaders.metallib
 vendor/firefox/
 vendor/webkit/
 vendor/ladybird/
+girlbat/libtermsurf_ladybird/build/
 vendor/rust-objc/
 vendor/objc2/
 

@@ -2,6 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-changed=../proto/termsurf.proto");
+
     // Chromium build output directory (relative to repo root).
     let chromium_out = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("../chromium/src/out/Default")

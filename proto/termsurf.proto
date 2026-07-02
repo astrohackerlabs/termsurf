@@ -73,6 +73,9 @@ message TermSurfMessage {
     OpenApp open_app = 40;
     OpenAppReply open_app_reply = 41;
     CloseAppFrontend close_app_frontend = 42;
+
+    // Generic render surface metadata (engine → GUI)
+    RenderSurface render_surface = 43;
   }
 }
 
@@ -192,6 +195,16 @@ message CaContext {
   uint64 ca_context_id = 2;
   uint64 pixel_width = 3;
   uint64 pixel_height = 4;
+}
+
+message RenderSurface {
+  int64 tab_id = 1;
+  uint64 pixel_width = 2;
+  uint64 pixel_height = 3;
+  uint64 bytes_per_row = 4;
+  uint32 pixel_format = 5;
+  uint64 generation = 6;
+  uint64 attachment_id = 7;  // 0 = metadata-only; no attachment match proved
 }
 
 message UrlChanged {

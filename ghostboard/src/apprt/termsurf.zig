@@ -8,6 +8,7 @@ const c = @cImport({
     @cInclude("sys/socket.h");
     @cInclude("unistd.h");
     @cInclude("termsurf.pb-c.h");
+    @cInclude("termsurf_render_channel.h");
 });
 
 const log = std.log.scoped(.termsurf);
@@ -26,6 +27,9 @@ const max_hello_browsers: usize = 16;
 const max_pane_id_len: usize = 128;
 const max_profile_len: usize = 128;
 const max_browser_len: usize = std.fs.max_path_bytes;
+const max_browser_spawn_args: usize = 10;
+const max_render_service_component_len: usize = 24;
+const max_render_service_name_len: usize = 120;
 const max_url_len: usize = 2048;
 const max_app_id_len: usize = 64;
 const max_app_url_len: usize = max_url_len;
@@ -44,10 +48,13 @@ const devtools_reservation_timeout_env = "TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_
 const default_devtools_reservation_timeout_ms: i64 = 15_000;
 const roamium_path_env = "TERMSURF_ROAMIUM_PATH";
 const surfari_path_env = "TERMSURF_SURFARI_PATH";
+const girlbat_path_env = "TERMSURF_GIRLBAT_PATH";
 const installed_roamium_path_env = "TERMSURF_INSTALLED_ROAMIUM_PATH";
 const installed_surfari_path_env = "TERMSURF_INSTALLED_SURFARI_PATH";
+const installed_girlbat_path_env = "TERMSURF_INSTALLED_GIRLBAT_PATH";
 const installed_roamium_path = "/opt/homebrew/opt/termsurf-roamium/roamium";
 const installed_surfari_path = "/opt/homebrew/opt/termsurf-surfari/surfari";
+const installed_girlbat_path = "/opt/homebrew/opt/termsurf-girlbat/bin/girlbat";
 const gtui_app_id = "gtui";
 const gtui_app_path_env = "TERMSURF_GTUI_APP_PATH";
 const deno_path_env = "TERMSURF_DENO_PATH";
@@ -56,6 +63,8 @@ const installed_deno_path = "/opt/homebrew/bin/deno";
 const AppRuntime = enum {
     deno,
 };
+
+const render_side_channel_receive_timeout_ms: u32 = 30_000;
 
 const AppDescriptor = struct {
     app_id: []const u8,
@@ -93,6 +102,19 @@ const termsurf_present_overlay = if (builtin.is_test) testTermsurfPresentOverlay
     pixel_width: u64,
     pixel_height: u64,
 ) callconv(.c) void, .{ .name = "termsurf_present_overlay" });
+
+const termsurf_present_iosurface_overlay = if (builtin.is_test) testTermsurfPresentIOSurfaceOverlay else @extern(*const fn (
+    pane_id: [*:0]const u8,
+    surface: ?*anyopaque,
+    col: u64,
+    row: u64,
+    width: u64,
+    height: u64,
+    pixel_width: u64,
+    pixel_height: u64,
+    attachment_id: u64,
+    generation: u64,
+) callconv(.c) void, .{ .name = "termsurf_present_iosurface_overlay" });
 
 const termsurf_clear_overlay = if (builtin.is_test) testTermsurfClearOverlay else @extern(*const fn (
     pane_id: [*:0]const u8,
@@ -136,6 +158,39 @@ fn testTermsurfPresentOverlay(
     _ = height;
     _ = pixel_width;
     _ = pixel_height;
+}
+
+var test_iosurface_present_count: usize = 0;
+var test_last_iosurface_present_surface: ?*anyopaque = null;
+var test_last_iosurface_present_attachment_id: u64 = 0;
+var test_last_iosurface_present_generation: u64 = 0;
+var test_received_surface_release_count: usize = 0;
+var test_iosurface_bridge_retain_count: usize = 0;
+var test_iosurface_bridge_release_count: usize = 0;
+
+fn testTermsurfPresentIOSurfaceOverlay(
+    pane_id: [*:0]const u8,
+    surface: ?*anyopaque,
+    col: u64,
+    row: u64,
+    width: u64,
+    height: u64,
+    pixel_width: u64,
+    pixel_height: u64,
+    attachment_id: u64,
+    generation: u64,
+) callconv(.c) void {
+    _ = pane_id;
+    _ = col;
+    _ = row;
+    _ = width;
+    _ = height;
+    _ = pixel_width;
+    _ = pixel_height;
+    test_iosurface_present_count += 1;
+    test_last_iosurface_present_surface = surface;
+    test_last_iosurface_present_attachment_id = attachment_id;
+    test_last_iosurface_present_generation = generation;
 }
 
 fn testTermsurfClearOverlay(pane_id: [*:0]const u8) callconv(.c) void {
@@ -185,6 +240,12 @@ const PaneState = struct {
     ca_context_id: u64 = 0,
     ca_pixel_width: u64 = 0,
     ca_pixel_height: u64 = 0,
+    render_surface_generation: u64 = 0,
+    render_surface_pixel_width: u64 = 0,
+    render_surface_pixel_height: u64 = 0,
+    render_surface_bytes_per_row: u64 = 0,
+    render_surface_pixel_format: u32 = 0,
+    render_surface_attachment_id: u64 = 0,
     appkit_pixel_width: u64 = 0,
     appkit_pixel_height: u64 = 0,
     last_resize_pixel_width: u64 = 0,
@@ -228,6 +289,7 @@ const ServerState = struct {
     attached_fd: std.posix.fd_t = -1,
     child_pid: std.process.Child.Id = 0,
     set_overlay_wall_ms: i64 = 0,
+    render_side_channel: RenderSideChannelState = .{},
 
     fn profileName(self: *const ServerState) []const u8 {
         return self.profile[0..self.profile_len];
@@ -239,6 +301,111 @@ const ServerState = struct {
 
     fn listenSocket(self: *const ServerState) []const u8 {
         return self.listen_socket[0..self.listen_socket_len];
+    }
+};
+
+const RenderSideChannelState = struct {
+    in_use: bool = false,
+    service_name: [max_render_service_name_len]u8 = undefined,
+    service_name_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    child_port: c.tsrc_port_t = 0,
+    handshake_complete: bool = false,
+    handshake_result: c_int = c.TSRC_INVALID_ARGUMENT,
+    test_surface_complete: bool = false,
+    test_surface_result: c_int = c.TSRC_INVALID_ARGUMENT,
+    test_surface_width: u32 = 0,
+    test_surface_height: u32 = 0,
+    test_surface_bytes_per_row: u32 = 0,
+    test_surface_pixel_format: u32 = 0,
+    test_surface_generation: u32 = 0,
+    test_surface_attachment_id: u64 = 0,
+    test_surface_imported_width: u32 = 0,
+    test_surface_imported_height: u32 = 0,
+    test_surface_imported_bytes_per_row: u32 = 0,
+    test_surface_imported_pixel_format: u32 = 0,
+    attachment_complete: bool = false,
+    attachment_id: u64 = 0,
+    attachment_width: u32 = 0,
+    attachment_height: u32 = 0,
+    attachment_bytes_per_row: u32 = 0,
+    attachment_pixel_format: u32 = 0,
+    attachment_generation: u32 = 0,
+    attachment_imported_width: u32 = 0,
+    attachment_imported_height: u32 = 0,
+    attachment_imported_bytes_per_row: u32 = 0,
+    attachment_imported_pixel_format: u32 = 0,
+    received_surface: ?*c.tsrc_received_surface_t = null,
+    test_iosurface_pointer: ?*anyopaque = null,
+    test_owned_received_surface: bool = false,
+
+    fn serviceName(self: *const RenderSideChannelState) []const u8 {
+        return self.service_name[0..self.service_name_len];
+    }
+};
+
+const RenderSideChannelThreadContext = struct {
+    profile: [max_profile_len]u8 = undefined,
+    profile_len: usize = 0,
+    browser: [max_browser_len]u8 = undefined,
+    browser_len: usize = 0,
+    service_name: [max_render_service_name_len]u8 = undefined,
+    service_name_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    control_port: c.tsrc_port_t = 0,
+
+    fn profileName(self: *const RenderSideChannelThreadContext) []const u8 {
+        return self.profile[0..self.profile_len];
+    }
+
+    fn browserName(self: *const RenderSideChannelThreadContext) []const u8 {
+        return self.browser[0..self.browser_len];
+    }
+
+    fn serviceName(self: *const RenderSideChannelThreadContext) []const u8 {
+        return self.service_name[0..self.service_name_len];
+    }
+};
+
+const BrowserSpawnResult = struct {
+    pid: std.process.Child.Id = 0,
+    render_control_port: c.tsrc_port_t = 0,
+    render_service_name: [max_render_service_name_len]u8 = undefined,
+    render_service_name_len: usize = 0,
+
+    fn renderServiceName(self: *const BrowserSpawnResult) []const u8 {
+        return self.render_service_name[0..self.render_service_name_len];
+    }
+};
+
+const BrowserSpawnArgv = struct {
+    ipc_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined,
+    listen_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined,
+    browser_name_arg_buf: [max_browser_len + 32]u8 = undefined,
+    user_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined,
+    data_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined,
+    log_file_buf: [std.fs.max_path_bytes]u8 = undefined,
+    log_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined,
+    render_service_name_buf: [max_render_service_name_len]u8 = undefined,
+    render_service_arg_buf: [max_render_service_name_len + 32]u8 = undefined,
+    argv: [max_browser_spawn_args][]const u8 = undefined,
+    argv_len: usize = 0,
+    render_service_len: usize = 0,
+
+    fn push(self: *BrowserSpawnArgv, arg: []const u8) bool {
+        if (self.argv_len >= self.argv.len) return false;
+        self.argv[self.argv_len] = arg;
+        self.argv_len += 1;
+        return true;
+    }
+
+    fn slice(self: *const BrowserSpawnArgv) []const []const u8 {
+        return self.argv[0..self.argv_len];
+    }
+
+    fn renderService(self: *const BrowserSpawnArgv) ?[]const u8 {
+        if (self.render_service_len == 0) return null;
+        return self.render_service_name_buf[0..self.render_service_len];
     }
 };
 
@@ -532,6 +699,45 @@ const OverlaySnapshot = struct {
     }
 
     fn listenSocket(self: *const OverlaySnapshot) []const u8 {
+        return self.listen_socket[0..self.listen_socket_len];
+    }
+};
+
+const IOSurfaceOverlaySnapshot = struct {
+    pane_id: [max_pane_id_len]u8 = undefined,
+    pane_id_len: usize = 0,
+    profile: [max_profile_len]u8 = undefined,
+    profile_len: usize = 0,
+    browser: [max_browser_len]u8 = undefined,
+    browser_len: usize = 0,
+    listen_socket: [max_listen_socket_len]u8 = undefined,
+    listen_socket_len: usize = 0,
+    child_pid: std.process.Child.Id = 0,
+    set_overlay_wall_ms: i64 = 0,
+    surface: ?*anyopaque = null,
+    release_after_bridge: bool = false,
+    attachment_id: u64 = 0,
+    generation: u64 = 0,
+    col: u64 = 0,
+    row: u64 = 0,
+    width: u64 = 0,
+    height: u64 = 0,
+    pixel_width: u64 = 0,
+    pixel_height: u64 = 0,
+
+    fn paneId(self: *const IOSurfaceOverlaySnapshot) []const u8 {
+        return self.pane_id[0..self.pane_id_len];
+    }
+
+    fn profileName(self: *const IOSurfaceOverlaySnapshot) []const u8 {
+        return self.profile[0..self.profile_len];
+    }
+
+    fn browserName(self: *const IOSurfaceOverlaySnapshot) []const u8 {
+        return self.browser[0..self.browser_len];
+    }
+
+    fn listenSocket(self: *const IOSurfaceOverlaySnapshot) []const u8 {
         return self.listen_socket[0..self.listen_socket_len];
     }
 };
@@ -954,6 +1160,9 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CA_CONTEXT => {
                     handleCaContext(fd, msg.*.unnamed_0.ca_context);
+                },
+                c.TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE => {
+                    handleRenderSurface(fd, msg.*.unnamed_0.render_surface);
                 },
                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => {
                     handleCursorChanged(fd, msg.*.unnamed_0.cursor_changed);
@@ -1729,7 +1938,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
             {
                 log.warn("SetOverlay: spawn arguments too long profile={s} browser={s}", .{ profile, browser });
                 panes[pane_index] = .{};
-                servers[server_index] = .{};
+                resetServer(server_index);
                 state_mutex.unlock();
                 return;
             }
@@ -1738,7 +1947,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         } else {
             log.warn("SetOverlay: listen socket path too long profile={s} browser={s}", .{ profile, browser });
             panes[pane_index] = .{};
-            servers[server_index] = .{};
+            resetServer(server_index);
             state_mutex.unlock();
             return;
         }
@@ -1763,8 +1972,8 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void 
         const browser_name_z = spawn_browser_name_buf[0..spawn_browser_name_len :0];
         const browser_executable_z = spawn_browser_executable_buf[0..spawn_browser_executable_len :0];
         const listen_socket_z = spawn_listen_socket_buf[0..spawn_listen_socket_len :0];
-        if (spawnBrowserProcess(profile_z, browser_name_z, browser_executable_z, listen_socket_z, set_overlay_wall_ms)) |pid| {
-            if (should_record_child) recordServerChild(profile_z, browser, pid);
+        if (spawnBrowserProcess(profile_z, browser_name_z, browser_executable_z, listen_socket_z, set_overlay_wall_ms)) |result| {
+            if (should_record_child) recordServerChild(profile_z, browser, &result);
         }
     }
 }
@@ -1864,6 +2073,49 @@ fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]cons
             .{ browser, installed_surfari_path },
         );
         return installed_surfari_path;
+    }
+
+    if (std.mem.eql(u8, browser, "girlbat")) {
+        if (std.posix.getenv(girlbat_path_env)) |resolved| {
+            if (resolved.len != 0 and isAbsolutePath(resolved)) {
+                log.info(
+                    "SetOverlay: named browser resolved browser={s} env={s} path={s}",
+                    .{ browser, girlbat_path_env, resolved },
+                );
+                return resolved;
+            }
+            log.warn(
+                "SetOverlay: named browser unresolved browser={s} env={s} value={s}",
+                .{ browser, girlbat_path_env, resolved },
+            );
+        } else {
+            log.warn(
+                "SetOverlay: named browser unresolved browser={s} env={s}",
+                .{ browser, girlbat_path_env },
+            );
+        }
+
+        if (is_debug) return null;
+
+        if (std.posix.getenv(installed_girlbat_path_env)) |resolved| {
+            if (resolved.len != 0 and isAbsolutePath(resolved)) {
+                log.info(
+                    "SetOverlay: named browser resolved browser={s} env={s} path={s}",
+                    .{ browser, installed_girlbat_path_env, resolved },
+                );
+                return resolved;
+            }
+            log.warn(
+                "SetOverlay: installed browser override ignored browser={s} env={s} value={s}",
+                .{ browser, installed_girlbat_path_env, resolved },
+            );
+        }
+
+        log.info(
+            "SetOverlay: named browser resolved browser={s} installed_path={s}",
+            .{ browser, installed_girlbat_path },
+        );
+        return installed_girlbat_path;
     }
 
     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
@@ -3077,6 +3329,110 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
     if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
 }
 
+fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) void {
+    const surface = req orelse {
+        log.warn("RenderSurface: missing payload", .{});
+        return;
+    };
+    if (surface.*.tab_id == 0) {
+        log.warn("RenderSurface: missing tab id", .{});
+        return;
+    }
+    if (surface.*.pixel_width == 0 or surface.*.pixel_height == 0) {
+        log.warn(
+            "RenderSurface: missing dimensions tab_id={} pixel={}x{}",
+            .{ surface.*.tab_id, surface.*.pixel_width, surface.*.pixel_height },
+        );
+        return;
+    }
+
+    var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
+
+    state_mutex.lock();
+
+    const server_index = findServerByFd(fd) orelse {
+        log.warn("RenderSurface: unknown browser fd={} tab_id={}", .{ fd, surface.*.tab_id });
+        state_mutex.unlock();
+        return;
+    };
+    const profile = servers[server_index].profileName();
+    const browser = servers[server_index].browserName();
+    if (!std.mem.eql(u8, browser, "girlbat")) {
+        log.warn(
+            "RenderSurface: rejected non-Girlbat browser={s} profile={s} tab_id={}",
+            .{ browser, profile, surface.*.tab_id },
+        );
+        state_mutex.unlock();
+        return;
+    }
+    const lookup_index = findTabLookup(profile, browser, surface.*.tab_id) orelse {
+        log.warn(
+            "RenderSurface: unknown tab key={s}/{s} tab_id={}",
+            .{ profile, browser, surface.*.tab_id },
+        );
+        state_mutex.unlock();
+        return;
+    };
+    const pane_id = tab_lookups[lookup_index].paneId();
+    const pane_index = findPane(pane_id) orelse {
+        log.warn("RenderSurface: tab maps to missing pane_id={s}", .{pane_id});
+        state_mutex.unlock();
+        return;
+    };
+    if (surface.*.attachment_id != 0 and !renderSurfaceAttachmentMatches(server_index, surface)) {
+        log.warn(
+            "RenderSurface: unmatched attachment browser={s} profile={s} tab_id={} attachment_id={}",
+            .{ browser, profile, surface.*.tab_id, surface.*.attachment_id },
+        );
+        state_mutex.unlock();
+        return;
+    }
+
+    panes[pane_index].render_surface_generation = surface.*.generation;
+    panes[pane_index].render_surface_pixel_width = surface.*.pixel_width;
+    panes[pane_index].render_surface_pixel_height = surface.*.pixel_height;
+    panes[pane_index].render_surface_bytes_per_row = surface.*.bytes_per_row;
+    panes[pane_index].render_surface_pixel_format = surface.*.pixel_format;
+    panes[pane_index].render_surface_attachment_id = surface.*.attachment_id;
+    if (surface.*.attachment_id != 0) {
+        iosurface_snapshot = snapshotIOSurfaceOverlay(&panes[pane_index], &servers[server_index].render_side_channel);
+    }
+
+    log.info(
+        "RenderSurface: tab_id={} pane_id={s} generation={} pixel={}x{} bytes_per_row={} pixel_format={} attachment_id={}",
+        .{
+            surface.*.tab_id,
+            pane_id,
+            surface.*.generation,
+            surface.*.pixel_width,
+            surface.*.pixel_height,
+            surface.*.bytes_per_row,
+            surface.*.pixel_format,
+            surface.*.attachment_id,
+        },
+    );
+    state_mutex.unlock();
+
+    if (iosurface_snapshot) |snapshot| presentIOSurfaceOverlay(&snapshot);
+}
+
+fn renderSurfaceAttachmentMatches(server_index: usize, surface: *c.Termsurf__RenderSurface) bool {
+    const side_channel = &servers[server_index].render_side_channel;
+    if (!side_channel.in_use or !side_channel.attachment_complete) return false;
+    if (side_channel.received_surface == null and side_channel.test_iosurface_pointer == null) return false;
+    if (side_channel.attachment_id != surface.*.attachment_id) return false;
+    if (side_channel.attachment_width != surface.*.pixel_width) return false;
+    if (side_channel.attachment_height != surface.*.pixel_height) return false;
+    if (side_channel.attachment_bytes_per_row != surface.*.bytes_per_row) return false;
+    if (side_channel.attachment_pixel_format != surface.*.pixel_format) return false;
+    if (side_channel.attachment_generation != surface.*.generation) return false;
+    if (side_channel.attachment_imported_width != surface.*.pixel_width) return false;
+    if (side_channel.attachment_imported_height != surface.*.pixel_height) return false;
+    if (side_channel.attachment_imported_bytes_per_row != surface.*.bytes_per_row) return false;
+    if (side_channel.attachment_imported_pixel_format != surface.*.pixel_format) return false;
+    return true;
+}
+
 fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) void {
     const cursor = req orelse {
         log.warn("CursorChanged: missing payload", .{});
@@ -3249,6 +3605,94 @@ fn presentOverlay(snapshot: *const OverlaySnapshot) void {
     );
 }
 
+fn snapshotIOSurfaceOverlay(pane: *const PaneState, side_channel: *const RenderSideChannelState) ?IOSurfaceOverlaySnapshot {
+    if (pane.render_surface_attachment_id == 0) return null;
+    if (pane.width == 0 or pane.height == 0) return null;
+
+    var snapshot: IOSurfaceOverlaySnapshot = .{
+        .attachment_id = pane.render_surface_attachment_id,
+        .generation = pane.render_surface_generation,
+        .col = pane.col,
+        .row = pane.row,
+        .width = pane.width,
+        .height = pane.height,
+        .pixel_width = pane.render_surface_pixel_width,
+        .pixel_height = pane.render_surface_pixel_height,
+    };
+    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+    if (!copyText(&snapshot.profile, &snapshot.profile_len, pane.profileName())) return null;
+    if (!copyText(&snapshot.browser, &snapshot.browser_len, pane.browserName())) return null;
+    if (findServer(pane.profileName(), pane.browserName())) |server_index| {
+        if (!copyText(&snapshot.listen_socket, &snapshot.listen_socket_len, servers[server_index].listenSocket())) return null;
+        snapshot.child_pid = servers[server_index].child_pid;
+        snapshot.set_overlay_wall_ms = servers[server_index].set_overlay_wall_ms;
+    }
+    snapshot.surface = retainRenderSideChannelIOSurfaceForBridge(side_channel) orelse return null;
+    snapshot.release_after_bridge = true;
+    return snapshot;
+}
+
+fn retainRenderSideChannelIOSurfaceForBridge(side_channel: *const RenderSideChannelState) ?*anyopaque {
+    if (builtin.is_test) {
+        if (side_channel.test_iosurface_pointer) |surface| {
+            test_iosurface_bridge_retain_count += 1;
+            return surface;
+        }
+    }
+    const received_surface = side_channel.received_surface orelse return null;
+    return c.tsrc_retain_received_surface_iosurface(received_surface);
+}
+
+fn releaseIOSurfaceBridgeRetain(surface: ?*anyopaque) void {
+    const retained_surface = surface orelse return;
+    if (builtin.is_test) {
+        test_iosurface_bridge_release_count += 1;
+        return;
+    }
+    c.tsrc_release_iosurface(retained_surface);
+}
+
+fn presentIOSurfaceOverlay(snapshot: *const IOSurfaceOverlaySnapshot) void {
+    traceBrowserStartup(
+        "present_iosurface_overlay",
+        snapshot.profileName(),
+        snapshot.browserName(),
+        snapshot.paneId(),
+        snapshot.listenSocket(),
+        snapshot.child_pid,
+        snapshot.set_overlay_wall_ms,
+    );
+    termsurf_present_iosurface_overlay(
+        snapshot.pane_id[0..snapshot.pane_id_len :0].ptr,
+        snapshot.surface,
+        snapshot.col,
+        snapshot.row,
+        snapshot.width,
+        snapshot.height,
+        snapshot.pixel_width,
+        snapshot.pixel_height,
+        snapshot.attachment_id,
+        snapshot.generation,
+    );
+    if (snapshot.release_after_bridge) {
+        releaseIOSurfaceBridgeRetain(snapshot.surface);
+    }
+    log.info(
+        "PresentIOSurfaceOverlay: pane_id={s} attachment_id={} generation={} grid={}x{}+{}+{} pixel={}x{}",
+        .{
+            snapshot.paneId(),
+            snapshot.attachment_id,
+            snapshot.generation,
+            snapshot.width,
+            snapshot.height,
+            snapshot.col,
+            snapshot.row,
+            snapshot.pixel_width,
+            snapshot.pixel_height,
+        },
+    );
+}
+
 fn setCursor(snapshot: *const CursorSnapshot) void {
     termsurf_set_cursor(
         snapshot.pane_id[0..snapshot.pane_id_len :0].ptr,
@@ -3340,22 +3784,239 @@ fn isAbsolutePath(path: []const u8) bool {
     return path.len > 0 and path[0] == '/';
 }
 
-fn recordServerChild(profile: []const u8, browser: []const u8, pid: std.process.Child.Id) void {
-    state_mutex.lock();
-    defer state_mutex.unlock();
+fn recordServerChild(profile: []const u8, browser: []const u8, result: *const BrowserSpawnResult) void {
+    var should_start_render_thread = false;
 
+    state_mutex.lock();
     if (findServer(profile, browser)) |index| {
-        servers[index].child_pid = pid;
+        servers[index].child_pid = result.pid;
+        if (result.render_control_port != 0 and result.render_service_name_len > 0) {
+            var side_channel = &servers[index].render_side_channel;
+            side_channel.* = .{};
+            side_channel.in_use = copyText(&side_channel.service_name, &side_channel.service_name_len, result.renderServiceName());
+            side_channel.child_pid = result.pid;
+            side_channel.handshake_result = c.TSRC_RECEIVE_FAILED;
+            should_start_render_thread = side_channel.in_use;
+        }
         traceBrowserStartup(
             "child_recorded",
             profile,
             browser,
             "",
             servers[index].listenSocket(),
-            pid,
+            result.pid,
             servers[index].set_overlay_wall_ms,
         );
     }
+    state_mutex.unlock();
+
+    if (result.render_control_port != 0) {
+        if (should_start_render_thread) {
+            startRenderSideChannelReceiveThread(profile, browser, result);
+        } else {
+            c.tsrc_destroy_receive_port(result.render_control_port);
+        }
+    }
+}
+
+fn startRenderSideChannelReceiveThread(profile: []const u8, browser: []const u8, result: *const BrowserSpawnResult) void {
+    const allocator = std.heap.c_allocator;
+    const ctx = allocator.create(RenderSideChannelThreadContext) catch {
+        c.tsrc_destroy_receive_port(result.render_control_port);
+        clearRenderSideChannelAfterThreadStartFailure(profile, browser, result);
+        log.warn("render side-channel receive thread context allocation failed browser={s}", .{browser});
+        return;
+    };
+    ctx.* = .{
+        .child_pid = result.pid,
+        .control_port = result.render_control_port,
+    };
+    if (!copyText(&ctx.profile, &ctx.profile_len, profile) or
+        !copyText(&ctx.browser, &ctx.browser_len, browser) or
+        !copyText(&ctx.service_name, &ctx.service_name_len, result.renderServiceName()))
+    {
+        allocator.destroy(ctx);
+        c.tsrc_destroy_receive_port(result.render_control_port);
+        clearRenderSideChannelAfterThreadStartFailure(profile, browser, result);
+        log.warn("render side-channel receive thread context copy failed browser={s}", .{browser});
+        return;
+    }
+
+    const thread = std.Thread.spawn(.{}, renderSideChannelReceiveThread, .{ctx}) catch |err| {
+        allocator.destroy(ctx);
+        c.tsrc_destroy_receive_port(result.render_control_port);
+        clearRenderSideChannelAfterThreadStartFailure(profile, browser, result);
+        log.warn("render side-channel receive thread spawn failed browser={s} err={}", .{ browser, err });
+        return;
+    };
+    thread.detach();
+}
+
+fn clearRenderSideChannelAfterThreadStartFailure(profile: []const u8, browser: []const u8, result: *const BrowserSpawnResult) void {
+    state_mutex.lock();
+    defer state_mutex.unlock();
+    if (findServer(profile, browser)) |index| {
+        const side_channel = &servers[index].render_side_channel;
+        if (side_channel.in_use and
+            side_channel.child_pid == result.pid and
+            std.mem.eql(u8, side_channel.serviceName(), result.renderServiceName()))
+        {
+            releaseRenderSideChannel(side_channel);
+        }
+    }
+}
+
+fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
+    defer std.heap.c_allocator.destroy(ctx);
+
+    var child_port: c.tsrc_port_t = 0;
+    const result = c.tsrc_wait_for_child_port(
+        ctx.control_port,
+        render_side_channel_receive_timeout_ms,
+        &child_port,
+    );
+    c.tsrc_destroy_receive_port(ctx.control_port);
+
+    var surface_result: c_int = c.TSRC_INVALID_ARGUMENT;
+    var surface_metadata: c.tsrc_surface_metadata_t = .{
+        .width = 0,
+        .height = 0,
+        .bytes_per_row = 0,
+        .pixel_format = 0,
+        .generation = 0,
+        .attachment_id = 0,
+        .imported_width = 0,
+        .imported_height = 0,
+        .imported_bytes_per_row = 0,
+        .imported_pixel_format = 0,
+    };
+    var received_surface: ?*c.tsrc_received_surface_t = null;
+    if (result == c.TSRC_OK) {
+        var surface_receive_port: c.tsrc_port_t = 0;
+        surface_result = c.tsrc_send_surface_receiver(
+            child_port,
+            render_side_channel_receive_timeout_ms,
+            &surface_receive_port,
+        );
+        if (surface_result == c.TSRC_OK) {
+            surface_result = c.tsrc_receive_surface(
+                surface_receive_port,
+                render_side_channel_receive_timeout_ms,
+                &received_surface,
+            );
+            if (surface_result == c.TSRC_OK) {
+                c.tsrc_received_surface_metadata(received_surface, &surface_metadata);
+            }
+            c.tsrc_destroy_receive_port(surface_receive_port);
+        }
+    }
+
+    var stored = false;
+    var stored_received_surface = false;
+    state_mutex.lock();
+    if (findServer(ctx.profileName(), ctx.browserName())) |index| {
+        const side_channel = &servers[index].render_side_channel;
+        if (side_channel.in_use and
+            side_channel.child_pid == ctx.child_pid and
+            std.mem.eql(u8, side_channel.serviceName(), ctx.serviceName()))
+        {
+            side_channel.handshake_complete = true;
+            side_channel.handshake_result = result;
+            if (result == c.TSRC_OK) {
+                side_channel.child_port = child_port;
+                side_channel.test_surface_complete = true;
+                side_channel.test_surface_result = surface_result;
+                if (surface_result == c.TSRC_OK) {
+                    side_channel.test_surface_width = surface_metadata.width;
+                    side_channel.test_surface_height = surface_metadata.height;
+                    side_channel.test_surface_bytes_per_row = surface_metadata.bytes_per_row;
+                    side_channel.test_surface_pixel_format = surface_metadata.pixel_format;
+                    side_channel.test_surface_generation = surface_metadata.generation;
+                    side_channel.test_surface_attachment_id = surface_metadata.attachment_id;
+                    side_channel.test_surface_imported_width = surface_metadata.imported_width;
+                    side_channel.test_surface_imported_height = surface_metadata.imported_height;
+                    side_channel.test_surface_imported_bytes_per_row = surface_metadata.imported_bytes_per_row;
+                    side_channel.test_surface_imported_pixel_format = surface_metadata.imported_pixel_format;
+                    if (surface_metadata.attachment_id != 0) {
+                        side_channel.attachment_complete = true;
+                        side_channel.attachment_id = surface_metadata.attachment_id;
+                        side_channel.attachment_width = surface_metadata.width;
+                        side_channel.attachment_height = surface_metadata.height;
+                        side_channel.attachment_bytes_per_row = surface_metadata.bytes_per_row;
+                        side_channel.attachment_pixel_format = surface_metadata.pixel_format;
+                        side_channel.attachment_generation = surface_metadata.generation;
+                        side_channel.attachment_imported_width = surface_metadata.imported_width;
+                        side_channel.attachment_imported_height = surface_metadata.imported_height;
+                        side_channel.attachment_imported_bytes_per_row = surface_metadata.imported_bytes_per_row;
+                        side_channel.attachment_imported_pixel_format = surface_metadata.imported_pixel_format;
+                        releaseRenderReceivedSurface(side_channel);
+                        side_channel.received_surface = received_surface;
+                        received_surface = null;
+                        stored_received_surface = true;
+                    }
+                }
+                stored = true;
+            }
+        }
+    }
+    state_mutex.unlock();
+
+    if (received_surface) |surface| {
+        c.tsrc_release_received_surface(surface);
+    }
+
+    if (result == c.TSRC_OK) {
+        if (stored) {
+            log.info(
+                "render side-channel handshake received profile={s} browser={s} service={s} child_pid={} child_port={} test_surface_result={s} width={} height={} imported_width={} imported_height={} attachment_id={} retained_surface={}",
+                .{
+                    ctx.profileName(),
+                    ctx.browserName(),
+                    ctx.serviceName(),
+                    ctx.child_pid,
+                    child_port,
+                    cStringConst(c.tsrc_result_name(surface_result)),
+                    surface_metadata.width,
+                    surface_metadata.height,
+                    surface_metadata.imported_width,
+                    surface_metadata.imported_height,
+                    surface_metadata.attachment_id,
+                    stored_received_surface,
+                },
+            );
+        } else {
+            c.tsrc_deallocate_port(child_port);
+            log.info(
+                "render side-channel handshake discarded profile={s} browser={s} service={s} child_pid={}",
+                .{ ctx.profileName(), ctx.browserName(), ctx.serviceName(), ctx.child_pid },
+            );
+        }
+    } else {
+        log.warn(
+            "render side-channel handshake failed profile={s} browser={s} service={s} child_pid={} result={s}",
+            .{ ctx.profileName(), ctx.browserName(), ctx.serviceName(), ctx.child_pid, cStringConst(c.tsrc_result_name(result)) },
+        );
+    }
+}
+
+fn releaseRenderSideChannel(side_channel: *RenderSideChannelState) void {
+    if (side_channel.child_port != 0) {
+        c.tsrc_deallocate_port(side_channel.child_port);
+    }
+    releaseRenderReceivedSurface(side_channel);
+    side_channel.* = .{};
+}
+
+fn releaseRenderReceivedSurface(side_channel: *RenderSideChannelState) void {
+    const received_surface = side_channel.received_surface orelse return;
+    if (builtin.is_test and side_channel.test_owned_received_surface) {
+        test_received_surface_release_count += 1;
+    } else {
+        c.tsrc_release_received_surface(received_surface);
+    }
+    side_channel.received_surface = null;
+    side_channel.test_iosurface_pointer = null;
+    side_channel.test_owned_received_surface = false;
 }
 
 fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
@@ -3374,6 +4035,7 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
         if (copied) {
             server_shutdown = snapshot;
         }
+        releaseRenderSideChannel(&server.render_side_channel);
         server.attached_fd = -1;
         server.child_pid = 0;
     }
@@ -3444,11 +4106,11 @@ fn cleanupTuiPanes(fd: std.posix.fd_t) void {
                     server_shutdowns[server_shutdown_count] = snapshot;
                     server_shutdown_count += 1;
                 }
-                servers[server_index] = .{};
+                resetServer(server_index);
             }
         }
 
-        if (pane.ca_context_id != 0) {
+        if (pane.ca_context_id != 0 or pane.render_surface_attachment_id != 0) {
             var clear_snapshot: ClearOverlaySnapshot = .{};
             if (copyText(&clear_snapshot.pane_id, &clear_snapshot.pane_id_len, pane_id)) {
                 clear_overlays[clear_overlay_count] = clear_snapshot;
@@ -3525,11 +4187,11 @@ pub fn paneClosed(pane_id: []const u8) void {
 
             if (servers[server_index].pane_count == 0) {
                 server_shutdown = snapshotServerShutdown(&servers[server_index]);
-                servers[server_index] = .{};
+                resetServer(server_index);
             }
         }
 
-        if (pane.ca_context_id != 0) {
+        if (pane.ca_context_id != 0 or pane.render_surface_attachment_id != 0) {
             var snapshot: ClearOverlaySnapshot = .{};
             if (copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane_id)) {
                 clear_overlay = snapshot;
@@ -3589,60 +4251,47 @@ fn spawnBrowserProcess(
     browser_executable_z: [:0]const u8,
     listen_socket_z: [:0]const u8,
     set_overlay_wall_ms: i64,
-) ?std.process.Child.Id {
+) ?BrowserSpawnResult {
     const gui_socket = socket_path_buf[0..socket_path_len];
     if (gui_socket.len == 0) {
         log.warn("browser spawn skipped: GUI socket path is empty", .{});
         return null;
     }
 
-    var ipc_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined;
-    const ipc_arg = std.fmt.bufPrintZ(&ipc_arg_buf, "--ipc-socket={s}", .{gui_socket}) catch {
-        log.warn("browser spawn skipped: ipc socket arg too long", .{});
-        return null;
-    };
-
-    var listen_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined;
-    const listen_arg = std.fmt.bufPrintZ(&listen_arg_buf, "--listen-socket={s}", .{listen_socket_z}) catch {
-        log.warn("browser spawn skipped: listen socket arg too long", .{});
-        return null;
-    };
-
-    var browser_name_arg_buf: [max_browser_len + 32]u8 = undefined;
-    const browser_name_arg = std.fmt.bufPrintZ(&browser_name_arg_buf, "--browser-name={s}", .{browser_name_z}) catch {
-        log.warn("browser spawn skipped: browser-name arg too long", .{});
-        return null;
-    };
-
-    var user_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const user_data_dir = buildUserDataDir(&user_data_dir_buf, browser_name_z, profile_z) orelse return null;
-    var data_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined;
-    const data_arg = std.fmt.bufPrintZ(&data_arg_buf, "--user-data-dir={s}", .{user_data_dir}) catch {
-        log.warn("browser spawn skipped: user-data-dir arg too long", .{});
-        return null;
-    };
-
-    var log_file_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const log_file = buildBrowserLogFile(&log_file_buf) orelse return null;
-    var log_arg_buf: [std.fs.max_path_bytes + 32]u8 = undefined;
-    const log_arg = std.fmt.bufPrintZ(&log_arg_buf, "--log-file={s}", .{log_file}) catch {
-        log.warn("browser spawn skipped: log-file arg too long", .{});
-        return null;
-    };
-
-    const argv = [_][]const u8{
+    var spawn_argv: BrowserSpawnArgv = .{};
+    const argv = buildBrowserSpawnArgv(
+        &spawn_argv,
         browser_executable_z,
-        ipc_arg,
-        browser_name_arg,
-        data_arg,
-        listen_arg,
-        "--hidden",
-        "--no-sandbox",
-        "--enable-logging",
-        log_arg,
-    };
+        browser_name_z,
+        profile_z,
+        gui_socket,
+        listen_socket_z,
+        c.getpid(),
+    ) orelse return null;
 
-    var child = std.process.Child.init(&argv, std.heap.c_allocator);
+    var render_control_port: c.tsrc_port_t = 0;
+    if (spawn_argv.renderService()) |render_service| {
+        var render_service_z_buf: [max_render_service_name_len + 1]u8 = undefined;
+        const render_service_z = std.fmt.bufPrintZ(&render_service_z_buf, "{s}", .{render_service}) catch {
+            log.warn("browser render side-channel skipped: service name too long browser={s}", .{browser_name_z});
+            return null;
+        };
+        const result = c.tsrc_register_service(render_service_z.ptr, &render_control_port);
+        if (result != c.TSRC_OK) {
+            log.warn(
+                "browser render side-channel registration failed browser={s} service={s} result={s}",
+                .{ browser_name_z, render_service, cStringConst(c.tsrc_result_name(result)) },
+            );
+            render_control_port = 0;
+        } else {
+            log.info(
+                "browser render side-channel registered browser={s} service={s}",
+                .{ browser_name_z, render_service },
+            );
+        }
+    }
+
+    var child = std.process.Child.init(argv, std.heap.c_allocator);
     child.stdin_behavior = .Ignore;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
@@ -3685,6 +4334,7 @@ fn spawnBrowserProcess(
         set_overlay_wall_ms,
     );
     child.spawn() catch |err| {
+        if (render_control_port != 0) c.tsrc_destroy_receive_port(render_control_port);
         log.warn("browser spawn failed path={s} profile={s} browser={s} err={}", .{ browser_executable_z, profile_z, browser_name_z, err });
         traceBrowserStartup(
             "spawn_failed",
@@ -3707,11 +4357,128 @@ fn spawnBrowserProcess(
         set_overlay_wall_ms,
     );
 
-    log.info(
-        "spawned browser path={s} pid={} profile={s} browser={s} argv={s} {s} {s} {s} {s} --hidden --no-sandbox --enable-logging {s}",
-        .{ browser_executable_z, child.id, profile_z, browser_name_z, browser_executable_z, ipc_arg, browser_name_arg, data_arg, listen_arg, log_arg },
-    );
-    return child.id;
+    if (spawn_argv.renderService()) |render_service| {
+        log.info(
+            "spawned browser path={s} pid={} profile={s} browser={s} argv_count={} render_surface_service={s}",
+            .{ browser_executable_z, child.id, profile_z, browser_name_z, argv.len, render_service },
+        );
+    } else {
+        log.info(
+            "spawned browser path={s} pid={} profile={s} browser={s} argv_count={}",
+            .{ browser_executable_z, child.id, profile_z, browser_name_z, argv.len },
+        );
+    }
+    var result: BrowserSpawnResult = .{
+        .pid = child.id,
+        .render_control_port = render_control_port,
+    };
+    if (render_control_port != 0) {
+        if (spawn_argv.renderService()) |render_service| {
+            if (!copyText(&result.render_service_name, &result.render_service_name_len, render_service)) {
+                c.tsrc_destroy_receive_port(render_control_port);
+                log.warn("browser render side-channel skipped: service name copy failed browser={s}", .{browser_name_z});
+                result.render_control_port = 0;
+            }
+        }
+    }
+    return result;
+}
+
+fn buildBrowserSpawnArgv(
+    out: *BrowserSpawnArgv,
+    browser_executable: []const u8,
+    browser_name: []const u8,
+    profile: []const u8,
+    gui_socket: []const u8,
+    listen_socket: []const u8,
+    ghostboard_pid: i32,
+) ?[]const []const u8 {
+    const ipc_arg = std.fmt.bufPrint(&out.ipc_arg_buf, "--ipc-socket={s}", .{gui_socket}) catch {
+        log.warn("browser spawn skipped: ipc socket arg too long", .{});
+        return null;
+    };
+    const listen_arg = std.fmt.bufPrint(&out.listen_arg_buf, "--listen-socket={s}", .{listen_socket}) catch {
+        log.warn("browser spawn skipped: listen socket arg too long", .{});
+        return null;
+    };
+    const browser_name_arg = std.fmt.bufPrint(&out.browser_name_arg_buf, "--browser-name={s}", .{browser_name}) catch {
+        log.warn("browser spawn skipped: browser-name arg too long", .{});
+        return null;
+    };
+    const user_data_dir = buildUserDataDir(&out.user_data_dir_buf, browser_name, profile) orelse return null;
+    const data_arg = std.fmt.bufPrint(&out.data_arg_buf, "--user-data-dir={s}", .{user_data_dir}) catch {
+        log.warn("browser spawn skipped: user-data-dir arg too long", .{});
+        return null;
+    };
+    const log_file = buildBrowserLogFile(&out.log_file_buf) orelse return null;
+    const log_arg = std.fmt.bufPrint(&out.log_arg_buf, "--log-file={s}", .{log_file}) catch {
+        log.warn("browser spawn skipped: log-file arg too long", .{});
+        return null;
+    };
+
+    if (!out.push(browser_executable) or
+        !out.push(ipc_arg) or
+        !out.push(browser_name_arg) or
+        !out.push(data_arg) or
+        !out.push(listen_arg) or
+        !out.push("--hidden") or
+        !out.push("--no-sandbox") or
+        !out.push("--enable-logging") or
+        !out.push(log_arg))
+    {
+        log.warn("browser spawn skipped: argv overflow", .{});
+        return null;
+    }
+
+    if (renderSurfaceSideChannelBrowser(browser_name)) {
+        const service_name = buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name) orelse return null;
+        out.render_service_len = service_name.len;
+        const render_arg = std.fmt.bufPrint(&out.render_service_arg_buf, "--render-surface-service={s}", .{service_name}) catch {
+            log.warn("browser spawn skipped: render-surface-service arg too long", .{});
+            return null;
+        };
+        if (!out.push(render_arg)) {
+            log.warn("browser spawn skipped: argv overflow", .{});
+            return null;
+        }
+    }
+
+    return out.slice();
+}
+
+fn renderSurfaceSideChannelBrowser(browser: []const u8) bool {
+    return std.mem.eql(u8, browser, "girlbat");
+}
+
+fn buildRenderSurfaceServiceName(buf: []u8, ghostboard_pid: i32, profile: []const u8, browser: []const u8) ?[]const u8 {
+    var profile_buf: [max_render_service_component_len]u8 = undefined;
+    var browser_buf: [max_render_service_component_len]u8 = undefined;
+    const safe_profile = sanitizeRenderServiceComponent(&profile_buf, profile);
+    const safe_browser = sanitizeRenderServiceComponent(&browser_buf, browser);
+    return std.fmt.bufPrint(
+        buf,
+        "com.termsurf.girlbat.render.{d}.{s}.{s}",
+        .{ ghostboard_pid, safe_profile, safe_browser },
+    ) catch null;
+}
+
+fn sanitizeRenderServiceComponent(buf: []u8, value: []const u8) []const u8 {
+    if (buf.len == 0) return "";
+    var len: usize = 0;
+    for (value) |byte| {
+        if (len >= buf.len) break;
+        buf[len] = switch (byte) {
+            'a'...'z', 'A'...'Z', '0'...'9' => byte,
+            '-', '_' => '-',
+            else => '-',
+        };
+        len += 1;
+    }
+    if (len == 0) {
+        buf[0] = 'x';
+        len = 1;
+    }
+    return buf[0..len];
 }
 
 fn shouldSupplySurfariRuntimeFrameworkPath(browser: []const u8, inherited_framework_path: ?[]const u8) bool {
@@ -3885,6 +4652,11 @@ fn reserveServer() ?usize {
         if (!server.in_use) return i;
     }
     return null;
+}
+
+fn resetServer(index: usize) void {
+    releaseRenderSideChannel(&servers[index].render_side_channel);
+    servers[index] = .{};
 }
 
 fn reserveApp() ?usize {
@@ -4635,6 +5407,11 @@ fn cString(ptr: [*c]u8) []const u8 {
     return "";
 }
 
+fn cStringConst(ptr: [*c]const u8) []const u8 {
+    if (ptr) |value| return std.mem.span(value);
+    return "";
+}
+
 fn copyText(buf: []u8, len: *usize, value: []const u8) bool {
     if (value.len >= buf.len) return false;
     @memcpy(buf[0..value.len], value);
@@ -4688,6 +5465,7 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SET_GUI_ACTIVE => "SetGuiActive",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_TAB_READY => "TabReady",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_CA_CONTEXT => "CaContext",
+        c.TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE => "RenderSurface",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_URL_CHANGED => "UrlChanged",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE => "LoadingState",
         c.TERMSURF__TERM_SURF_MESSAGE__MSG_TITLE_CHANGED => "TitleChanged",
@@ -4852,12 +5630,304 @@ test "termsurf server register matches profile and browser" {
     try testing.expectEqual(@as(u64, 0), panes[1].ca_context_id);
 }
 
+test "termsurf render surface stores Girlbat metadata only" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const girlbat: [:0]const u8 = "girlbat";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, girlbat);
+    try testSetPane(0, "pane-girlbat", profile, girlbat, "https://example.test/girlbat", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(girlbat.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 77;
+    ready.pane_id = @constCast("pane-girlbat");
+    handleTabReady(&ready);
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 77;
+    surface.pixel_width = 16;
+    surface.pixel_height = 16;
+    surface.bytes_per_row = 128;
+    surface.pixel_format = 0x42475241;
+    surface.generation = 1;
+    surface.attachment_id = 0;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 1), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 16), panes[0].render_surface_pixel_width);
+    try testing.expectEqual(@as(u64, 16), panes[0].render_surface_pixel_height);
+    try testing.expectEqual(@as(u64, 128), panes[0].render_surface_bytes_per_row);
+    try testing.expectEqual(@as(u32, 0x42475241), panes[0].render_surface_pixel_format);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_attachment_id);
+    try testing.expectEqual(@as(u64, 0), panes[0].ca_context_id);
+}
+
+test "termsurf render surface stores matched Girlbat attachment metadata" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const girlbat: [:0]const u8 = "girlbat";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, girlbat);
+    try testSetPane(0, "pane-girlbat", profile, girlbat, "https://example.test/girlbat", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(girlbat.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 77;
+    ready.pane_id = @constCast("pane-girlbat");
+    handleTabReady(&ready);
+
+    servers[0].render_side_channel.in_use = true;
+    servers[0].render_side_channel.attachment_complete = true;
+    servers[0].render_side_channel.attachment_id = 9;
+    servers[0].render_side_channel.attachment_width = 640;
+    servers[0].render_side_channel.attachment_height = 480;
+    servers[0].render_side_channel.attachment_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_pixel_format = 0x42475241;
+    servers[0].render_side_channel.attachment_generation = 3;
+    servers[0].render_side_channel.attachment_imported_width = 640;
+    servers[0].render_side_channel.attachment_imported_height = 480;
+    servers[0].render_side_channel.attachment_imported_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_imported_pixel_format = 0x42475241;
+    servers[0].render_side_channel.test_iosurface_pointer = @ptrFromInt(0x1234);
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 77;
+    surface.pixel_width = 640;
+    surface.pixel_height = 480;
+    surface.bytes_per_row = 2560;
+    surface.pixel_format = 0x42475241;
+    surface.generation = 3;
+    surface.attachment_id = 9;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 3), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 640), panes[0].render_surface_pixel_width);
+    try testing.expectEqual(@as(u64, 480), panes[0].render_surface_pixel_height);
+    try testing.expectEqual(@as(u64, 2560), panes[0].render_surface_bytes_per_row);
+    try testing.expectEqual(@as(u32, 0x42475241), panes[0].render_surface_pixel_format);
+    try testing.expectEqual(@as(u64, 9), panes[0].render_surface_attachment_id);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_present_count);
+    try testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0x1234)), test_last_iosurface_present_surface);
+    try testing.expectEqual(@as(u64, 9), test_last_iosurface_present_attachment_id);
+    try testing.expectEqual(@as(u64, 3), test_last_iosurface_present_generation);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_retain_count);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_release_count);
+}
+
+test "termsurf render surface rejects unmatched Girlbat attachment metadata" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const girlbat: [:0]const u8 = "girlbat";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, girlbat);
+    try testSetPane(0, "pane-girlbat", profile, girlbat, "https://example.test/girlbat", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(girlbat.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 77;
+    ready.pane_id = @constCast("pane-girlbat");
+    handleTabReady(&ready);
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 77;
+    surface.pixel_width = 640;
+    surface.pixel_height = 480;
+    surface.bytes_per_row = 2560;
+    surface.pixel_format = 0x42475241;
+    surface.generation = 3;
+    surface.attachment_id = 9;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_attachment_id);
+
+    servers[0].render_side_channel.in_use = true;
+    servers[0].render_side_channel.attachment_complete = true;
+    servers[0].render_side_channel.attachment_id = 10;
+    servers[0].render_side_channel.attachment_width = 640;
+    servers[0].render_side_channel.attachment_height = 480;
+    servers[0].render_side_channel.attachment_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_pixel_format = 0x42475241;
+    servers[0].render_side_channel.attachment_generation = 3;
+    servers[0].render_side_channel.attachment_imported_width = 640;
+    servers[0].render_side_channel.attachment_imported_height = 480;
+    servers[0].render_side_channel.attachment_imported_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_imported_pixel_format = 0x42475241;
+    servers[0].render_side_channel.test_iosurface_pointer = @ptrFromInt(0x1234);
+
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_attachment_id);
+    try testing.expectEqual(@as(usize, 0), test_iosurface_present_count);
+    try testing.expectEqual(@as(usize, 0), test_iosurface_bridge_retain_count);
+    try testing.expectEqual(@as(usize, 0), test_iosurface_bridge_release_count);
+}
+
+test "termsurf render surface rejects malformed or stale metadata" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const girlbat: [:0]const u8 = "girlbat";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, girlbat);
+    try testSetPane(0, "pane-girlbat", profile, girlbat, "https://example.test/girlbat", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(girlbat.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 77;
+    ready.pane_id = @constCast("pane-girlbat");
+    handleTabReady(&ready);
+
+    handleRenderSurface(browser[0], null);
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 0;
+    surface.pixel_width = 16;
+    surface.pixel_height = 16;
+    handleRenderSurface(browser[0], &surface);
+
+    surface.tab_id = 77;
+    surface.pixel_width = 0;
+    surface.pixel_height = 16;
+    handleRenderSurface(browser[0], &surface);
+
+    surface.tab_id = 999;
+    surface.pixel_width = 16;
+    surface.pixel_height = 16;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_pixel_width);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_pixel_height);
+}
+
+test "termsurf render surface rejects non-Girlbat browser" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const roamium: [:0]const u8 = "roamium";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, roamium);
+    try testSetPane(0, "pane-roamium", profile, roamium, "https://example.test/roamium", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(roamium.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 88;
+    ready.pane_id = @constCast("pane-roamium");
+    handleTabReady(&ready);
+
+    var context: c.Termsurf__CaContext = undefined;
+    c.termsurf__ca_context__init(&context);
+    context.tab_id = 88;
+    context.ca_context_id = 4321;
+    context.pixel_width = 800;
+    context.pixel_height = 600;
+    handleCaContext(browser[0], &context);
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 88;
+    surface.pixel_width = 16;
+    surface.pixel_height = 16;
+    surface.bytes_per_row = 128;
+    surface.pixel_format = 0x42475241;
+    surface.generation = 1;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 4321), panes[0].ca_context_id);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_pixel_width);
+}
+
 fn testBrowserResolutionWithRestoredEnv() !void {
     try testWithRestoredEnv(roamium_path_env, testBrowserResolutionRestoreSurfari);
 }
 
 fn testBrowserResolutionRestoreSurfari() !void {
-    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreInstalledRoamium);
+    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreGirlbat);
+}
+
+fn testBrowserResolutionRestoreGirlbat() !void {
+    try testWithRestoredEnv(girlbat_path_env, testBrowserResolutionRestoreInstalledRoamium);
 }
 
 fn testBrowserResolutionRestoreInstalledRoamium() !void {
@@ -4865,52 +5935,74 @@ fn testBrowserResolutionRestoreInstalledRoamium() !void {
 }
 
 fn testBrowserResolutionRestoreInstalledSurfari() !void {
-    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolution);
+    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolutionRestoreInstalledGirlbat);
+}
+
+fn testBrowserResolutionRestoreInstalledGirlbat() !void {
+    try testWithRestoredEnv(installed_girlbat_path_env, testBrowserResolution);
 }
 
 fn testBrowserResolution() !void {
     const testing = std.testing;
     const surfari: [:0]const u8 = "surfari";
     const roamium: [:0]const u8 = "roamium";
+    const girlbat: [:0]const u8 = "girlbat";
     const fake_surfari_path: [:0]const u8 = "/tmp/termsurf-test-surfari";
     const fake_roamium_path: [:0]const u8 = "/tmp/termsurf-test-roamium";
+    const fake_girlbat_path: [:0]const u8 = "/tmp/termsurf-test-girlbat";
     const installed_surfari_override: [:0]const u8 = "/tmp/termsurf-installed-surfari";
     const installed_roamium_override: [:0]const u8 = "/tmp/termsurf-installed-roamium";
+    const installed_girlbat_override: [:0]const u8 = "/tmp/termsurf-installed-girlbat";
     const invalid_override: [:0]const u8 = "relative-browser";
 
     _ = c.unsetenv(roamium_path_env);
     _ = c.unsetenv(surfari_path_env);
+    _ = c.unsetenv(girlbat_path_env);
     _ = c.unsetenv(installed_roamium_path_env);
     _ = c.unsetenv(installed_surfari_path_env);
+    _ = c.unsetenv(installed_girlbat_path_env);
 
     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
     try testing.expect(resolveBrowserExecutableForBuild("unknown-browser", true) == null);
     try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutableForBuild("/tmp/absolute-browser", true).?);
 
     try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
 
     if (c.setenv(surfari_path_env, fake_surfari_path, 1) != 0) return error.SetenvFailed;
     if (c.setenv(roamium_path_env, fake_roamium_path, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(girlbat_path_env, fake_girlbat_path, 1) != 0) return error.SetenvFailed;
     try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
     try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+    try testing.expectEqualStrings(fake_girlbat_path, resolveBrowserExecutableForBuild(girlbat, true).?);
+    try testing.expectEqualStrings(fake_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
 
     if (c.setenv(surfari_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
     if (c.setenv(roamium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(girlbat_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
     try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
 
     _ = c.unsetenv(surfari_path_env);
     _ = c.unsetenv(roamium_path_env);
+    _ = c.unsetenv(girlbat_path_env);
     if (c.setenv(installed_surfari_path_env, installed_surfari_override, 1) != 0) return error.SetenvFailed;
     if (c.setenv(installed_roamium_path_env, installed_roamium_override, 1) != 0) return error.SetenvFailed;
+    if (c.setenv(installed_girlbat_path_env, installed_girlbat_override, 1) != 0) return error.SetenvFailed;
     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+    try testing.expectEqualStrings(installed_girlbat_override, resolveBrowserExecutableForBuild(girlbat, false).?);
     try testing.expectEqualStrings(installed_surfari_override, resolveBrowserExecutableForBuild(surfari, false).?);
     try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
 }
@@ -4925,6 +6017,114 @@ test "Surfari runtime framework path follows executable directory" {
         surfariRuntimeFrameworkPath("surfari", "/opt/homebrew/opt/termsurf-surfari/surfari").?,
     );
     try testing.expect(surfariRuntimeFrameworkPath("roamium", "/opt/homebrew/opt/termsurf-roamium/roamium") == null);
+}
+
+test "Girlbat spawn argv carries render surface service only for Girlbat" {
+    const testing = std.testing;
+
+    var girlbat_args: BrowserSpawnArgv = .{};
+    const girlbat_argv = buildBrowserSpawnArgv(
+        &girlbat_args,
+        "/tmp/girlbat",
+        "girlbat",
+        "default/profile",
+        "/tmp/termsurf-gui.sock",
+        "/tmp/termsurf-girlbat.sock",
+        12345,
+    ) orelse return error.BuildGirlbatArgvFailed;
+
+    try testing.expectEqual(@as(usize, 10), girlbat_argv.len);
+    try expectBaseBrowserArgv(girlbat_argv[0..9], "/tmp/girlbat", "girlbat");
+    try testing.expectEqual(@as(usize, 1), countArgPrefix(girlbat_argv, "--render-surface-service="));
+    const render_service = girlbat_args.renderService() orelse return error.MissingRenderService;
+    var second_render_service_buf: [max_render_service_name_len]u8 = undefined;
+    const second_render_service = buildRenderSurfaceServiceName(&second_render_service_buf, 12345, "default/profile", "girlbat") orelse return error.MissingRenderService;
+    try testing.expectEqualStrings(render_service, second_render_service);
+    try testing.expect(std.mem.startsWith(u8, render_service, "com.termsurf.girlbat.render.12345."));
+    try testing.expect(render_service.len < max_render_service_name_len);
+    try testing.expect(std.mem.indexOfScalar(u8, render_service, '/') == null);
+    try testing.expect(std.mem.indexOfScalar(u8, render_service, ' ') == null);
+    try testing.expect(std.mem.indexOf(u8, render_service, "default-profile") != null);
+
+    var roamium_args: BrowserSpawnArgv = .{};
+    const roamium_argv = buildBrowserSpawnArgv(
+        &roamium_args,
+        "/tmp/roamium",
+        "roamium",
+        "default",
+        "/tmp/termsurf-gui.sock",
+        "/tmp/termsurf-roamium.sock",
+        12345,
+    ) orelse return error.BuildRoamiumArgvFailed;
+    try testing.expectEqual(@as(usize, 0), countArgPrefix(roamium_argv, "--render-surface-service="));
+    try testing.expect(roamium_args.renderService() == null);
+    try expectBaseBrowserArgv(roamium_argv, "/tmp/roamium", "roamium");
+
+    var surfari_args: BrowserSpawnArgv = .{};
+    const surfari_argv = buildBrowserSpawnArgv(
+        &surfari_args,
+        "/tmp/surfari",
+        "surfari",
+        "default",
+        "/tmp/termsurf-gui.sock",
+        "/tmp/termsurf-surfari.sock",
+        12345,
+    ) orelse return error.BuildSurfariArgvFailed;
+    try testing.expectEqual(@as(usize, 0), countArgPrefix(surfari_argv, "--render-surface-service="));
+    try testing.expect(surfari_args.renderService() == null);
+    try expectBaseBrowserArgv(surfari_argv, "/tmp/surfari", "surfari");
+}
+
+test "render side-channel state is Girlbat gated and cleanup is idempotent" {
+    const testing = std.testing;
+
+    try testing.expect(renderSurfaceSideChannelBrowser("girlbat"));
+    try testing.expect(!renderSurfaceSideChannelBrowser("roamium"));
+    try testing.expect(!renderSurfaceSideChannelBrowser("surfari"));
+
+    var state: RenderSideChannelState = .{
+        .in_use = true,
+        .child_pid = 1234,
+        .child_port = 0,
+        .handshake_complete = true,
+        .handshake_result = c.TSRC_OK,
+        .received_surface = @ptrFromInt(0x1234),
+        .test_iosurface_pointer = @ptrFromInt(0x5678),
+        .test_owned_received_surface = true,
+    };
+    try testing.expect(copyText(&state.service_name, &state.service_name_len, "com.termsurf.girlbat.render.test"));
+    releaseRenderSideChannel(&state);
+    try testing.expect(!state.in_use);
+    try testing.expectEqual(@as(c.tsrc_port_t, 0), state.child_port);
+    try testing.expectEqual(@as(usize, 1), test_received_surface_release_count);
+
+    releaseRenderSideChannel(&state);
+    try testing.expect(!state.in_use);
+    try testing.expectEqual(@as(c.tsrc_port_t, 0), state.child_port);
+    try testing.expectEqual(@as(usize, 1), test_received_surface_release_count);
+}
+
+fn countArgPrefix(argv: []const []const u8, prefix: []const u8) usize {
+    var count: usize = 0;
+    for (argv) |arg| {
+        if (std.mem.startsWith(u8, arg, prefix)) count += 1;
+    }
+    return count;
+}
+
+fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, browser: []const u8) !void {
+    const testing = std.testing;
+    try testing.expectEqual(@as(usize, 9), argv.len);
+    try testing.expectEqualStrings(executable, argv[0]);
+    try testing.expect(std.mem.startsWith(u8, argv[1], "--ipc-socket="));
+    try testing.expect(std.mem.startsWith(u8, argv[2], "--browser-name="));
+    try testing.expect(std.mem.endsWith(u8, argv[2], browser));
+    try testing.expect(std.mem.startsWith(u8, argv[3], "--user-data-dir="));
+    try testing.expect(std.mem.startsWith(u8, argv[4], "--listen-socket="));
+    try testing.expectEqualStrings("--hidden", argv[5]);
+    try testing.expectEqualStrings("--no-sandbox", argv[6]);
+    try testing.expectEqualStrings("--enable-logging", argv[7]);
+    try testing.expect(std.mem.startsWith(u8, argv[8], "--log-file="));
 }
 
 fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {
@@ -4948,6 +6148,9 @@ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void)
 }
 
 fn resetTermsurfStateForTest() void {
+    for (&servers) |*server| {
+        releaseRenderSideChannel(&server.render_side_channel);
+    }
     clients = [_]ClientSlot{.{}} ** max_clients;
     panes = [_]PaneState{.{}} ** max_panes;
     closed_panes = [_]ClosedPaneState{.{}} ** max_closed_panes;
@@ -4962,6 +6165,13 @@ fn resetTermsurfStateForTest() void {
     gui_active = false;
     pending_gui_activation = false;
     current_color_scheme_dark = false;
+    test_iosurface_present_count = 0;
+    test_last_iosurface_present_surface = null;
+    test_last_iosurface_present_attachment_id = 0;
+    test_last_iosurface_present_generation = 0;
+    test_received_surface_release_count = 0;
+    test_iosurface_bridge_retain_count = 0;
+    test_iosurface_bridge_release_count = 0;
 }
 
 test "termsurf create tab uses tracked color scheme" {

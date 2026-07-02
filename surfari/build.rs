@@ -2,6 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
+    println!("cargo:rerun-if-changed=../proto/termsurf.proto");
+
     // WebKit C ABI build output directory (relative to this crate).
     let webkit_abi_out = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("libtermsurf_webkit/build")

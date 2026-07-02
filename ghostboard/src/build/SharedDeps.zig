@@ -423,10 +423,15 @@ pub fn add(
             &.{},
     });
     step.addIncludePath(b.path("src/protobuf"));
+    step.addIncludePath(b.path("../render-channel"));
     step.addCSourceFiles(.{ .files = &.{
         "src/protobuf/protobuf-c.c",
         "src/protobuf/termsurf.pb-c.c",
     } });
+    step.addCSourceFile(.{
+        .file = b.path("../render-channel/termsurf_render_channel.c"),
+        .flags = &.{"-std=c99"},
+    });
     if (step.rootModuleTarget().os.tag == .linux) {
         step.addIncludePath(b.path("src/apprt/gtk"));
     }
