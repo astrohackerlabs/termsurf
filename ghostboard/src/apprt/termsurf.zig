@@ -3380,6 +3380,15 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
         return;
     };
     if (surface.*.attachment_id != 0 and !renderSurfaceAttachmentMatches(server_index, surface)) {
+        if (shouldDeferRenderSurfaceAttachment(&servers[server_index].render_side_channel)) {
+            storeRenderSurfaceMetadata(&panes[pane_index], surface);
+            log.info(
+                "RenderSurface: pending attachment browser={s} profile={s} tab_id={} attachment_id={}",
+                .{ browser, profile, surface.*.tab_id, surface.*.attachment_id },
+            );
+            state_mutex.unlock();
+            return;
+        }
         log.warn(
             "RenderSurface: unmatched attachment browser={s} profile={s} tab_id={} attachment_id={}",
             .{ browser, profile, surface.*.tab_id, surface.*.attachment_id },
@@ -3388,12 +3397,7 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
         return;
     }
 
-    panes[pane_index].render_surface_generation = surface.*.generation;
-    panes[pane_index].render_surface_pixel_width = surface.*.pixel_width;
-    panes[pane_index].render_surface_pixel_height = surface.*.pixel_height;
-    panes[pane_index].render_surface_bytes_per_row = surface.*.bytes_per_row;
-    panes[pane_index].render_surface_pixel_format = surface.*.pixel_format;
-    panes[pane_index].render_surface_attachment_id = surface.*.attachment_id;
+    storeRenderSurfaceMetadata(&panes[pane_index], surface);
     if (surface.*.attachment_id != 0) {
         iosurface_snapshot = snapshotIOSurfaceOverlay(&panes[pane_index], &servers[server_index].render_side_channel);
     }
@@ -3431,6 +3435,48 @@ fn renderSurfaceAttachmentMatches(server_index: usize, surface: *c.Termsurf__Ren
     if (side_channel.attachment_imported_bytes_per_row != surface.*.bytes_per_row) return false;
     if (side_channel.attachment_imported_pixel_format != surface.*.pixel_format) return false;
     return true;
+}
+
+fn shouldDeferRenderSurfaceAttachment(side_channel: *const RenderSideChannelState) bool {
+    return side_channel.in_use and !side_channel.attachment_complete;
+}
+
+fn storeRenderSurfaceMetadata(pane: *PaneState, surface: *c.Termsurf__RenderSurface) void {
+    pane.render_surface_generation = surface.*.generation;
+    pane.render_surface_pixel_width = surface.*.pixel_width;
+    pane.render_surface_pixel_height = surface.*.pixel_height;
+    pane.render_surface_bytes_per_row = surface.*.bytes_per_row;
+    pane.render_surface_pixel_format = surface.*.pixel_format;
+    pane.render_surface_attachment_id = surface.*.attachment_id;
+}
+
+fn paneRenderSurfaceAttachmentMatches(pane: *const PaneState, side_channel: *const RenderSideChannelState) bool {
+    if (!side_channel.in_use or !side_channel.attachment_complete) return false;
+    if (side_channel.received_surface == null and side_channel.test_iosurface_pointer == null) return false;
+    if (pane.render_surface_attachment_id == 0) return false;
+    if (side_channel.attachment_id != pane.render_surface_attachment_id) return false;
+    if (side_channel.attachment_width != pane.render_surface_pixel_width) return false;
+    if (side_channel.attachment_height != pane.render_surface_pixel_height) return false;
+    if (side_channel.attachment_bytes_per_row != pane.render_surface_bytes_per_row) return false;
+    if (side_channel.attachment_pixel_format != pane.render_surface_pixel_format) return false;
+    if (side_channel.attachment_generation != pane.render_surface_generation) return false;
+    if (side_channel.attachment_imported_width != pane.render_surface_pixel_width) return false;
+    if (side_channel.attachment_imported_height != pane.render_surface_pixel_height) return false;
+    if (side_channel.attachment_imported_bytes_per_row != pane.render_surface_bytes_per_row) return false;
+    if (side_channel.attachment_imported_pixel_format != pane.render_surface_pixel_format) return false;
+    return true;
+}
+
+fn snapshotPendingIOSurfaceOverlayForServer(server_index: usize) ?IOSurfaceOverlaySnapshot {
+    const server = &servers[server_index];
+    for (&panes) |*pane| {
+        if (!pane.in_use) continue;
+        if (!std.mem.eql(u8, pane.profileName(), server.profileName())) continue;
+        if (!std.mem.eql(u8, pane.browserName(), server.browserName())) continue;
+        if (!paneRenderSurfaceAttachmentMatches(pane, &server.render_side_channel)) continue;
+        return snapshotIOSurfaceOverlay(pane, &server.render_side_channel);
+    }
+    return null;
 }
 
 fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) void {
@@ -3913,6 +3959,7 @@ fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
 
     var stored = false;
     var stored_received_surface = false;
+    var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
     state_mutex.lock();
     if (findServer(ctx.profileName(), ctx.browserName())) |index| {
         const side_channel = &servers[index].render_side_channel;
@@ -3953,6 +4000,7 @@ fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
                         side_channel.received_surface = received_surface;
                         received_surface = null;
                         stored_received_surface = true;
+                        iosurface_snapshot = snapshotPendingIOSurfaceOverlayForServer(index);
                     }
                 }
                 stored = true;
@@ -3964,6 +4012,7 @@ fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
     if (received_surface) |surface| {
         c.tsrc_release_received_surface(surface);
     }
+    if (iosurface_snapshot) |snapshot| presentIOSurfaceOverlay(&snapshot);
 
     if (result == c.TSRC_OK) {
         if (stored) {
@@ -5739,6 +5788,76 @@ test "termsurf render surface stores matched Girlbat attachment metadata" {
     try testing.expectEqual(@as(u64, 2560), panes[0].render_surface_bytes_per_row);
     try testing.expectEqual(@as(u32, 0x42475241), panes[0].render_surface_pixel_format);
     try testing.expectEqual(@as(u64, 9), panes[0].render_surface_attachment_id);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_present_count);
+    try testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0x1234)), test_last_iosurface_present_surface);
+    try testing.expectEqual(@as(u64, 9), test_last_iosurface_present_attachment_id);
+    try testing.expectEqual(@as(u64, 3), test_last_iosurface_present_generation);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_retain_count);
+    try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_release_count);
+}
+
+test "termsurf render surface defers Girlbat attachment until side-channel handshake" {
+    const testing = std.testing;
+
+    resetTermsurfStateForTest();
+    defer resetTermsurfStateForTest();
+
+    const profile: [:0]const u8 = "default";
+    const girlbat: [:0]const u8 = "girlbat";
+
+    var browser = try testSocketPair();
+    defer testCloseSocketPair(&browser);
+    var tui = try testSocketPair();
+    defer testCloseSocketPair(&tui);
+
+    try testSetPendingServer(0, profile, girlbat);
+    try testSetPane(0, "pane-girlbat", profile, girlbat, "https://example.test/girlbat", tui[0]);
+
+    var register: c.Termsurf__ServerRegister = undefined;
+    c.termsurf__server_register__init(&register);
+    register.profile = @constCast(profile.ptr);
+    register.browser = @constCast(girlbat.ptr);
+    handleServerRegister(browser[0], &register);
+
+    var ready: c.Termsurf__TabReady = undefined;
+    c.termsurf__tab_ready__init(&ready);
+    ready.tab_id = 77;
+    ready.pane_id = @constCast("pane-girlbat");
+    handleTabReady(&ready);
+
+    servers[0].render_side_channel.in_use = true;
+
+    var surface: c.Termsurf__RenderSurface = undefined;
+    c.termsurf__render_surface__init(&surface);
+    surface.tab_id = 77;
+    surface.pixel_width = 640;
+    surface.pixel_height = 480;
+    surface.bytes_per_row = 2560;
+    surface.pixel_format = 0x42475241;
+    surface.generation = 3;
+    surface.attachment_id = 9;
+    handleRenderSurface(browser[0], &surface);
+
+    try testing.expectEqual(@as(u64, 3), panes[0].render_surface_generation);
+    try testing.expectEqual(@as(u64, 9), panes[0].render_surface_attachment_id);
+    try testing.expectEqual(@as(usize, 0), test_iosurface_present_count);
+
+    servers[0].render_side_channel.attachment_complete = true;
+    servers[0].render_side_channel.attachment_id = 9;
+    servers[0].render_side_channel.attachment_width = 640;
+    servers[0].render_side_channel.attachment_height = 480;
+    servers[0].render_side_channel.attachment_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_pixel_format = 0x42475241;
+    servers[0].render_side_channel.attachment_generation = 3;
+    servers[0].render_side_channel.attachment_imported_width = 640;
+    servers[0].render_side_channel.attachment_imported_height = 480;
+    servers[0].render_side_channel.attachment_imported_bytes_per_row = 2560;
+    servers[0].render_side_channel.attachment_imported_pixel_format = 0x42475241;
+    servers[0].render_side_channel.test_iosurface_pointer = @ptrFromInt(0x1234);
+
+    const snapshot = snapshotPendingIOSurfaceOverlayForServer(0) orelse return error.MissingPendingIOSurfaceSnapshot;
+    presentIOSurfaceOverlay(&snapshot);
+
     try testing.expectEqual(@as(usize, 1), test_iosurface_present_count);
     try testing.expectEqual(@as(?*anyopaque, @ptrFromInt(0x1234)), test_last_iosurface_present_surface);
     try testing.expectEqual(@as(u64, 9), test_last_iosurface_present_attachment_id);
