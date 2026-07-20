@@ -1,6 +1,23 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072015221509 Exp 1)
+## Active Add-on (Issue 26072016122202 Exp 1)
+
+- Parent product commit: `5b55fdcd84c50a181bba830cdb637c9364fba521`
+  (prior tip on `issue-26072015221509-exp1-restore-monogram-dock`)
+- Product branch: `issue-26072016122202-exp1-secondary-axis-before-mru`
+- Product HEAD: `a6b9b7b83235039df287ce1d0e056e8eaf2f25d8`
+- Product tree: `30de45b1df245f40040e6c029c54e48056bb64b0`
+- Issue archive: `patches/ghostty/patches/issue-26072016122202/`
+- Patches: `0001` Secondary-axis strip before MRU on spatial focus
+- Patch SHA-256:
+  - 0001: `b39e436cd939717e638bd34b11cb52e4235fda8362aa725bd952e72cd5a80424`
+- Scope: spatial `focusTarget` uses primary band → **positive** secondary
+  overlap (else nearest secondary) → MRU → strip geometry; fixes 2×2
+  sideways jumps while keeping nested `L|(TR/BR)` BR restore.
+- Verification: **source + 34-patch series pin**;
+  `xcodebuild test -scheme Ghostty -only-testing:GhosttyTests/SplitTreeTests`.
+
+## Prior Add-on (Issue 26072015221509 Exp 1)
 
 - Parent product commit: `87ca338679438debc7a0a4c60173a5cd5f897ae5`
   (prior tip on `issue-26072011262273-exp4-half-dock-padding`)

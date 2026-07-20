@@ -1,0 +1,257 @@
+From a6b9b7b83235039df287ce1d0e056e8eaf2f25d8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 20 Jul 2026 11:21:26 -0500
+Subject: [PATCH] Exp 1: Secondary-axis strip before MRU on spatial focus
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Primary band, then positive secondary overlap (else nearest),
+then MRU — stops sideways jumps while keeping nested restore.
+---
+ macos/Sources/Features/Splits/SplitTree.swift | 109 +++++++++++++++---
+ macos/Tests/Splits/SplitTreeTests.swift       |  75 ++++++++++++
+ 2 files changed, 169 insertions(+), 15 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/SplitTree.swift b/macos/Sources/Features/Splits/SplitTree.swift
+index 8200a27ab..6458cfc95 100644
+--- a/macos/Sources/Features/Splits/SplitTree.swift
++++ b/macos/Sources/Features/Splits/SplitTree.swift
+@@ -176,8 +176,10 @@ extension SplitTree {
+     /// Find the next view to focus based on the current focused node and direction.
+     ///
+     /// - Parameter recentFocusIDs: Most-recently-focused leaf IDs first (spatial only).
+-    ///   Used to restore the last active leaf within the **nearest primary-axis cohort**
+-    ///   in the requested direction. Empty list preserves pure geometry selection.
++    ///   Used to restore the last active leaf within the **nearest primary-axis
++    ///   band, then secondary-axis strip** (overlap with the reference leaf, else
++    ///   nearest secondary band) in the requested direction. Empty list preserves
++    ///   pure geometry selection. Issue 26072016122202.
+     func focusTarget(
+         for direction: FocusDirection,
+         from currentNode: Node,
+@@ -211,8 +213,9 @@ extension SplitTree {
+             // Spatial navigation:
+             // 1) Directional leaf candidates (geometry half-plane)
+             // 2) Nearest primary-axis cohort (locality)
+-            // 3) MRU among that cohort (recentFocusIDs)
+-            // 4) Else geometry fallback (top-left distance / leftmost·rightmost)
++            // 3) Secondary-axis strip (overlap with ref, else nearest secondary)
++            // 4) MRU among that 2D set (recentFocusIDs)
++            // 5) Else geometry fallback (top-left distance / leftmost·rightmost)
+             let spatial = root.spatial()
+             let nodes = spatial.slots(in: spatialDirection, from: currentNode)
+ 
+@@ -249,6 +252,26 @@ extension SplitTree {
+                 return geometryWinner
+             }
+ 
++            // Reference bounds for secondary overlap (same spatial map as candidates).
++            let refBounds: CGRect = {
++                if let slot = spatial.slots.first(where: { $0.node == currentNode }) {
++                    return slot.bounds
++                }
++                // Match by leaf view identity if the node value was reconstructed.
++                if case .leaf(let view) = currentNode {
++                    if let slot = spatial.slots.first(where: {
++                        if case .leaf(let v) = $0.node { return v === view }
++                        return false
++                    }) {
++                        return slot.bounds
++                    }
++                }
++                return .zero
++            }()
++
++            // Epsilon so stacked panes sharing an edge form one band.
++            let epsilon = 1e-6
++
+             // Primary-axis key: nearest band for this direction.
+             func primaryKey(_ bounds: CGRect) -> Double {
+                 switch spatialDirection {
+@@ -258,21 +281,77 @@ extension SplitTree {
+                 case .up: return bounds.maxY
+                 }
+             }
+-            let keys = leafSlots.map { primaryKey($0.bounds) }
+-            let nearestKey: Double = switch spatialDirection {
+-            case .right, .down: keys.min()!
+-            case .left, .up: keys.max()!
++            let primaryKeys = leafSlots.map { primaryKey($0.bounds) }
++            let nearestPrimary: Double = switch spatialDirection {
++            case .right, .down: primaryKeys.min()!
++            case .left, .up: primaryKeys.max()!
+             }
+-            // Epsilon so stacked panes sharing an edge form one cohort.
+-            let epsilon = 1e-6
+-            let cohort = leafSlots.filter {
+-                abs(primaryKey($0.bounds) - nearestKey) <= epsilon
++            let primaryCohort = leafSlots.filter {
++                abs(primaryKey($0.bounds) - nearestPrimary) <= epsilon
++            }
++
++            // Secondary-axis strip within the primary cohort (Issue 26072016122202).
++            // left/right moves: y interval; up/down moves: x interval.
++            func secondaryMin(_ bounds: CGRect) -> Double {
++                switch spatialDirection {
++                case .left, .right: return bounds.minY
++                case .up, .down: return bounds.minX
++                }
++            }
++            func secondaryMax(_ bounds: CGRect) -> Double {
++                switch spatialDirection {
++                case .left, .right: return bounds.maxY
++                case .up, .down: return bounds.maxX
++                }
++            }
++            func secondaryCenter(_ bounds: CGRect) -> Double {
++                (secondaryMin(bounds) + secondaryMax(bounds)) / 2
++            }
++            func secondaryOverlapsRef(_ bounds: CGRect) -> Bool {
++                // Require positive-length overlap so shared split edges (zero-width
++                // touch between adjacent columns/rows) do not count as "same strip".
++                let lo = Swift.max(secondaryMin(bounds), secondaryMin(refBounds))
++                let hi = Swift.min(secondaryMax(bounds), secondaryMax(refBounds))
++                return (hi - lo) > epsilon
++            }
++
++            let overlapping = primaryCohort.filter { secondaryOverlapsRef($0.bounds) }
++            let secondaryCohort: [(view: ViewType, bounds: CGRect)]
++            if !overlapping.isEmpty {
++                secondaryCohort = overlapping
++            } else {
++                // No y/x overlap with ref: nearest secondary center band to ref center.
++                let refCenter = secondaryCenter(refBounds)
++                let distances = primaryCohort.map {
++                    abs(secondaryCenter($0.bounds) - refCenter)
++                }
++                let nearestDist = distances.min() ?? 0
++                secondaryCohort = primaryCohort.filter {
++                    abs(abs(secondaryCenter($0.bounds) - refCenter) - nearestDist) <= epsilon
++                }
+             }
+ 
+-            // Prefer most recently focused leaf still in the nearest cohort.
++            // Geometry among the secondary strip (keeps orthogonal moves on-strip
++            // even when MRU prefers a peer outside C2). Fall back to full-plane
++            // geometryWinner only if the strip is empty (should not happen).
++            func distanceTopLeft(from a: CGRect, to b: CGRect) -> Double {
++                let dx = b.minX - a.minX
++                let dy = b.minY - a.minY
++                return sqrt(dx * dx + dy * dy)
++            }
++            let stripGeometryWinner: ViewType = {
++                guard !secondaryCohort.isEmpty else { return geometryWinner }
++                let sorted = secondaryCohort.sorted {
++                    distanceTopLeft(from: refBounds, to: $0.bounds)
++                        < distanceTopLeft(from: refBounds, to: $1.bounds)
++                }
++                return sorted[0].view
++            }()
++
++            // Prefer most recently focused leaf still in the 2D (primary+secondary) set.
+             if !recentFocusIDs.isEmpty {
+                 var cohortByID: [ViewType.ID: ViewType] = [:]
+-                for item in cohort {
++                for item in secondaryCohort {
+                     cohortByID[item.view.id] = item.view
+                 }
+                 for id in recentFocusIDs {
+@@ -282,7 +361,7 @@ extension SplitTree {
+                 }
+             }
+ 
+-            return geometryWinner
++            return stripGeometryWinner
+         }
+     }
+ 
+diff --git a/macos/Tests/Splits/SplitTreeTests.swift b/macos/Tests/Splits/SplitTreeTests.swift
+index 9922ba945..3908e27da 100644
+--- a/macos/Tests/Splits/SplitTreeTests.swift
++++ b/macos/Tests/Splits/SplitTreeTests.swift
+@@ -394,6 +394,81 @@ struct SplitTreeTests {
+         #expect(prev === view1)
+     }
+ 
++    // MARK: - Secondary axis before MRU (issue 26072016122202 exp-0001)
++
++    /// 2×2 grid: A=TL B=TR C=BL D=BR
++    static func makeTwoByTwoGrid() throws -> (
++        tree: SplitTree<MockView>,
++        topLeft: MockView,
++        topRight: MockView,
++        bottomLeft: MockView,
++        bottomRight: MockView
++    ) {
++        let a = MockView()
++        let b = MockView()
++        let c = MockView()
++        let d = MockView()
++        var tree = SplitTree<MockView>(view: a)
++        tree = try tree.inserting(view: b, at: a, direction: .right)
++        tree = try tree.inserting(view: c, at: a, direction: .down)
++        tree = try tree.inserting(view: d, at: b, direction: .down)
++        return (tree, a, b, c, d)
++    }
++
++    @Test func spatialSecondaryAxisUpDoesNotJumpLeftDespiteMRU() throws {
++        let (tree, topLeft, topRight, _, bottomRight) = try Self.makeTwoByTwoGrid()
++        // Primary up band is {TL, TR}; secondary x-overlap with BR is TR only.
++        // Even if TL is more recent, up must stay in the right column.
++        let target = tree.focusTarget(
++            for: .spatial(.up),
++            from: .leaf(view: bottomRight),
++            recentFocusIDs: [topLeft.id, topRight.id, bottomRight.id])
++        #expect(target === topRight)
++    }
++
++    @Test func spatialSecondaryAxisRightDoesNotJumpUpDespiteMRU() throws {
++        let (tree, _, topRight, bottomLeft, bottomRight) = try Self.makeTwoByTwoGrid()
++        // Primary right band is {TR, BR}; secondary y-overlap with BL is BR only.
++        let target = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: bottomLeft),
++            recentFocusIDs: [topRight.id, bottomRight.id, bottomLeft.id])
++        #expect(target === bottomRight)
++    }
++
++    @Test func spatialSecondaryAxisDownDoesNotJumpRightDespiteMRU() throws {
++        let (tree, topLeft, topRight, bottomLeft, _) = try Self.makeTwoByTwoGrid()
++        let target = tree.focusTarget(
++            for: .spatial(.down),
++            from: .leaf(view: topLeft),
++            recentFocusIDs: [topRight.id, bottomLeft.id, topLeft.id])
++        #expect(target === bottomLeft)
++    }
++
++    @Test func spatialSecondaryAxisLeftDoesNotJumpDownDespiteMRU() throws {
++        let (tree, topLeft, topRight, bottomLeft, _) = try Self.makeTwoByTwoGrid()
++        let target = tree.focusTarget(
++            for: .spatial(.left),
++            from: .leaf(view: topRight),
++            recentFocusIDs: [bottomLeft.id, topLeft.id, topRight.id])
++        #expect(target === topLeft)
++    }
++
++    @Test func spatialSecondaryAxisPreservesNestedRightMRURestore() throws {
++        // Regression guard for Issue 26071913243342: L | (TR/BR)
++        let (tree, left, topRight, bottomRight) = try Self.makeNestedRightSplit()
++        let restored = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [left.id, bottomRight.id, topRight.id])
++        #expect(restored === bottomRight)
++        let empty = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [])
++        #expect(empty === topRight)
++    }
++
+     // MARK: - Equalized
+ 
+ 
+-- 
+2.50.1 (Apple Git-155)
+
