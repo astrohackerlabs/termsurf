@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072016122202-exp1-secondary-axis-before-mru",
-      "expected_head": "a6b9b7b83235039df287ce1d0e056e8eaf2f25d8",
-      "expected_tree": "30de45b1df245f40040e6c029c54e48056bb64b0",
+      "branch": "issue-26072016457563-exp1-replace-ghost-title",
+      "expected_head": "2bbe90f5997860ef182e57d809fce4e099c0cd1a",
+      "expected_tree": "b86a2d2807d8301858e8635591155fb55283cd89",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -18,10 +18,11 @@
         "patches/ghostty/patches/issue-26071914254256",
         "patches/ghostty/patches/issue-26072011262273",
         "patches/ghostty/patches/issue-26072015221509",
-        "patches/ghostty/patches/issue-26072016122202"
+        "patches/ghostty/patches/issue-26072016122202",
+        "patches/ghostty/patches/issue-26072016457563"
       ],
-      "patch_count": 34,
-      "archive_sha256": "dba1a29ec70ce271aa2087665934a58f93652d928b6c356c5f2675c5c16553b2",
+      "patch_count": 35,
+      "archive_sha256": "592f04c7535879a51fec69a8ab118d7669a67744814c294391a16af18a0367d4",
       "allowed_untracked": []
     },
     {

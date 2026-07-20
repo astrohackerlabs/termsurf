@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ah-chromiumd"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "prost",
  "prost-build",
@@ -28,7 +28,7 @@ dependencies = [
 
 [[package]]
 name = "ah-ladybirdd"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "cc",
  "prost",
@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "ah-webkitd"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "prost",
  "prost-build",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ahweb"
-version = "0.1.59"
+version = "0.1.60"
 dependencies = [
  "arboard",
  "clap",

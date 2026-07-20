@@ -1,6 +1,23 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072016122202 Exp 1)
+## Active Add-on (Issue 26072016457563 Exp 1)
+
+- Parent product commit: `a6b9b7b83235039df287ce1d0e056e8eaf2f25d8`
+  (prior tip on `issue-26072016122202-exp1-secondary-axis-before-mru`)
+- Product branch: `issue-26072016457563-exp1-replace-ghost-title`
+- Product HEAD: `2bbe90f5997860ef182e57d809fce4e099c0cd1a`
+- Product tree: `b86a2d2807d8301858e8635591155fb55283cd89`
+- Issue archive: `patches/ghostty/patches/issue-26072016457563/`
+- Patches: `0001` Replace ghost title defaults with surfer
+- Patch SHA-256:
+  - 0001: `173981e4b77792349982dec266426e3886bfc3cad14ad21c10896322516588d4`
+- Scope: empty/fallback surface and window titles use **🏄** / **🏄 TermSurf**
+  instead of **👻** / **👻 Ghostty**; theme preview CLI title aligned; xibs
+  updated. Dock AppIcon unchanged.
+- Verification: **source + 35-patch series pin**;
+  `bash scripts/test-surfer-title-defaults.sh`.
+
+## Prior Add-on (Issue 26072016122202 Exp 1)
 
 - Parent product commit: `5b55fdcd84c50a181bba830cdb637c9364fba521`
   (prior tip on `issue-26072015221509-exp1-restore-monogram-dock`)
