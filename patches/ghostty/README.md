@@ -1,6 +1,24 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072011262273 Exp 4)
+## Active Add-on (Issue 26072015221509 Exp 1)
+
+- Parent product commit: `87ca338679438debc7a0a4c60173a5cd5f897ae5`
+  (prior tip on `issue-26072011262273-exp4-half-dock-padding`)
+- Product branch: `issue-26072015221509-exp1-restore-monogram-dock`
+- Product HEAD: `5b55fdcd84c50a181bba830cdb637c9364fba521`
+- Product tree: `234c33cd356b00014e36de2d4cba7b82e73e4e30`
+- Issue archive: `patches/ghostty/patches/issue-26072015221509/`
+- Patches: `0001` Restore monogram host AppIcon ladder
+- Patch SHA-256:
+  - 0001: `3910cdde93eef1c6065c30cb124979d4f861c7d10267e0183da49ae34e6552cd`
+- Scope: `TermSurf.appiconset` + `AppIconImage` pixels from monogram factory
+  dock master (cyan `#1BFEFF` on opaque navy `#07203A`); catalog AppIcon name
+  remains `TermSurf`. Default host Dock mark is monogram, not TermSurf wave.
+- Verification: **source + 33-patch series pin**;
+  `python3 scripts/sync-termsurf-appicon.py --check-only` (default monogram);
+  `bash scripts/test-sync-host-appicon.sh`.
+
+## Prior Add-on (Issue 26072011262273 Exp 4)
 
 - Parent product commit: `f58675fa9d88f51c551d157546f080e9379bc09f`
   (prior tip on `issue-26072011262273-exp3-dock-padding`)

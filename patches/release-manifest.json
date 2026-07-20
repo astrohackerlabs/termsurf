@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072011262273-exp4-half-dock-padding",
-      "expected_head": "87ca338679438debc7a0a4c60173a5cd5f897ae5",
-      "expected_tree": "e4266784dbfce565109999462cf0b38b159aef95",
+      "branch": "issue-26072015221509-exp1-restore-monogram-dock",
+      "expected_head": "5b55fdcd84c50a181bba830cdb637c9364fba521",
+      "expected_tree": "234c33cd356b00014e36de2d4cba7b82e73e4e30",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -16,10 +16,11 @@
         "patches/ghostty/patches/issue-26071821572313",
         "patches/ghostty/patches/issue-26071913243342",
         "patches/ghostty/patches/issue-26071914254256",
-        "patches/ghostty/patches/issue-26072011262273"
+        "patches/ghostty/patches/issue-26072011262273",
+        "patches/ghostty/patches/issue-26072015221509"
       ],
-      "patch_count": 32,
-      "archive_sha256": "2014fb95ba806adfd0d1479996e4e91eca22eca4bf0d800929ff9ca6ec58e2c1",
+      "patch_count": 33,
+      "archive_sha256": "c6cb4fd39fc60fefd6e28f6efceb90a2e9072a3c8d9f2d88a588b2d0703b9c2d",
       "allowed_untracked": []
     },
     {
