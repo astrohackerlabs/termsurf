@@ -1,7 +1,7 @@
-# Astrohacker Terminal Public Source
+# Astrohacker TermSurf Public Source
 
-This repository contains open source Astrohacker Terminal client source synced
-from the private Astrohacker monorepo.
+This repository contains open source **Astrohacker TermSurf** client source
+synced from the private Astrohacker monorepo.
 
 ## Rules
 
@@ -18,10 +18,8 @@ Common build commands:
 
 ```bash
 ./scripts/build.sh chromium
-./scripts/build.sh chromium
 ./scripts/build.sh webkit
 ./scripts/build.sh webkit-lib
-./scripts/build.sh webkit
 ./scripts/build.sh ahweb
 ./scripts/build.sh ahterm
 ./scripts/build.sh all --release
@@ -43,13 +41,13 @@ Relevant public patch docs:
 
 ## Project Layout
 
-- `assets/astrohacker-terminal/` — product images and Terminal assets.
-- `docs/` — product docs and public Terminal records.
+- `assets/` — TermSurf mark SVG and icon masters (`termsurf-icon.svg`,
+  `termsurf-14-*.png`).
+- `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install/test helpers.
-- `rust/` — Astrohacker Terminal Rust workspace.
+- `rust/` — Astrohacker TermSurf Rust workspace.
 - `patches/` — fork patch archives and reconstruction notes.
 
 This public repository intentionally excludes private issue records, epics,
-company operations, marketing plans, terminal cloud work, private release
-orchestration, local agent metadata, ignored fork working trees, and build
-outputs.
+company operations, marketing plans, private release orchestration, local agent
+metadata, ignored fork working trees, and build outputs.

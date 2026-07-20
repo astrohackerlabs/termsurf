@@ -1,16 +1,17 @@
-# Astrohacker Terminal
+# Astrohacker TermSurf
 
-Astrohacker Terminal is a terminal with a real browser in the pane. Run `ahweb`,
-open a URL, and the page appears alongside shells, editors, and other terminal
+**Astrohacker TermSurf** is a desktop host with a real browser in the pane. Run
+`ahweb`, open a URL, and the page appears alongside shells and other terminal
 workflows.
 
 This public repository contains the open source client material synced from the
 private Astrohacker monorepo for source releases. It includes:
 
-- `assets/astrohacker-terminal/` — product images and Terminal assets.
-- `docs/` — product docs and public Terminal records.
+- `assets/` — TermSurf mark SVG and icon masters (`termsurf-icon.svg`,
+  `termsurf-14-*.png`).
+- `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install helpers and smoke scripts.
-- `rust/` — Rust workspace crates for `ahweb`, Chromium, WebKit, Ladybird, GTUI,
+- `rust/` — Rust workspace crates for `ahweb`, Chromium, WebKit, Ladybird,
   and protocol/native support code.
 - `patches/` — fork patch archives and reconstruction notes for Chromium,
   WebKit, Ladybird, Ghostty, and Gecko.
@@ -22,7 +23,7 @@ developing browser integrations.
 ## Install
 
 The Astrohacker Homebrew cask targets Apple silicon macOS and installs into
-`/Applications`:
+`/Applications` as **Astrohacker TermSurf.app**:
 
 ```bash
 brew tap astrohackerlabs/astrohacker
@@ -53,8 +54,6 @@ client components:
 
 ```bash
 ./scripts/build.sh chromium
-./scripts/build.sh chromium
-./scripts/build.sh webkit
 ./scripts/build.sh webkit
 ./scripts/build.sh ahweb
 ./scripts/build.sh ahterm
@@ -69,7 +68,7 @@ For a release-style local build:
 The app bundle is written to:
 
 ```text
-forks/ghostty/macos/build/Release/Astrohacker Terminal.app
+forks/ghostty/macos/build/Release/Astrohacker TermSurf.app
 ```
 
 ## Run
@@ -84,8 +83,8 @@ cd macos
 ./build.nu --configuration Debug --action build
 ```
 
-Inside Astrohacker Terminal, run the debug `ahweb` binary and point it at a local
-engine build:
+Inside Astrohacker TermSurf, run the debug `ahweb` binary and point it at a
+local engine build:
 
 ```bash
 ./rust/target/debug/ahweb \
