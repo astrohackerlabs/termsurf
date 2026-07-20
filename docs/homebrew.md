@@ -287,9 +287,11 @@ normal operator interface.
    - First-party product crate package versions under the monorepo root  track the
      Homebrew release version. The canonical command rewrites and commits those
      manifests before building so `CARGO_PKG_VERSION` matches the cask. It also
-     rewrites `bun/ahcalc/package.json` `"version"` to the same X.Y.Z. Do not
-     leave those packages stuck at a placeholder such as `0.1.0` across releases.
-     Do not rewrite package versions under `forks/`.
+     rewrites `bun/ahcalc/package.json` `"version"` and
+     `bun/ahcalc/app/cli/embedded-version.ts` to the same X.Y.Z so the ahcalc
+     compile-time stamp matches the cask and the post-build tree stays clean.
+     Do not leave those packages stuck at a placeholder such as `0.1.0` across
+     releases. Do not rewrite package versions under `forks/`.
    - `TERMSURF_VERSION=<version>` is the `ahterm` app/helper version input.
      `ahterm` is the only shipped wrapper that uses the terminal helper/action
      convention: `ahterm +version` and `ahterm +help`.
