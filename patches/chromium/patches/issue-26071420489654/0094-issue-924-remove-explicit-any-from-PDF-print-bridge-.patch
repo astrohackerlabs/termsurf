@@ -1,0 +1,51 @@
+From bbde848fcb896ad84848ba59b9a19e47d53e3b6a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:03:06 -0500
+Subject: [PATCH 094/119] issue-924: remove explicit any from PDF print bridge
+ traces
+
+---
+ chrome/browser/resources/pdf/controller.ts | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/chrome/browser/resources/pdf/controller.ts b/chrome/browser/resources/pdf/controller.ts
+index fcc0fe5130..5c9685349a 100644
+--- a/chrome/browser/resources/pdf/controller.ts
++++ b/chrome/browser/resources/pdf/controller.ts
+@@ -29,7 +29,7 @@ function termsurfPdfPrintBridgeTraceEnabled(): boolean {
+ }
+ 
+ function termsurfPdfPrintBridgeActivationId(): string {
+-  return String((window as any).__termsurfPdfPrintBridgeActivationId || '');
++  return String((window as Window & {__termsurfPdfPrintBridgeActivationId?: string}).__termsurfPdfPrintBridgeActivationId || '');
+ }
+ 
+ function shouldTraceTermSurfPdfMessage(type: string): boolean {
+@@ -38,13 +38,13 @@ function shouldTraceTermSurfPdfMessage(type: string): boolean {
+ }
+ 
+ function traceTermSurfPdfPrintBridge(
+-    event: string, fields: Record<string, any> = {}) {
++    event: string, fields: Record<string, string|number|boolean|undefined|null> = {}) {
+   if (!termsurfPdfPrintBridgeTraceEnabled()) {
+     return;
+   }
+ 
+   const trace =
+-      ((window as any).__termsurfPdfPrintBridgeTrace ||= [] as Array<any>);
++      ((window as Window & {__termsurfPdfPrintBridgeTrace?: Array<Record<string, unknown>>}).__termsurfPdfPrintBridgeTrace ||= [] as Array<Record<string, unknown>>);
+   trace.push({
+     source: 'controller.ts',
+     event,
+@@ -575,7 +575,7 @@ export class PluginController implements ContentController {
+       });
+       const activationId = termsurfPdfPrintBridgeActivationId();
+       if (activationId) {
+-        (message as any).termsurfActivationId = activationId;
++        (message as PluginMessage & {termsurfActivationId?: string}).termsurfActivationId = activationId;
+       }
+     }
+     this.plugin_.postMessage(message);
+-- 
+2.54.0
+

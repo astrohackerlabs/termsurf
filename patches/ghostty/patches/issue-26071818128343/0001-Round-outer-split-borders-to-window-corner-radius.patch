@@ -1,0 +1,242 @@
+From fd620b50efab6903f24e5ff91181b168b483e002 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 13:21:40 -0500
+Subject: [PATCH 1/2] Round outer split borders to window corner radius
+
+Use UnevenRoundedRectangle for split pane borders: outer corners
+match NSWindow _cornerRadius (fallback 10), inner content/dim clip
+at R-w. Window-edge flags come from the split tree so internal
+T-junctions stay square.
+---
+ .../Splits/TerminalSplitTreeView.swift        | 33 +++++++--
+ .../Ghostty/Surface View/InspectorView.swift  |  6 +-
+ .../Ghostty/Surface View/SurfaceView.swift    | 67 ++++++++++++++++++-
+ 3 files changed, 98 insertions(+), 8 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+index 5fa12edeb..1245cfc35 100644
+--- a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
++++ b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+@@ -34,6 +34,7 @@ struct TerminalSplitTreeView: View {
+             TerminalSplitSubtreeView(
+                 node: node,
+                 isRoot: node == tree.root,
++                windowEdges: [.top, .bottom, .leading, .trailing],
+                 action: action)
+             // This is necessary because we can't rely on SwiftUI's implicit
+             // structural identity to detect changes to this view. Due to
+@@ -49,18 +50,34 @@ private struct TerminalSplitSubtreeView: View {
+ 
+     let node: SplitTree<Ghostty.SurfaceView>.Node
+     var isRoot: Bool = false
++    /// Edges of this subtree that still touch the window chrome.
++    var windowEdges: Edge.Set = [.top, .bottom, .leading, .trailing]
+     let action: (TerminalSplitOperation) -> Void
+ 
+     var body: some View {
+         switch node {
+         case .leaf(let leafView):
+-            TerminalSplitLeaf(surfaceView: leafView, isSplit: !isRoot, action: action)
++            TerminalSplitLeaf(
++                surfaceView: leafView,
++                isSplit: !isRoot,
++                windowEdges: windowEdges,
++                action: action)
+ 
+         case .split(let split):
+             let splitViewDirection: SplitViewDirection = switch split.direction {
+             case .horizontal: .horizontal
+             case .vertical: .vertical
+             }
++            // Horizontal: left | right — left keeps leading, right keeps trailing.
++            // Vertical: top / bottom (left=top, right=bottom) — top keeps top, bottom keeps bottom.
++            let leftEdges: Edge.Set = switch split.direction {
++            case .horizontal: windowEdges.subtracting(.trailing)
++            case .vertical: windowEdges.subtracting(.bottom)
++            }
++            let rightEdges: Edge.Set = switch split.direction {
++            case .horizontal: windowEdges.subtracting(.leading)
++            case .vertical: windowEdges.subtracting(.top)
++            }
+ 
+             SplitView(
+                 splitViewDirection,
+@@ -72,10 +89,16 @@ private struct TerminalSplitSubtreeView: View {
+                 dividerColor: ghostty.config.splitDividerColor,
+                 resizeIncrements: .init(width: 1, height: 1),
+                 left: {
+-                    TerminalSplitSubtreeView(node: split.left, action: action)
++                    TerminalSplitSubtreeView(
++                        node: split.left,
++                        windowEdges: leftEdges,
++                        action: action)
+                 },
+                 right: {
+-                    TerminalSplitSubtreeView(node: split.right, action: action)
++                    TerminalSplitSubtreeView(
++                        node: split.right,
++                        windowEdges: rightEdges,
++                        action: action)
+                 },
+                 onEqualize: {
+                     guard let surface = node.leftmostLeaf().surface else { return }
+@@ -89,6 +112,7 @@ private struct TerminalSplitSubtreeView: View {
+ private struct TerminalSplitLeaf: View {
+     let surfaceView: Ghostty.SurfaceView
+     let isSplit: Bool
++    var windowEdges: Edge.Set = [.top, .bottom, .leading, .trailing]
+     let action: (TerminalSplitOperation) -> Void
+ 
+     @State private var dropState: DropState = .idle
+@@ -98,7 +122,8 @@ private struct TerminalSplitLeaf: View {
+         GeometryReader { geometry in
+             Ghostty.InspectableSurface(
+                 surfaceView: surfaceView,
+-                isSplit: isSplit)
++                isSplit: isSplit,
++                windowEdges: windowEdges)
+             .background {
+                 // If we're dragging ourself, we hide the entire drop zone. This makes
+                 // it so that a released drop animates back to its source properly
+diff --git a/macos/Sources/Ghostty/Surface View/InspectorView.swift b/macos/Sources/Ghostty/Surface View/InspectorView.swift
+index e7320c782..e54d77a79 100644
+--- a/macos/Sources/Ghostty/Surface View/InspectorView.swift	
++++ b/macos/Sources/Ghostty/Surface View/InspectorView.swift	
+@@ -11,6 +11,8 @@ extension Ghostty {
+         /// Same as SurfaceWrapper, see the doc comments there.
+         @ObservedObject var surfaceView: SurfaceView
+         var isSplit: Bool = false
++        /// Window edges this surface still touches (for outer corner radius).
++        var windowEdges: Edge.Set = [.top, .bottom, .leading, .trailing]
+ 
+         // Maintain whether our view has focus or not
+         @FocusState private var inspectorFocus: Bool
+@@ -24,10 +26,10 @@ extension Ghostty {
+ 
+             ZStack {
+                 if !surfaceView.inspectorVisible {
+-                    SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
++                    SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit, windowEdges: windowEdges)
+                 } else {
+                     SplitView(.vertical, $split, dividerColor: ghostty.config.splitDividerColor, left: {
+-                        SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
++                        SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit, windowEdges: windowEdges)
+                     }, right: {
+                         InspectorViewRepresentable(surfaceView: surfaceView)
+                             .focused($inspectorFocus)
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 9efe8484b..0ffff0c55 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -42,6 +42,9 @@ extension Ghostty {
+         // we know whether to dim the surface out of focus.
+         var isSplit: Bool = false
+ 
++        /// Edges of this pane that touch the window chrome (outer corner rounding).
++        var windowEdges: Edge.Set = [.top, .bottom, .leading, .trailing]
++
+         // Maintain whether our view has focus or not
+         @FocusState private var surfaceFocus: Bool
+ 
+@@ -93,6 +96,47 @@ extension Ghostty {
+ #endif
+         }
+ 
++
++        /// Fallback when `_cornerRadius` is unavailable (pre-Tahoe / private API).
++        /// Modest continuous radius so Sequoia-class windows still improve slightly.
++        private static let splitBorderCornerRadiusFallback: CGFloat = 10
++
++        /// System window corner radius via private `_cornerRadius` (same source as
++        /// TerminalViewContainer.glass), with product fallback.
++        private var resolvedWindowCornerRadius: CGFloat {
++#if canImport(AppKit)
++            if let window = surfaceView.window,
++               window.responds(to: Selector(("_cornerRadius"))),
++               let radius = window.value(forKey: "_cornerRadius") as? CGFloat,
++               radius > 0 {
++                return radius
++            }
++#endif
++            return Self.splitBorderCornerRadiusFallback
++        }
++
++        /// Outer stroke radii: window R only on corners that touch the window edge.
++        private func outerCornerRadii(windowRadius: CGFloat) -> RectangleCornerRadii {
++            let r = windowRadius
++            return RectangleCornerRadii(
++                topLeading: (windowEdges.contains(.top) && windowEdges.contains(.leading)) ? r : 0,
++                bottomLeading: (windowEdges.contains(.bottom) && windowEdges.contains(.leading)) ? r : 0,
++                bottomTrailing: (windowEdges.contains(.bottom) && windowEdges.contains(.trailing)) ? r : 0,
++                topTrailing: (windowEdges.contains(.top) && windowEdges.contains(.trailing)) ? r : 0
++            )
++        }
++
++        /// Inner content/dim clip radii: max(0, R - borderWidth) on the same outer corners.
++        private func innerCornerRadii(windowRadius: CGFloat, borderWidth: CGFloat) -> RectangleCornerRadii {
++            let r = max(0, windowRadius - borderWidth)
++            return RectangleCornerRadii(
++                topLeading: (windowEdges.contains(.top) && windowEdges.contains(.leading)) ? r : 0,
++                bottomLeading: (windowEdges.contains(.bottom) && windowEdges.contains(.leading)) ? r : 0,
++                bottomTrailing: (windowEdges.contains(.bottom) && windowEdges.contains(.trailing)) ? r : 0,
++                topTrailing: (windowEdges.contains(.top) && windowEdges.contains(.trailing)) ? r : 0
++            )
++        }
++
+         var body: some View {
+             let center = NotificationCenter.default
+ 
+@@ -150,6 +194,20 @@ extension Ghostty {
+                     }
+                 }
+                 .ghosttySurfaceView(surfaceView)
++                .clipShape(
++                    UnevenRoundedRectangle(
++                        cornerRadii: isSplit
++                            ? innerCornerRadii(
++                                windowRadius: resolvedWindowCornerRadius,
++                                borderWidth: CGFloat(ghostty.config.splitBorderWidth))
++                            : RectangleCornerRadii(
++                                topLeading: 0,
++                                bottomLeading: 0,
++                                bottomTrailing: 0,
++                                topTrailing: 0),
++                        style: .continuous
++                    )
++                )
+ 
+                 // Progress report
+                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
+@@ -257,7 +315,10 @@ extension Ghostty {
+                 if isSplit && !isFocusedSurface {
+                     let overlayOpacity = ghostty.config.unfocusedSplitOpacity
+                     if overlayOpacity > 0 {
+-                        Rectangle()
++                        let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
++                        let windowR = resolvedWindowCornerRadius
++                        let innerRadii = innerCornerRadii(windowRadius: windowR, borderWidth: borderWidth)
++                        UnevenRoundedRectangle(cornerRadii: innerRadii, style: .continuous)
+                             .fill(ghostty.config.unfocusedSplitFill)
+                             .allowsHitTesting(false)
+                             .opacity(overlayOpacity)
+@@ -272,6 +333,7 @@ extension Ghostty {
+                     let borderColor = isFocused ? focusedColor : unfocusedColor
+                     let colorKey = isFocused ? "focused-split-border-color" : "unfocused-split-border-color"
+                     let borderDrawn = borderWidth > 0 && borderColor != nil
++                    let windowR = resolvedWindowCornerRadius
+                     let _: Void = traceSplitBorderConfig(
+                         isFocused: isFocused,
+                         borderWidth: borderWidth,
+@@ -286,7 +348,8 @@ extension Ghostty {
+                             borderWidth: borderWidth,
+                             colorKey: colorKey
+                         )
+-                        Rectangle()
++                        let outerRadii = outerCornerRadii(windowRadius: windowR)
++                        UnevenRoundedRectangle(cornerRadii: outerRadii, style: .continuous)
+                             .strokeBorder(color, lineWidth: CGFloat(borderWidth))
+                             .allowsHitTesting(false)
+                     }
+-- 
+2.50.1 (Apple Git-155)
+

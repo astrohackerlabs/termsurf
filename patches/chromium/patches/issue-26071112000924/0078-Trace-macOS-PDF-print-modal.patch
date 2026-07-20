@@ -1,0 +1,252 @@
+From a42a12b9fe0e9a540ef529f936c530cf5383ef05 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 14:24:33 -0500
+Subject: [PATCH 078/119] Trace macOS PDF print modal
+
+The panel stepped on stage,
+Then froze before a line.
+We lit the wings with traces,
+To see where print declined.
+---
+ .../ts_pdf_print_manager.cc                   | 54 +++++++++++++++++++
+ printing/printing_context_mac.mm              | 52 +++++++++++++++++-
+ 2 files changed, 104 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.cc b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+index 371c80a3fe..325afb39d0 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+@@ -5,9 +5,16 @@
+ #include "content/libtermsurf_chromium/ts_pdf_print_manager.h"
+ 
+ #include <memory>
++#include <optional>
+ #include <string>
++#include <string_view>
+ 
++#include "base/environment.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/process/process_handle.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
+ #include "components/printing/browser/print_manager_utils.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+@@ -19,6 +26,37 @@
+ namespace termsurf {
+ namespace {
+ 
++bool IsTermSurfPdfNativePrintTraceEnabled() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE");
++  return enabled && *enabled == "1";
++}
++
++void TraceTermSurfPdfNativePrint(std::string_view event) {
++  if (!IsTermSurfPdfNativePrintTraceEnabled()) {
++    return;
++  }
++
++  LOG(INFO) << base::StrCat(
++      {"pdf-native-print pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=ts_pdf_print_manager.cc event=", event});
++}
++
++std::string ResultCodeTraceName(printing::mojom::ResultCode result) {
++  switch (result) {
++    case printing::mojom::ResultCode::kSuccess:
++      return "success";
++    case printing::mojom::ResultCode::kFailed:
++      return "failed";
++    case printing::mojom::ResultCode::kAccessDenied:
++      return "access-denied";
++    case printing::mojom::ResultCode::kCanceled:
++      return "canceled";
++  }
++  return "unknown";
++}
++
+ class TsPrintingContextDelegate : public printing::PrintingContext::Delegate {
+  public:
+   explicit TsPrintingContextDelegate(content::WebContents* web_contents)
+@@ -72,6 +110,9 @@ void TsPdfPrintManager::OnScriptedPrintSettingsReady(
+     printing::mojom::ScriptedPrintParamsPtr params,
+     printing::mojom::PrintManagerHost::ScriptedPrintCallback callback,
+     printing::mojom::ResultCode result) {
++  TraceTermSurfPdfNativePrint(
++      base::StrCat({"ts-scripted-print-callback-result-",
++                    ResultCodeTraceName(result)}));
+   if (result != printing::mojom::ResultCode::kSuccess) {
+     std::move(callback).Run(nullptr);
+     return;
+@@ -79,6 +120,7 @@ void TsPdfPrintManager::OnScriptedPrintSettingsReady(
+ 
+   auto settings = request->context->TakeAndResetSettings();
+   if (!settings) {
++    TraceTermSurfPdfNativePrint("ts-scripted-print-callback-settings-null");
+     std::move(callback).Run(nullptr);
+     return;
+   }
+@@ -87,11 +129,13 @@ void TsPdfPrintManager::OnScriptedPrintSettingsReady(
+   print_pages_params->params = CreatePrintParamsFromSettings(
+       *settings, printing::PrintSettings::NewCookie());
+   if (!print_pages_params->params) {
++    TraceTermSurfPdfNativePrint("ts-scripted-print-callback-params-null");
+     std::move(callback).Run(nullptr);
+     return;
+   }
+   print_pages_params->pages = settings->ranges();
+ 
++  TraceTermSurfPdfNativePrint("ts-scripted-print-callback-settings-ok");
+   std::move(callback).Run(std::move(print_pages_params));
+ }
+ 
+@@ -148,8 +192,16 @@ void TsPdfPrintManager::GetDefaultPrintSettings(
+ void TsPdfPrintManager::ScriptedPrint(
+     printing::mojom::ScriptedPrintParamsPtr params,
+     ScriptedPrintCallback callback) {
++  TraceTermSurfPdfNativePrint(
++      base::StrCat({"ts-scripted-print-enter expected_pages_count=",
++                    base::NumberToString(params->expected_pages_count),
++                    " has_selection=",
++                    params->has_selection ? "true" : "false",
++                    " is_scripted=", params->is_scripted ? "true" : "false",
++                    " cookie=", base::NumberToString(params->cookie)}));
+   auto request_iter = pending_print_requests_.find(params->cookie);
+   if (request_iter == pending_print_requests_.end()) {
++    TraceTermSurfPdfNativePrint("ts-scripted-print-missing-request");
+     std::move(callback).Run(nullptr);
+     return;
+   }
+@@ -157,11 +209,13 @@ void TsPdfPrintManager::ScriptedPrint(
+   std::unique_ptr<PrintRequest> request = std::move(request_iter->second);
+   pending_print_requests_.erase(request_iter);
+   if (!request->context) {
++    TraceTermSurfPdfNativePrint("ts-scripted-print-context-null");
+     std::move(callback).Run(nullptr);
+     return;
+   }
+ 
+   request->context->set_margin_type(params->margin_type);
++  TraceTermSurfPdfNativePrint("ts-scripted-print-call-ask-user-for-settings");
+   request->context->AskUserForSettings(
+       static_cast<int>(params->expected_pages_count), params->has_selection,
+       params->is_scripted,
+diff --git a/printing/printing_context_mac.mm b/printing/printing_context_mac.mm
+index 4f15b217fc..abad0b9c54 100644
+--- a/printing/printing_context_mac.mm
++++ b/printing/printing_context_mac.mm
+@@ -11,6 +11,8 @@
+ 
+ #import <iomanip>
+ #import <numeric>
++#include <optional>
++#include <string>
+ #include <string_view>
+ 
+ #include "base/apple/bridging.h"
+@@ -19,6 +21,11 @@
+ #include "base/apple/scoped_cftyperef.h"
+ #include "base/apple/scoped_typeref.h"
+ #include "base/check_op.h"
++#include "base/environment.h"
++#include "base/logging.h"
++#include "base/process/process_handle.h"
++#include "base/strings/strcat.h"
++#include "base/strings/string_number_conversions.h"
+ #include "base/strings/sys_string_conversions.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/values.h"
+@@ -68,6 +75,23 @@ using ScopedPMType = base::apple::ScopedTypeRef<T, ScopedPMTypeTraits<T>>;
+ 
+ const int kMaxPaperSizeDifferenceInPoints = 2;
+ 
++bool IsTermSurfPdfNativePrintTraceEnabled() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_NATIVE_PRINT_TRACE");
++  return enabled && *enabled == "1";
++}
++
++void TraceTermSurfPdfNativePrint(std::string_view event) {
++  if (!IsTermSurfPdfNativePrintTraceEnabled()) {
++    return;
++  }
++
++  LOG(INFO) << base::StrCat(
++      {"pdf-native-print pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=printing_context_mac.mm event=", event});
++}
++
+ // Return true if PPD name of paper is equal.
+ bool IsPaperNameEqual(CFStringRef name1, const PMPaper& paper2) {
+   CFStringRef name2 = nullptr;
+@@ -437,7 +461,11 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+   // Exceptions can also happen when the NSPrintPanel is being
+   // deallocated, so it must be autoreleased within this scope.
+   @autoreleasepool {
+-    DCHECK(NSThread.isMainThread);
++    const bool is_main_thread = NSThread.isMainThread;
++    TraceTermSurfPdfNativePrint(
++        base::StrCat({"mac-ask-user-enter main_thread=",
++                      is_main_thread ? "true" : "false"}));
++    DCHECK(is_main_thread);
+ 
+     // We deliberately don't feed max_pages into the dialog, because setting
+     // NSPrintLastPage makes the print dialog pre-select the option to only
+@@ -452,8 +480,15 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+ 
+     // Set the print job title text.
+     gfx::NativeView parent_view = delegate_->GetParentView();
++    TraceTermSurfPdfNativePrint(parent_view ? "mac-ask-user-parent-view-present"
++                                            : "mac-ask-user-parent-view-missing");
+     if (parent_view) {
+-      NSString* job_title = parent_view.GetNativeNSView().window.title;
++      NSView* parent_ns_view = parent_view.GetNativeNSView();
++      NSWindow* parent_window = parent_ns_view.window;
++      TraceTermSurfPdfNativePrint(
++          parent_window ? "mac-ask-user-parent-window-present"
++                        : "mac-ask-user-parent-window-missing");
++      NSString* job_title = parent_window.title;
+       if (job_title) {
+         PMPrintSettings print_settings =
+             static_cast<PMPrintSettings>([print_info_ PMPrintSettings]);
+@@ -471,8 +506,15 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+     // this code's POV the right answer is to defer running the panel until
+     // after the current transaction. See https://crbug.com/849538.
+     __block auto block_callback = std::move(callback);
++    TraceTermSurfPdfNativePrint("mac-ask-user-install-completion-block-enter");
+     [CATransaction setCompletionBlock:^{
++      TraceTermSurfPdfNativePrint("mac-ask-user-completion-block-enter");
++      TraceTermSurfPdfNativePrint("mac-ask-user-run-modal-enter");
+       NSInteger selection = [panel runModalWithPrintInfo:print_info_];
++      TraceTermSurfPdfNativePrint(
++          base::StrCat({"mac-ask-user-modal-response-",
++                        selection == NSModalResponseOK ? "ok" : "cancel",
++                        " code=", base::NumberToString(selection)}));
+       if (selection == NSModalResponseOK) {
+         print_info_ = [panel printInfo];
+         settings_->set_ranges(GetPageRangesFromPrintInfo());
+@@ -488,11 +530,17 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+           result = CaptureSystemPrintDialogData(print_info_, settings_.get());
+         }
+ #endif
++        TraceTermSurfPdfNativePrint(
++            base::StrCat({"mac-ask-user-callback-",
++                          result == mojom::ResultCode::kSuccess ? "success"
++                                                                 : "non-success"}));
+         std::move(block_callback).Run(result);
+       } else {
++        TraceTermSurfPdfNativePrint("mac-ask-user-callback-canceled");
+         std::move(block_callback).Run(mojom::ResultCode::kCanceled);
+       }
+     }];
++    TraceTermSurfPdfNativePrint("mac-ask-user-install-completion-block-exit");
+   }
+ }
+ 
+-- 
+2.54.0
+

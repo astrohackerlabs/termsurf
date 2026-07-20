@@ -1,0 +1,540 @@
+From f46875b20d754cbcc1557b9e39957d9589b87f2a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 19:21:47 -0500
+Subject: [PATCH 66/90] Add TermSurf JS dialogs
+
+Alerts tried to leave by door,
+Native bells rang out no more.
+Prompt and confirm now take the wire,
+Beforeunload walks through protocol fire.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../libtermsurf_chromium.cc                   |  54 ++++-
+ .../libtermsurf_chromium.h                    |  15 ++
+ .../ts_browser_main_parts.cc                  |  27 ++-
+ .../ts_browser_main_parts.h                   |   1 +
+ .../ts_javascript_dialog_manager.cc           | 188 ++++++++++++++++++
+ .../ts_javascript_dialog_manager.h            |  70 +++++++
+ 7 files changed, 354 insertions(+), 3 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+ create mode 100644 content/libtermsurf_chromium/ts_javascript_dialog_manager.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 432c55615c..b6ddd761b2 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -53,6 +53,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_renderer_client.h",
+     "ts_download_support.cc",
+     "ts_download_support.h",
++    "ts_javascript_dialog_manager.cc",
++    "ts_javascript_dialog_manager.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
+     "ts_mime_handler_binders.cc",
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index bbdeaae1b3..b9200ccb53 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -5,11 +5,14 @@
+ #include "content/libtermsurf_chromium/libtermsurf_chromium.h"
+ 
+ #include "base/functional/bind.h"
++#include "base/strings/utf_string_conversions.h"
+ #include "content/public/app/content_main.h"
+ #include "content/public/browser/browser_thread.h"
++#include "content/public/browser/web_contents.h"
+ #include "content/shell/browser/shell.h"
+-#include "content/libtermsurf_chromium/ts_main_delegate.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
++#include "content/libtermsurf_chromium/ts_main_delegate.h"
+ 
+ namespace {
+ 
+@@ -51,6 +54,16 @@ void* g_on_cursor_changed_data = nullptr;
+ void (*g_on_target_url_changed)(ts_web_contents_t, const char*, void*) = nullptr;
+ void* g_on_target_url_changed_data = nullptr;
+ 
++// JavaScript dialog callback.
++void (*g_on_javascript_dialog_request)(ts_web_contents_t,
++                                       uint64_t,
++                                       const char*,
++                                       const char*,
++                                       const char*,
++                                       const char*,
++                                       void*) = nullptr;
++void* g_on_javascript_dialog_request_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -100,6 +113,19 @@ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url) {
+     g_on_target_url_changed(wc_handle, url, g_on_target_url_changed_data);
+ }
+ 
++void TsNotifyJavaScriptDialogRequest(void* wc_handle,
++                                     uint64_t request_id,
++                                     const char* dialog_type,
++                                     const char* origin_url,
++                                     const char* message,
++                                     const char* default_prompt_text) {
++  if (g_on_javascript_dialog_request) {
++    g_on_javascript_dialog_request(
++        wc_handle, request_id, dialog_type, origin_url, message,
++        default_prompt_text, g_on_javascript_dialog_request_data);
++  }
++}
++
+ }  // namespace content
+ 
+ // --- C API Implementation ---
+@@ -240,6 +266,19 @@ void ts_set_view_size(ts_web_contents_t wc,
+                           screen_height, screen_scale);
+ }
+ 
++bool ts_reply_javascript_dialog(ts_web_contents_t wc,
++                                uint64_t request_id,
++                                bool accepted,
++                                const char* prompt_text) {
++  if (!wc) {
++    return false;
++  }
++  auto* web_contents = static_cast<content::WebContents*>(wc);
++  return content::TsJavaScriptDialogManager::Reply(
++      web_contents, request_id, accepted,
++      base::UTF8ToUTF16(prompt_text ? prompt_text : ""));
++}
++
+ void ts_set_on_tab_ready(
+     void (*cb)(ts_web_contents_t wc, int tab_id, void* user_data),
+     void* user_data) {
+@@ -290,3 +329,16 @@ void ts_set_on_target_url_changed(
+   g_on_target_url_changed = cb;
+   g_on_target_url_changed_data = user_data;
+ }
++
++void ts_set_on_javascript_dialog_request(
++    void (*cb)(ts_web_contents_t wc,
++               uint64_t request_id,
++               const char* dialog_type,
++               const char* origin_url,
++               const char* message,
++               const char* default_prompt_text,
++               void* user_data),
++    void* user_data) {
++  g_on_javascript_dialog_request = cb;
++  g_on_javascript_dialog_request_data = user_data;
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 66d3add2dd..2c41ccfc28 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -142,6 +142,11 @@ TS_EXPORT void ts_set_view_size(ts_web_contents_t wc,
+                                 double screen_height,
+                                 double screen_scale);
+ 
++TS_EXPORT bool ts_reply_javascript_dialog(ts_web_contents_t wc,
++                                          uint64_t request_id,
++                                          bool accepted,
++                                          const char* prompt_text);
++
+ /* --- Callbacks --- */
+ 
+ /* All callbacks fire on the UI thread. The wc parameter identifies which tab
+@@ -182,6 +187,16 @@ TS_EXPORT void ts_set_on_target_url_changed(
+     void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
+     void* user_data);
+ 
++TS_EXPORT void ts_set_on_javascript_dialog_request(
++    void (*cb)(ts_web_contents_t wc,
++               uint64_t request_id,
++               const char* dialog_type,
++               const char* origin_url,
++               const char* message,
++               const char* default_prompt_text,
++               void* user_data),
++    void* user_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1566dc5347..130c7f4d12 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -25,6 +25,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/ts_download_support.h"
++#include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+@@ -46,6 +47,7 @@
+ #include "extensions/browser/extensions_browser_client.h"
+ #include "extensions/common/extensions_client.h"
+ #include "ui/base/page_transition_types.h"
++#include "url/url_constants.h"
+ 
+ #if BUILDFLAG(IS_MAC)
+ #include "components/input/native_web_keyboard_event.h"
+@@ -56,6 +58,7 @@
+ #include "content/public/browser/context_factory.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_key.h"
+@@ -81,6 +84,13 @@ bool Issue794InputTraceEnabled() {
+   return enabled;
+ }
+ 
++void NotifyTermSurfInputActivation(WebContents* web_contents) {
++  if (auto* frame = web_contents->GetPrimaryMainFrame()) {
++    frame->NotifyUserActivation(
++        blink::mojom::UserActivationNotificationType::kInteraction);
++  }
++}
++
+ void LogIssue794InputFrames(const char* tag,
+                             WebContents* web_contents,
+                             int x,
+@@ -299,6 +309,11 @@ void TsBrowserMainParts::DestroyBrowserContext(void* ctx) {
+   // Custom contexts would be deleted here.
+ }
+ 
++std::unique_ptr<ShellPlatformDelegate>
++TsBrowserMainParts::CreateShellPlatformDelegate() {
++  return std::make_unique<TsShellPlatformDelegate>();
++}
++
+ // --- Tab management ---
+ 
+ void* TsBrowserMainParts::CreateTab(void* ctx,
+@@ -309,8 +324,8 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+   auto* browser_ctx = static_cast<ShellBrowserContext*>(ctx);
+-  Shell* shell =
+-      Shell::CreateNewWindow(browser_ctx, GURL(url), nullptr, gfx::Size());
++  Shell* shell = Shell::CreateNewWindow(browser_ctx, GURL(url::kAboutBlankURL),
++                                        nullptr, gfx::Size());
+ 
+ #if BUILDFLAG(IS_MAC)
+   ConfigureShellWindowForTermSurf(shell);
+@@ -453,6 +468,8 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+   tab->tab_observer = std::move(tab_observer);
+   tabs_.push_back(std::move(tab));
+ 
++  NavigateTab(handle, url);
++
+   return handle;
+ }
+ 
+@@ -762,6 +779,9 @@ void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle,
+                                    web_modifiers, base::TimeTicks::Now());
+ 
+   auto* web_contents = tab->shell->web_contents();
++  if (type == 0) {
++    NotifyTermSurfInputActivation(web_contents);
++  }
+   auto* view = web_contents->GetRenderWidgetHostView();
+   auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents);
+   auto* router =
+@@ -1004,6 +1024,9 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+   }
+ 
+   auto* web_contents = tab->shell->web_contents();
++  if (type != 1) {
++    NotifyTermSurfInputActivation(web_contents);
++  }
+   auto* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+     if (Issue794InputTraceEnabled()) {
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 7f039d699c..7d5f9daae5 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -114,6 +114,7 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+   // ShellBrowserMainParts override: fire C callback instead of starting socket.
+   void InitializeMessageLoopContext() override;
+   void InitializeBrowserContexts() override;
++  std::unique_ptr<ShellPlatformDelegate> CreateShellPlatformDelegate() override;
+   void PostMainMessageLoopRun() override;
+   void PostDestroyThreads() override;
+ 
+diff --git a/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+new file mode 100644
+index 0000000000..d006de0ada
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+@@ -0,0 +1,188 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
++
++#include <map>
++#include <utility>
++
++#include "base/check.h"
++#include "base/logging.h"
++#include "base/strings/utf_string_conversions.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "url/gurl.h"
++
++namespace content {
++namespace {
++
++struct PendingDialog {
++  PendingDialog(uint64_t request_id,
++                JavaScriptDialogManager::DialogClosedCallback callback)
++      : request_id(request_id), callback(std::move(callback)) {}
++
++  PendingDialog(PendingDialog&&) = default;
++  PendingDialog& operator=(PendingDialog&&) = default;
++
++  uint64_t request_id;
++  JavaScriptDialogManager::DialogClosedCallback callback;
++};
++
++std::map<WebContents*, PendingDialog>& PendingDialogs() {
++  static auto* pending = new std::map<WebContents*, PendingDialog>();
++  return *pending;
++}
++
++const char* DialogTypeToString(JavaScriptDialogType type) {
++  switch (type) {
++    case JAVASCRIPT_DIALOG_TYPE_ALERT:
++      return "alert";
++    case JAVASCRIPT_DIALOG_TYPE_CONFIRM:
++      return "confirm";
++    case JAVASCRIPT_DIALOG_TYPE_PROMPT:
++      return "prompt";
++  }
++}
++
++std::string OriginUrlFor(RenderFrameHost* render_frame_host) {
++  if (!render_frame_host) {
++    return std::string();
++  }
++  return render_frame_host->GetLastCommittedOrigin().GetURL().spec();
++}
++
++void RequestDialog(WebContents* web_contents,
++                   RenderFrameHost* render_frame_host,
++                   uint64_t request_id,
++                   const char* dialog_type,
++                   const std::u16string& message_text,
++                   const std::u16string& default_prompt_text,
++                   JavaScriptDialogManager::DialogClosedCallback callback) {
++  auto& pending = PendingDialogs();
++  auto [it, inserted] = pending.emplace(
++      web_contents, PendingDialog(request_id, std::move(callback)));
++  CHECK(inserted);
++
++  std::string origin_url = OriginUrlFor(render_frame_host);
++  std::string message = base::UTF16ToUTF8(message_text);
++  std::string default_prompt = base::UTF16ToUTF8(default_prompt_text);
++
++  LOG(INFO) << "[termsurf-js-dialog] request wc=" << web_contents
++            << " request_id=" << request_id << " type=" << dialog_type
++            << " origin=" << origin_url;
++
++  TsNotifyJavaScriptDialogRequest(static_cast<void*>(web_contents), request_id,
++                                  dialog_type, origin_url.c_str(),
++                                  message.c_str(), default_prompt.c_str());
++}
++
++}  // namespace
++
++TsJavaScriptDialogManager::TsJavaScriptDialogManager() = default;
++TsJavaScriptDialogManager::~TsJavaScriptDialogManager() = default;
++
++void TsJavaScriptDialogManager::RunJavaScriptDialog(
++    WebContents* web_contents,
++    RenderFrameHost* render_frame_host,
++    JavaScriptDialogType dialog_type,
++    const std::u16string& message_text,
++    const std::u16string& default_prompt_text,
++    DialogClosedCallback callback,
++    bool* did_suppress_message) {
++  *did_suppress_message = false;
++
++  auto& pending = PendingDialogs();
++  if (pending.contains(web_contents)) {
++    *did_suppress_message = true;
++    return;
++  }
++
++  RequestDialog(web_contents, render_frame_host, next_request_id_++,
++                DialogTypeToString(dialog_type), message_text,
++                default_prompt_text, std::move(callback));
++}
++
++void TsJavaScriptDialogManager::RunBeforeUnloadDialog(
++    WebContents* web_contents,
++    RenderFrameHost* render_frame_host,
++    bool is_reload,
++    DialogClosedCallback callback) {
++  auto& pending = PendingDialogs();
++  if (pending.contains(web_contents)) {
++    std::move(callback).Run(true, std::u16string());
++    return;
++  }
++
++  RequestDialog(web_contents, render_frame_host, next_request_id_++,
++                "beforeunload", u"Is it OK to leave this page?",
++                std::u16string(), std::move(callback));
++}
++
++bool TsJavaScriptDialogManager::HandleJavaScriptDialog(
++    WebContents* web_contents,
++    bool accept,
++    const std::u16string* prompt_override) {
++  auto& pending = PendingDialogs();
++  auto it = pending.find(web_contents);
++  if (it == pending.end()) {
++    return false;
++  }
++
++  std::u16string prompt_text;
++  if (prompt_override) {
++    prompt_text = *prompt_override;
++  }
++
++  auto callback = std::move(it->second.callback);
++  uint64_t request_id = it->second.request_id;
++  pending.erase(it);
++  LOG(INFO) << "[termsurf-js-dialog] handle wc=" << web_contents
++            << " request_id=" << request_id << " accepted=" << accept;
++  std::move(callback).Run(accept, prompt_text);
++  return true;
++}
++
++void TsJavaScriptDialogManager::CancelDialogs(WebContents* web_contents,
++                                              bool reset_state) {
++  Reply(web_contents, 0, false, std::u16string());
++}
++
++bool TsJavaScriptDialogManager::Reply(WebContents* web_contents,
++                                      uint64_t request_id,
++                                      bool accepted,
++                                      const std::u16string& prompt_text) {
++  auto& pending = PendingDialogs();
++  auto it = pending.find(web_contents);
++  if (it == pending.end()) {
++    LOG(WARNING) << "[termsurf-js-dialog] reply-missing wc=" << web_contents
++                 << " request_id=" << request_id;
++    return false;
++  }
++
++  if (request_id != 0 && it->second.request_id != request_id) {
++    LOG(WARNING) << "[termsurf-js-dialog] reply-mismatch wc=" << web_contents
++                 << " expected=" << it->second.request_id
++                 << " got=" << request_id;
++    return false;
++  }
++
++  auto callback = std::move(it->second.callback);
++  uint64_t stored_request_id = it->second.request_id;
++  pending.erase(it);
++  LOG(INFO) << "[termsurf-js-dialog] reply wc=" << web_contents
++            << " request_id=" << stored_request_id
++            << " accepted=" << accepted;
++  std::move(callback).Run(accepted, prompt_text);
++  return true;
++}
++
++TsShellPlatformDelegate::TsShellPlatformDelegate() = default;
++TsShellPlatformDelegate::~TsShellPlatformDelegate() = default;
++
++std::unique_ptr<JavaScriptDialogManager>
++TsShellPlatformDelegate::CreateJavaScriptDialogManager(Shell* shell) {
++  return std::make_unique<TsJavaScriptDialogManager>();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_javascript_dialog_manager.h b/content/libtermsurf_chromium/ts_javascript_dialog_manager.h
+new file mode 100644
+index 0000000000..dd63f867bf
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_javascript_dialog_manager.h
+@@ -0,0 +1,70 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_JAVASCRIPT_DIALOG_MANAGER_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_JAVASCRIPT_DIALOG_MANAGER_H_
++
++#include <stdint.h>
++
++#include <memory>
++#include <string>
++
++#include "content/public/browser/javascript_dialog_manager.h"
++#include "content/shell/browser/shell_platform_delegate.h"
++
++namespace content {
++
++void TsNotifyJavaScriptDialogRequest(void* wc_handle,
++                                     uint64_t request_id,
++                                     const char* dialog_type,
++                                     const char* origin_url,
++                                     const char* message,
++                                     const char* default_prompt_text);
++
++class TsJavaScriptDialogManager : public JavaScriptDialogManager {
++ public:
++  TsJavaScriptDialogManager();
++  ~TsJavaScriptDialogManager() override;
++
++  TsJavaScriptDialogManager(const TsJavaScriptDialogManager&) = delete;
++  TsJavaScriptDialogManager& operator=(const TsJavaScriptDialogManager&) =
++      delete;
++
++  void RunJavaScriptDialog(WebContents* web_contents,
++                           RenderFrameHost* render_frame_host,
++                           JavaScriptDialogType dialog_type,
++                           const std::u16string& message_text,
++                           const std::u16string& default_prompt_text,
++                           DialogClosedCallback callback,
++                           bool* did_suppress_message) override;
++  void RunBeforeUnloadDialog(WebContents* web_contents,
++                             RenderFrameHost* render_frame_host,
++                             bool is_reload,
++                             DialogClosedCallback callback) override;
++  bool HandleJavaScriptDialog(WebContents* web_contents,
++                              bool accept,
++                              const std::u16string* prompt_override) override;
++  void CancelDialogs(WebContents* web_contents, bool reset_state) override;
++
++  static bool Reply(WebContents* web_contents,
++                    uint64_t request_id,
++                    bool accepted,
++                    const std::u16string& prompt_text);
++
++ private:
++  uint64_t next_request_id_ = 1;
++};
++
++class TsShellPlatformDelegate : public ShellPlatformDelegate {
++ public:
++  TsShellPlatformDelegate();
++  ~TsShellPlatformDelegate() override;
++
++  std::unique_ptr<JavaScriptDialogManager> CreateJavaScriptDialogManager(
++      Shell* shell) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_JAVASCRIPT_DIALOG_MANAGER_H_
+-- 
+2.54.0
+

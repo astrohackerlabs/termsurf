@@ -1,0 +1,417 @@
+syntax = "proto3";
+package termsurf;
+
+// Wrapper — every message on the wire is one of these.
+message TermSurfMessage {
+  // Former app lifecycle oneof tags (OpenApp / OpenAppReply / CloseAppFrontend).
+  reserved 40, 41, 42;
+
+  oneof msg {
+    // Tab lifecycle (GUI → Chromium)
+    CreateTab create_tab = 1;
+    CreateDevtoolsTab create_devtools_tab = 2;
+    Resize resize = 3;
+    CloseTab close_tab = 4;
+
+    // Navigation (GUI → engine, TUI → GUI)
+    Navigate navigate = 5;
+
+    // Input (GUI → Chromium)
+    MouseEvent mouse_event = 6;
+    MouseMove mouse_move = 7;
+    ScrollEvent scroll_event = 8;
+    KeyEvent key_event = 9;
+
+    // State (GUI → Chromium)
+    FocusChanged focus_changed = 10;
+    SetColorScheme set_color_scheme = 11;
+    SetGuiActive set_gui_active = 33;
+
+    // Chromium → GUI
+    ServerRegister server_register = 12;
+    TabReady tab_ready = 13;
+    CaContext ca_context = 14;
+    UrlChanged url_changed = 15;
+    LoadingState loading_state = 16;
+    TitleChanged title_changed = 17;
+    CursorChanged cursor_changed = 18;
+    TargetUrlChanged target_url_changed = 32;
+
+    // TUI → GUI
+    SetOverlay set_overlay = 19;
+    SetDevtoolsOverlay set_devtools_overlay = 20;
+    OpenSplit open_split = 21;
+
+    // GUI → TUI
+    ModeChanged mode_changed = 22;
+
+    // Request/reply pairs (TUI ↔ GUI)
+    HelloRequest hello_request = 23;
+    HelloReply hello_reply = 24;
+    QueryLastRequest query_last_request = 25;
+    QueryLastReply query_last_reply = 26;
+    QueryDevtoolsRequest query_devtools_request = 27;
+    QueryDevtoolsReply query_devtools_reply = 28;
+    QueryTabsRequest query_tabs_request = 29;
+    QueryTabsReply query_tabs_reply = 30;
+
+    // GUI → TUI (direct browser connection)
+    BrowserReady browser_ready = 31;
+
+    // JavaScript dialogs (Chromium ↔ TUI / automation harness)
+    JavaScriptDialogRequest javascript_dialog_request = 34;
+    JavaScriptDialogReply javascript_dialog_reply = 35;
+
+    // Console capture (Chromium → TUI / automation harness)
+    ConsoleMessage console_message = 36;
+
+    // HTTP auth (Chromium ↔ TUI / automation harness)
+    HttpAuthRequest http_auth_request = 37;
+    HttpAuthReply http_auth_reply = 38;
+
+    // Renderer crash recovery (Chromium → TUI / automation harness)
+    RendererCrashed renderer_crashed = 39;
+
+    // Generic render surface metadata (engine → GUI)
+    RenderSurface render_surface = 43;
+
+    // Semantic navigation (TUI → GUI → engine, engine → GUI → TUI)
+    // Tag 44 intentionally remains unused. Tags 45/46 preserve the historical
+    // TermSurf wire assignment for this contract.
+    NavigationAction navigation_action = 45;
+    NavigationState navigation_state = 46;
+  }
+}
+
+// --- Tab lifecycle ---
+
+message CreateTab {
+  string url = 1;
+  string pane_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+  bool dark = 5;
+}
+
+message CreateDevtoolsTab {
+  string pane_id = 1;
+  int64 inspected_tab_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+  bool dark = 5;
+}
+
+message Resize {
+  int64 tab_id = 1;
+  uint64 pixel_width = 2;
+  uint64 pixel_height = 3;
+  double screen_x = 4;       // Chromium-style screen DIP, top-left origin
+  double screen_y = 5;       // Chromium-style screen DIP, top-left origin
+  double screen_width = 6;   // Chromium-style screen DIP
+  double screen_height = 7;  // Chromium-style screen DIP
+  double screen_scale = 8;   // backing scale for the screen rect
+}
+
+message CloseTab {
+  int64 tab_id = 1;
+}
+
+// --- Navigation ---
+
+message Navigate {
+  int64 tab_id = 1;      // nonzero when GUI → engine
+  string pane_id = 2;    // nonempty when TUI → GUI
+  string url = 3;
+}
+
+// TUI → GUI: tab_id=0, pane_id identifies the owning pane.
+// GUI → engine: tab_id identifies the native tab, pane_id is empty.
+// Legal actions are "back", "forward", and "refresh".
+message NavigationAction {
+  int64 tab_id = 1;
+  string pane_id = 2;
+  string action = 3;
+  uint64 request_id = 4; // zero TUI -> GUI; nonzero GUI -> engine for Refresh
+}
+
+// Engine → GUI → TUI. State is authoritative for exactly one native tab.
+message NavigationState {
+  int64 tab_id = 1;
+  bool can_go_back = 2;
+  bool can_go_forward = 3;
+  bool can_refresh = 4;
+}
+
+// --- Input ---
+
+message MouseEvent {
+  int64 tab_id = 1;
+  string type = 2;       // "down" or "up"
+  string button = 3;     // "left", "right", "middle"
+  double x = 4;
+  double y = 5;
+  int64 click_count = 6;
+  uint64 modifiers = 7;
+}
+
+message MouseMove {
+  int64 tab_id = 1;
+  double x = 2;
+  double y = 3;
+  uint64 modifiers = 4;
+}
+
+message ScrollEvent {
+  int64 tab_id = 1;
+  double x = 2;
+  double y = 3;
+  double delta_x = 4;
+  double delta_y = 5;
+  uint64 phase = 6;
+  uint64 momentum_phase = 7;
+  bool precise = 8;
+  uint64 modifiers = 9;
+}
+
+message KeyEvent {
+  int64 tab_id = 1;
+  string type = 2;       // "down", "up", "repeat"
+  int64 windows_key_code = 3;
+  string utf8 = 4;
+  uint64 modifiers = 5;
+}
+
+// --- State ---
+
+message FocusChanged {
+  int64 tab_id = 1;
+  bool focused = 2;
+}
+
+message SetColorScheme {
+  int64 tab_id = 1;      // nonzero when GUI → Chromium
+  string pane_id = 2;    // nonempty when TUI → GUI
+  bool dark = 3;
+}
+
+message SetGuiActive {
+  int64 tab_id = 1;      // 0 = all tabs in receiving browser process
+  bool active = 2;
+  string reason = 3;
+}
+
+// --- Chromium → GUI ---
+
+message ServerRegister {
+  string profile = 1;
+  string browser = 2;
+}
+
+message TabReady {
+  string pane_id = 1;
+  int64 tab_id = 2;
+}
+
+message CaContext {
+  int64 tab_id = 1;
+  uint64 ca_context_id = 2;
+  uint64 pixel_width = 3;
+  uint64 pixel_height = 4;
+}
+
+message RenderSurface {
+  int64 tab_id = 1;
+  uint64 pixel_width = 2;
+  uint64 pixel_height = 3;
+  uint64 bytes_per_row = 4;
+  uint32 pixel_format = 5;
+  uint64 generation = 6;
+  uint64 attachment_id = 7;  // 0 = metadata-only; no attachment match proved
+}
+
+message UrlChanged {
+  int64 tab_id = 1;
+  string url = 2;
+}
+
+message LoadingState {
+  int64 tab_id = 1;
+  string state = 2;      // "loading", "progress", "done", "error"
+  uint64 progress = 3;   // 0-100
+  uint64 navigation_request_id = 4; // nonzero only for a correlated Refresh
+}
+
+message TitleChanged {
+  int64 tab_id = 1;
+  string title = 2;
+}
+
+message CursorChanged {
+  int64 tab_id = 1;
+  int64 cursor_type = 2;
+}
+
+message TargetUrlChanged {
+  int64 tab_id = 1;
+  string url = 2;    // empty = hover ended
+}
+
+message JavaScriptDialogRequest {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  string dialog_type = 3;          // "alert", "confirm", "prompt", "beforeunload"
+  string origin_url = 4;
+  string message = 5;
+  string default_prompt_text = 6;
+}
+
+message JavaScriptDialogReply {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  bool accepted = 3;
+  string prompt_text = 4;
+}
+
+message ConsoleMessage {
+  int64 tab_id = 1;
+  string level = 2;
+  string message = 3;
+  int32 line_no = 4;
+  string source_id = 5;
+}
+
+message HttpAuthRequest {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  string url = 3;
+  string auth_scheme = 4;
+  string challenger = 5;
+  string realm = 6;
+  bool is_proxy = 7;
+  bool first_auth_attempt = 8;
+  bool is_primary_main_frame_navigation = 9;
+  bool is_navigation = 10;
+}
+
+message HttpAuthReply {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  bool accepted = 3;
+  string username = 4;
+  string password = 5;
+}
+
+message RendererCrashed {
+  int64 tab_id = 1;
+  string termination_status = 2;
+  int32 termination_status_code = 3;
+  string url = 4;
+  bool can_reload = 5;
+}
+
+// --- TUI → GUI ---
+
+message SetOverlay {
+  string pane_id = 1;
+  uint64 col = 2;
+  uint64 row = 3;
+  uint64 width = 4;
+  uint64 height = 5;
+  string url = 6;
+  string profile = 7;
+  bool browsing = 8;
+  string browser = 9;
+}
+
+message SetDevtoolsOverlay {
+  string pane_id = 1;
+  uint64 col = 2;
+  uint64 row = 3;
+  uint64 width = 4;
+  uint64 height = 5;
+  string profile = 6;
+  bool browsing = 7;
+  int64 inspected_tab_id = 8;
+  string browser = 9;
+}
+
+message OpenSplit {
+  string pane_id = 1;
+  string direction = 2;  // "horizontal" or "vertical"
+  string command = 3;
+}
+
+
+
+
+// --- GUI → TUI ---
+
+message ModeChanged {
+  bool browsing = 1;
+  string pane_id = 2;    // nonempty when TUI → GUI
+}
+
+message BrowserReady {
+  string pane_id = 1;
+  int64 tab_id = 2;
+  string browser_socket = 3;
+  string browser = 4;
+}
+
+// --- Request/reply pairs ---
+
+message HelloRequest {
+  string pane_id = 1;
+}
+
+message HelloReply {
+  string homepage = 1;
+  repeated string browsers = 2;
+}
+
+message QueryLastRequest {
+  string pane_id = 1;
+  string profile = 2;
+}
+
+message QueryLastReply {
+  string pane_id = 1;
+  int64 tab_id = 2;
+  string profile = 3;
+  string error = 4;
+}
+
+message QueryDevtoolsRequest {
+  string pane_id = 1;
+  int64 inspected_tab_id = 2;
+  string profile = 3;
+  string browser = 4;
+}
+
+message QueryDevtoolsReply {
+  int64 tab_id = 1;
+  string error = 2;
+  string browser = 3;
+  string profile = 4;
+}
+
+message QueryTabsRequest {
+  string pane_id = 1;
+  string profile = 2;
+}
+
+message TabInfo {
+  int64 id = 1;
+  int64 inspected_tab_id = 2;
+  string pane_id = 3;
+  string url = 4;
+}
+
+message QueryTabsReply {
+  int64 gui_panes = 1;
+  int64 chromium_tabs = 2;
+  int64 chromium_browser = 3;
+  int64 chromium_devtools = 4;
+  repeated TabInfo tabs = 5;
+  string error = 6;
+}

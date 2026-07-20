@@ -1,0 +1,72 @@
+From 95b4c3555df1a301a6585200f7c362463acf0b42 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 14:56:39 -0500
+Subject: [PATCH] Fix progress bar clip to inset content box
+
+Clip at R-w on the full pane was not concentric with the outer
+stroke; lay out and clip the bar in the inset content rect.
+---
+ .../Ghostty/Surface View/SurfaceView.swift    | 38 +++++++++++--------
+ 1 file changed, 22 insertions(+), 16 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 01d270b77..d3bb0c828 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -204,9 +204,11 @@ extension Ghostty {
+                     )
+                 )
+ 
+-                // Progress report (OSC / TermSurf load). Clip to the same inner
+-                // rounded content region as the surface so the bar does not leak
+-                // past rounded split borders. Colors follow the theme palette.
++                // Progress report (OSC / TermSurf load). Colors follow the theme
++                // palette. Clip geometry must be **concentric** with the border:
++                // inset content box by w, radius max(0, R−w) — not R−w on the
++                // full pane (that is looser in the corners and leaks past the
++                // stroke).
+                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
+                     let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
+                     let borderInset = CGFloat(isSplit ? borderWidth : 0)
+@@ -215,21 +217,25 @@ extension Ghostty {
+                             effectiveRadius: effectiveSplitBorderCornerRadius,
+                             borderWidth: borderWidth)
+                         : 0
+-                    VStack(spacing: 0) {
+-                        SurfaceProgressBar(
+-                            report: progressReport,
+-                            colors: ghostty.config.progressBarColors
++                    GeometryReader { geo in
++                        let contentW = max(10, geo.size.width - borderInset * 2)
++                        let contentH = max(10, geo.size.height - borderInset * 2)
++                        VStack(spacing: 0) {
++                            SurfaceProgressBar(
++                                report: progressReport,
++                                colors: ghostty.config.progressBarColors
++                            )
++                            Spacer(minLength: 0)
++                        }
++                        .frame(width: contentW, height: contentH, alignment: .top)
++                        .clipShape(
++                            RoundedRectangle(
++                                cornerRadius: progressInnerR,
++                                style: .continuous
++                            )
+                         )
+-                        Spacer()
++                        .offset(x: borderInset, y: borderInset)
+                     }
+-                    .padding(borderInset)
+-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+-                    .clipShape(
+-                        RoundedRectangle(
+-                            cornerRadius: progressInnerR,
+-                            style: .continuous
+-                        )
+-                    )
+                     .allowsHitTesting(false)
+                     .transition(.opacity)
+                 }
+-- 
+2.50.1 (Apple Git-155)
+

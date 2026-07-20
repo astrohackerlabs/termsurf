@@ -1,0 +1,60 @@
+From 3f6081109ebea8e41b7afa803ecfca4801dcd8d6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:40:44 -0500
+Subject: [PATCH 104/122] issue-924: port TsPdfPrintManager to Chromium 150
+ PrintManagerHost
+
+Drop UpdatePrintSettings; add GetPrintPreviewParams; fix
+ShowScriptedPrintPreview signature for mojom host contract.
+---
+ content/libtermsurf_chromium/ts_pdf_print_manager.cc | 8 ++++----
+ content/libtermsurf_chromium/ts_pdf_print_manager.h  | 5 ++---
+ 2 files changed, 6 insertions(+), 7 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.cc b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+index 325afb39d0..b1b8e56d2c 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+@@ -225,9 +225,9 @@ void TsPdfPrintManager::ScriptedPrint(
+ }
+ 
+ #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+-void TsPdfPrintManager::UpdatePrintSettings(
+-    base::DictValue job_settings,
+-    UpdatePrintSettingsCallback callback) {
++void TsPdfPrintManager::GetPrintPreviewParams(
++    GetPrintPreviewParamsCallback callback) {
++  // Contained PDF path uses system/native print, not scripted preview.
+   std::move(callback).Run(nullptr);
+ }
+ 
+@@ -236,7 +236,7 @@ void TsPdfPrintManager::SetupScriptedPrintPreview(
+   std::move(callback).Run();
+ }
+ 
+-void TsPdfPrintManager::ShowScriptedPrintPreview(bool source_is_modifiable) {}
++void TsPdfPrintManager::ShowScriptedPrintPreview() {}
+ 
+ void TsPdfPrintManager::RequestPrintPreview(
+     printing::mojom::RequestPrintPreviewParamsPtr params) {}
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.h b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+index f79e13babc..080bc5cbeb 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.h
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+@@ -52,11 +52,10 @@ class TsPdfPrintManager
+                      ScriptedPrintCallback callback) override;
+ 
+ #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+-  void UpdatePrintSettings(base::DictValue job_settings,
+-                           UpdatePrintSettingsCallback callback) override;
++  void GetPrintPreviewParams(GetPrintPreviewParamsCallback callback) override;
+   void SetupScriptedPrintPreview(
+       SetupScriptedPrintPreviewCallback callback) override;
+-  void ShowScriptedPrintPreview(bool source_is_modifiable) override;
++  void ShowScriptedPrintPreview() override;
+   void RequestPrintPreview(
+       printing::mojom::RequestPrintPreviewParamsPtr params) override;
+   void CheckForCancel(int32_t preview_ui_id,
+-- 
+2.50.1 (Apple Git-155)
+

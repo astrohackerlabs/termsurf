@@ -1,0 +1,436 @@
+From abba707e84f9ba7398ab3d031fa4178b25a70aba Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 1 Jul 2026 20:59:30 -0500
+Subject: [PATCH] Add persistent TermSurf Ladybird ABI handles
+
+The one-shot bird learned not to flee,
+It keeps a perch for Rust and C.
+Views now linger, pumps now tick,
+And bad calls fail politely quick.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 342 ++++++++++++++++--
+ 1 file changed, 308 insertions(+), 34 deletions(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index e0739111b3..79afa8e111 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -4,6 +4,8 @@
+  * SPDX-License-Identifier: BSD-2-Clause
+  */
+ 
++#include <AK/ByteString.h>
++#include <AK/OwnPtr.h>
+ #include <AK/String.h>
+ #include <AK/StringView.h>
+ #include <AK/Vector.h>
+@@ -12,11 +14,13 @@
+ #include <LibCore/System.h>
+ #include <LibGfx/SystemTheme.h>
+ #include <LibMain/Main.h>
++#include <LibURL/Parser.h>
+ #include <LibURL/URL.h>
+ #include <LibWeb/Bindings/Navigation.h>
+ #include <LibWebView/Application.h>
+ #include <LibWebView/HeadlessWebView.h>
+ #include <LibWebView/Options.h>
++#include <pthread.h>
+ #include <string.h>
+ #include <time.h>
+ 
+@@ -53,7 +57,95 @@ static ErrorOr<Core::AnonymousBuffer> load_default_theme()
+     return buffer;
+ }
+ 
+-static ErrorOr<int> run_headless_lifecycle_probe()
++}
++
++struct TsLadybirdRuntime {
++    OwnPtr<TermSurfLadybirdApplication> app;
++    ByteString last_error;
++    pthread_t owner_thread {};
++    bool destroyed { false };
++};
++
++struct TsLadybirdView {
++    TsLadybirdRuntime* runtime { nullptr };
++    OwnPtr<WebView::HeadlessWebView> view;
++    ByteString last_url;
++    bool did_finish_load { false };
++    bool did_crash { false };
++    bool destroyed { false };
++};
++
++extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
++extern "C" void ts_ladybird_runtime_destroy(TsLadybirdRuntime*);
++extern "C" bool ts_ladybird_runtime_pump(TsLadybirdRuntime*);
++extern "C" char const* ts_ladybird_runtime_last_error(TsLadybirdRuntime const*);
++extern "C" TsLadybirdView* ts_ladybird_view_create(TsLadybirdRuntime*, int, int);
++extern "C" void ts_ladybird_view_destroy(TsLadybirdView*);
++extern "C" bool ts_ladybird_view_load_url(TsLadybirdView*, char const*);
++extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
++extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
++extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
++
++namespace {
++
++static TsLadybirdRuntime* s_runtime = nullptr;
++static ByteString s_global_last_error;
++
++static bool runtime_is_on_owner_thread(TsLadybirdRuntime const& runtime)
++{
++    return pthread_equal(pthread_self(), runtime.owner_thread);
++}
++
++static void set_global_error(ByteString error)
++{
++    s_global_last_error = move(error);
++}
++
++static void set_runtime_error(TsLadybirdRuntime* runtime, ByteString error)
++{
++    if (runtime)
++        runtime->last_error = move(error);
++    else
++        set_global_error(move(error));
++}
++
++static bool validate_runtime(TsLadybirdRuntime* runtime)
++{
++    if (!runtime) {
++        set_global_error("runtime is null");
++        return false;
++    }
++    if (runtime->destroyed) {
++        set_runtime_error(runtime, "runtime is destroyed");
++        return false;
++    }
++    if (!runtime_is_on_owner_thread(*runtime)) {
++        set_runtime_error(runtime, "runtime used from non-owner thread");
++        return false;
++    }
++    return true;
++}
++
++static bool validate_view(TsLadybirdView* view)
++{
++    if (!view) {
++        set_global_error("view is null");
++        return false;
++    }
++    if (view->destroyed) {
++        set_runtime_error(view->runtime, "view is destroyed");
++        return false;
++    }
++    if (!validate_runtime(view->runtime))
++        return false;
++    if (!view->view) {
++        set_runtime_error(view->runtime, "view has no Ladybird object");
++        return false;
++    }
++    return true;
++}
++
++static ErrorOr<OwnPtr<TermSurfLadybirdApplication>> create_application()
+ {
+     tzset();
+ 
+@@ -68,58 +160,98 @@ static ErrorOr<int> run_headless_lifecycle_probe()
+     };
+ 
+ #if defined(LADYBIRD_BINARY_PATH)
+-    auto app = TRY(TermSurfLadybirdApplication::create(arguments, LADYBIRD_BINARY_PATH));
++    return TRY(TermSurfLadybirdApplication::create(arguments, LADYBIRD_BINARY_PATH));
+ #else
+-    auto app = TRY(TermSurfLadybirdApplication::create(arguments, OptionalNone {}));
++    return TRY(TermSurfLadybirdApplication::create(arguments, OptionalNone {}));
+ #endif
++}
+ 
++static ErrorOr<OwnPtr<WebView::HeadlessWebView>> create_headless_view()
++{
+     auto theme = TRY(load_default_theme());
+     auto view = WebView::HeadlessWebView::create(move(theme), { 800, 600 });
+-    outln("TIER2: TermSurf Ladybird ABI constructed HeadlessWebView handle={}", view->handle());
+-
+-    bool finished = false;
+-    bool crashed = false;
+-    bool timed_out = false;
++    return view;
++}
+ 
+-    view->on_load_finish = [&](URL::URL const& url) {
+-        outln("PROBE: TermSurf Ladybird ABI load_finish url={}", url.serialize());
+-        if (url.scheme() == "data"sv) {
+-            outln("TIER3: TermSurf Ladybird ABI load_finish url={}", url.serialize());
+-            finished = true;
++static bool pump_until_finished(TsLadybirdRuntime* runtime, TsLadybirdView* view)
++{
++    for (u32 elapsed_ms = 0; elapsed_ms < 30'000; elapsed_ms += 5) {
++        if (view->did_finish_load || view->did_crash)
++            return true;
++        if (!ts_ladybird_runtime_pump(runtime))
++            return false;
++        if (Core::System::sleep_ms(5).is_error()) {
++            set_runtime_error(runtime, "sleep while pumping failed");
++            return false;
+         }
+-    };
+-    view->on_web_content_crashed = [&] {
+-        crashed = true;
+-    };
++    }
++
++    set_runtime_error(runtime, "timed out waiting for view load");
++    return false;
++}
++
++static bool run_headless_lifecycle_probe()
++{
++    auto* runtime = ts_ladybird_runtime_create();
++    if (!runtime)
++        return false;
+ 
+-    auto url = URL::create_with_data("text/html"sv, "<title>Girlbat ABI</title><p>ok</p>"sv);
+-    view->load(url, Web::Bindings::NavigationHistoryBehavior::Auto);
++    outln("PROBE: TermSurf Ladybird ABI runtime created");
+ 
+-    auto& event_loop = Core::EventLoop::current();
+-    for (u32 elapsed_ms = 0; elapsed_ms < 30'000 && !finished && !crashed; elapsed_ms += 5) {
+-        (void)event_loop.pump(Core::EventLoop::WaitMode::PollForEvents);
+-        TRY(Core::System::sleep_ms(5));
++    auto* view = ts_ladybird_view_create(runtime, 800, 600);
++    if (!view) {
++        ts_ladybird_runtime_destroy(runtime);
++        return false;
+     }
+ 
+-    if (!finished && !crashed)
+-        timed_out = true;
++    outln("PROBE: TermSurf Ladybird ABI view created");
++
++    auto const* url = "data:text/html,%3Ctitle%3EGirlbat%20ABI%3C/title%3E%3Cp%3Eok%3C/p%3E";
++    if (!ts_ladybird_view_load_url(view, url)) {
++        ts_ladybird_view_destroy(view);
++        ts_ladybird_runtime_destroy(runtime);
++        return false;
++    }
++
++    outln("PROBE: TermSurf Ladybird ABI navigation requested url={}", url);
++
++    bool ok = pump_until_finished(runtime, view) && ts_ladybird_view_did_finish_load(view) && !ts_ladybird_view_did_crash(view);
++    if (ok) {
++        outln("PROBE: TermSurf Ladybird ABI bounded pump completed");
++        outln("PROBE: TermSurf Ladybird ABI final url={}", ts_ladybird_view_last_url(view));
++        outln("PASS: TermSurf Ladybird ABI lifecycle probe reached Tier 3");
++    }
+ 
+-    if (crashed || timed_out || !finished)
+-        return 1;
++    ts_ladybird_view_destroy(view);
++    outln("PROBE: TermSurf Ladybird ABI view destroyed");
++    ts_ladybird_runtime_destroy(runtime);
++    outln("PROBE: TermSurf Ladybird ABI runtime destroyed");
+ 
+-    outln("PASS: TermSurf Ladybird ABI lifecycle probe reached Tier 3");
+-    return 0;
++    return ok;
+ }
+ 
+ }
+ 
+ #define TERMSURF_LADYBIRD_EXPORT extern "C" __attribute__((visibility("default")))
+ 
++struct TsLadybirdRuntime;
++struct TsLadybirdView;
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name();
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version();
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup();
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_initialize_runtime();
+ TERMSURF_LADYBIRD_EXPORT void ts_ladybird_shutdown_runtime();
++TERMSURF_LADYBIRD_EXPORT TsLadybirdRuntime* ts_ladybird_runtime_create();
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_runtime_destroy(TsLadybirdRuntime*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_runtime_pump(TsLadybirdRuntime*);
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_last_error(TsLadybirdRuntime const*);
++TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRuntime*, int, int);
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_view_destroy(TsLadybirdView*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView*, char const*);
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ {
+@@ -128,17 +260,16 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-ladybird-c-abi-lifecycle";
++    return "ladybird-a80d01fc-issue-0884-persistent-ladybird-abi-handles";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+ {
+-    auto result = run_headless_lifecycle_probe();
+-    if (result.is_error()) {
+-        warnln("TermSurf Ladybird ABI warmup failed: {}", result.error());
++    if (!run_headless_lifecycle_probe()) {
++        warnln("TermSurf Ladybird ABI warmup failed: {}", ts_ladybird_runtime_last_error(nullptr));
+         return false;
+     }
+-    return result.value() == 0;
++    return true;
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_initialize_runtime()
+@@ -149,3 +280,146 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_initialize_runtime()
+ TERMSURF_LADYBIRD_EXPORT void ts_ladybird_shutdown_runtime()
+ {
+ }
++
++TERMSURF_LADYBIRD_EXPORT TsLadybirdRuntime* ts_ladybird_runtime_create()
++{
++    if (s_runtime && !s_runtime->destroyed) {
++        set_global_error("runtime already exists");
++        return nullptr;
++    }
++
++    auto app = create_application();
++    if (app.is_error()) {
++        set_global_error(ByteString::formatted("failed to create Ladybird application: {}", app.error()));
++        return nullptr;
++    }
++
++    auto* runtime = new TsLadybirdRuntime;
++    runtime->app = app.release_value();
++    runtime->owner_thread = pthread_self();
++    runtime->last_error = {};
++    runtime->destroyed = false;
++    s_runtime = runtime;
++    return runtime;
++}
++
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_runtime_destroy(TsLadybirdRuntime* runtime)
++{
++    if (!runtime || runtime->destroyed)
++        return;
++
++    if (!runtime_is_on_owner_thread(*runtime)) {
++        set_runtime_error(runtime, "runtime destroyed from non-owner thread");
++        return;
++    }
++
++    runtime->app = nullptr;
++    runtime->destroyed = true;
++    if (s_runtime == runtime)
++        s_runtime = nullptr;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_runtime_pump(TsLadybirdRuntime* runtime)
++{
++    if (!validate_runtime(runtime))
++        return false;
++
++    (void)Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_last_error(TsLadybirdRuntime const* runtime)
++{
++    if (runtime)
++        return runtime->last_error.characters();
++    return s_global_last_error.characters();
++}
++
++TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRuntime* runtime, int width, int height)
++{
++    if (!validate_runtime(runtime))
++        return nullptr;
++    if (width <= 0 || height <= 0) {
++        set_runtime_error(runtime, "view size must be positive");
++        return nullptr;
++    }
++
++    auto view_or_error = create_headless_view();
++    if (view_or_error.is_error()) {
++        set_runtime_error(runtime, ByteString::formatted("failed to create HeadlessWebView: {}", view_or_error.error()));
++        return nullptr;
++    }
++
++    auto* wrapper = new TsLadybirdView;
++    wrapper->runtime = runtime;
++    wrapper->view = view_or_error.release_value();
++    wrapper->last_url = {};
++    wrapper->did_finish_load = false;
++    wrapper->did_crash = false;
++    wrapper->destroyed = false;
++
++    wrapper->view->on_load_finish = [wrapper](URL::URL const& url) {
++        wrapper->last_url = url.to_byte_string();
++        outln("PROBE: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
++        if (url.scheme() == "data"sv) {
++            outln("TIER3: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
++            wrapper->did_finish_load = true;
++        }
++    };
++    wrapper->view->on_web_content_crashed = [wrapper] {
++        wrapper->did_crash = true;
++        set_runtime_error(wrapper->runtime, "WebContent crashed");
++    };
++
++    outln("TIER2: TermSurf Ladybird ABI constructed HeadlessWebView handle={}", wrapper->view->handle());
++    return wrapper;
++}
++
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_view_destroy(TsLadybirdView* view)
++{
++    if (!view || view->destroyed)
++        return;
++
++    view->view = nullptr;
++    view->destroyed = true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView* view, char const* url)
++{
++    if (!validate_view(view))
++        return false;
++    if (!url) {
++        set_runtime_error(view->runtime, "url is null");
++        return false;
++    }
++
++    auto url_view = StringView { url, strlen(url) };
++    auto parsed_url = URL::Parser::basic_parse(url_view);
++    if (!parsed_url.has_value()) {
++        set_runtime_error(view->runtime, "url parse failed");
++        return false;
++    }
++
++    view->last_url = {};
++    view->did_finish_load = false;
++    view->did_crash = false;
++    view->view->load(parsed_url.release_value(), Web::Bindings::NavigationHistoryBehavior::Auto);
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
++{
++    if (!view)
++        return "";
++    return view->last_url.characters();
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const* view)
++{
++    return view && view->did_finish_load;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const* view)
++{
++    return view && view->did_crash;
++}
+-- 
+2.54.0
+

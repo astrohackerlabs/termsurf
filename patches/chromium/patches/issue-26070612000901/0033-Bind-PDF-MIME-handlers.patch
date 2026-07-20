@@ -1,0 +1,235 @@
+From e4b177fd5d5efb37c9ee6f435c076040acff7937 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 12:15:42 -0500
+Subject: [PATCH 33/90] Bind PDF MIME handlers
+
+Two quiet binders hold the line,
+No stream to pour, no guest to sign.
+They open the door, then wisely state:
+KeepAlive now guards the gate.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../libtermsurf_chromium/ts_browser_client.cc |   7 +
+ .../ts_mime_handler_binders.cc                | 130 ++++++++++++++++++
+ .../ts_mime_handler_binders.h                 |  27 ++++
+ 4 files changed, 166 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_mime_handler_binders.cc
+ create mode 100644 content/libtermsurf_chromium/ts_mime_handler_binders.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d98d4913a4..a4a2e8de8c 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -43,6 +43,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_renderer_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
++    "ts_mime_handler_binders.cc",
++    "ts_mime_handler_binders.h",
+     "ts_pdf_document_helper_client.cc",
+     "ts_pdf_document_helper_client.h",
+     "ts_pdf_help_bubble_handler_factory.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 0b946a8a99..343e3747b4 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -7,6 +7,7 @@
+ #include "base/logging.h"
+ #include "components/pdf/browser/pdf_document_helper.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
+ #include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
+ #include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
+ #include "content/public/browser/browser_context.h"
+@@ -25,6 +26,7 @@
+ #include "extensions/browser/extensions_browser_client.h"
+ #include "extensions/browser/process_map.h"
+ #include "extensions/browser/renderer_startup_helper.h"
++#include "extensions/common/api/mime_handler.mojom.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+ #include "extensions/common/manifest.h"
+@@ -125,6 +127,11 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+ 
+   map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
+       base::BindRepeating(&pdf::BindTsPdfHelpBubbleHandlerFactory));
++
++  map->Add<extensions::mime_handler::MimeHandlerService>(
++      base::BindRepeating(&BindTsMimeHandlerService));
++  map->Add<extensions::mime_handler::BeforeUnloadControl>(
++      base::BindRepeating(&BindTsBeforeUnloadControl));
+ }
+ 
+ void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+new file mode 100644
+index 0000000000..d4a03d5db9
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -0,0 +1,130 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/logging.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/site_instance.h"
++#include "extensions/common/api/mime_handler.mojom.h"
++#include "extensions/common/constants.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "url/gurl.h"
++
++namespace content {
++namespace {
++
++bool IsPdfExtensionFrame(RenderFrameHost* render_frame_host) {
++  const GURL& url = render_frame_host->GetLastCommittedURL();
++  return url.SchemeIs(extensions::kExtensionScheme) &&
++         url.host() == extension_misc::kPdfExtensionId;
++}
++
++std::string FrameUrl(RenderFrameHost* render_frame_host) {
++  return render_frame_host->GetLastCommittedURL().spec();
++}
++
++std::string SiteUrl(RenderFrameHost* render_frame_host) {
++  return render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++}
++
++class TsMimeHandlerService
++    : public extensions::mime_handler::MimeHandlerService {
++ public:
++  explicit TsMimeHandlerService(std::string frame_url)
++      : frame_url_(std::move(frame_url)) {}
++
++  TsMimeHandlerService(const TsMimeHandlerService&) = delete;
++  TsMimeHandlerService& operator=(const TsMimeHandlerService&) = delete;
++
++  ~TsMimeHandlerService() override = default;
++
++  void GetStreamInfo(GetStreamInfoCallback callback) override {
++    LOG(INFO) << "[issue-792-exp12] mime-handler-get-stream-info frame_url="
++              << frame_url_ << " stream_info=null";
++    std::move(callback).Run(extensions::mime_handler::StreamInfoPtr());
++  }
++
++  void SetPdfPluginAttributes(
++      extensions::mime_handler::PdfPluginAttributesPtr pdf_plugin_attributes)
++      override {
++    LOG(INFO)
++        << "[issue-792-exp12] mime-handler-set-pdf-plugin-attributes frame_url="
++        << frame_url_;
++  }
++
++ private:
++  std::string frame_url_;
++};
++
++class TsBeforeUnloadControl
++    : public extensions::mime_handler::BeforeUnloadControl {
++ public:
++  explicit TsBeforeUnloadControl(std::string frame_url)
++      : frame_url_(std::move(frame_url)) {}
++
++  TsBeforeUnloadControl(const TsBeforeUnloadControl&) = delete;
++  TsBeforeUnloadControl& operator=(const TsBeforeUnloadControl&) = delete;
++
++  ~TsBeforeUnloadControl() override = default;
++
++  void SetShowBeforeUnloadDialog(
++      bool show_dialog,
++      SetShowBeforeUnloadDialogCallback callback) override {
++    LOG(INFO) << "[issue-792-exp12] before-unload-set-show frame_url="
++              << frame_url_ << " show=" << show_dialog;
++    std::move(callback).Run();
++  }
++
++ private:
++  std::string frame_url_;
++};
++
++}  // namespace
++
++void BindTsMimeHandlerService(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<extensions::mime_handler::MimeHandlerService>
++        receiver) {
++  const std::string frame_url = FrameUrl(render_frame_host);
++  const std::string site_url = SiteUrl(render_frame_host);
++
++  if (!IsPdfExtensionFrame(render_frame_host)) {
++    LOG(INFO)
++        << "[issue-792-exp12] mime-handler-service-binder-reject frame_url="
++        << frame_url << " site_url=" << site_url;
++    return;
++  }
++
++  LOG(INFO) << "[issue-792-exp12] mime-handler-service-binder frame_url="
++            << frame_url << " site_url=" << site_url;
++  mojo::MakeSelfOwnedReceiver(std::make_unique<TsMimeHandlerService>(frame_url),
++                              std::move(receiver));
++}
++
++void BindTsBeforeUnloadControl(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<extensions::mime_handler::BeforeUnloadControl>
++        receiver) {
++  const std::string frame_url = FrameUrl(render_frame_host);
++  const std::string site_url = SiteUrl(render_frame_host);
++
++  if (!IsPdfExtensionFrame(render_frame_host)) {
++    LOG(INFO)
++        << "[issue-792-exp12] before-unload-control-binder-reject frame_url="
++        << frame_url << " site_url=" << site_url;
++    return;
++  }
++
++  LOG(INFO) << "[issue-792-exp12] before-unload-control-binder frame_url="
++            << frame_url << " site_url=" << site_url;
++  mojo::MakeSelfOwnedReceiver(
++      std::make_unique<TsBeforeUnloadControl>(frame_url), std::move(receiver));
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.h b/content/libtermsurf_chromium/ts_mime_handler_binders.h
+new file mode 100644
+index 0000000000..5e2544a3e7
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.h
+@@ -0,0 +1,27 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_MIME_HANDLER_BINDERS_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_MIME_HANDLER_BINDERS_H_
++
++#include "extensions/common/api/mime_handler.mojom-forward.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++
++namespace content {
++
++class RenderFrameHost;
++
++void BindTsMimeHandlerService(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<extensions::mime_handler::MimeHandlerService>
++        receiver);
++
++void BindTsBeforeUnloadControl(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<extensions::mime_handler::BeforeUnloadControl>
++        receiver);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_MIME_HANDLER_BINDERS_H_
+-- 
+2.54.0
+

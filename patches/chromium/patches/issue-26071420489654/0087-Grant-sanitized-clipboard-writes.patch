@@ -1,0 +1,154 @@
+From 4e6b359e88e4f1d0c462dd8cace1457ae2a2126e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 24 Jun 2026 16:53:11 -0500
+Subject: [PATCH 087/119] Grant sanitized clipboard writes
+
+One clipboard knock with clean intent,
+Through user hands, permission sent.
+All other doors stay cold and tight,
+A tiny key for copy-write.
+---
+ .../ts_permission_manager.cc                  | 74 +++++++++++++------
+ 1 file changed, 52 insertions(+), 22 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_permission_manager.cc b/content/libtermsurf_chromium/ts_permission_manager.cc
+index 575f1c4455..4e9ab3f2e5 100644
+--- a/content/libtermsurf_chromium/ts_permission_manager.cc
++++ b/content/libtermsurf_chromium/ts_permission_manager.cc
+@@ -25,10 +25,18 @@ blink::mojom::PermissionStatus DeniedStatus() {
+   return blink::mojom::PermissionStatus::DENIED;
+ }
+ 
++blink::mojom::PermissionStatus GrantedStatus() {
++  return blink::mojom::PermissionStatus::GRANTED;
++}
++
+ PermissionResult DeniedResult() {
+   return PermissionResult(DeniedStatus());
+ }
+ 
++PermissionResult GrantedResult() {
++  return PermissionResult(GrantedStatus());
++}
++
+ std::string PermissionNameForLog(
+     const blink::mojom::PermissionDescriptorPtr& permission_descriptor) {
+   std::optional<blink::PermissionType> permission_type =
+@@ -39,11 +47,33 @@ std::string PermissionNameForLog(
+   return blink::GetPermissionString(permission_type.value());
+ }
+ 
+-void LogDenied(const char* method,
+-               const blink::mojom::PermissionDescriptorPtr& permission,
+-               const GURL& requesting_origin = GURL(),
+-               const GURL& embedding_origin = GURL()) {
+-  LOG(INFO) << "[termsurf-permission] denied"
++bool ShouldGrantPermission(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor) {
++  std::optional<blink::PermissionType> permission_type =
++      blink::MaybePermissionDescriptorToPermissionType(permission_descriptor);
++  return permission_type.has_value() &&
++         permission_type.value() ==
++             blink::PermissionType::CLIPBOARD_SANITIZED_WRITE;
++}
++
++blink::mojom::PermissionStatus StatusForPermission(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor) {
++  return ShouldGrantPermission(permission_descriptor) ? GrantedStatus()
++                                                     : DeniedStatus();
++}
++
++PermissionResult ResultForPermission(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor) {
++  return ShouldGrantPermission(permission_descriptor) ? GrantedResult()
++                                                     : DeniedResult();
++}
++
++void LogDecision(const char* method,
++                 const blink::mojom::PermissionDescriptorPtr& permission,
++                 const GURL& requesting_origin = GURL(),
++                 const GURL& embedding_origin = GURL()) {
++  bool granted = ShouldGrantPermission(permission);
++  LOG(INFO) << "[termsurf-permission] " << (granted ? "granted" : "denied")
+             << " method=" << method
+             << " type=" << PermissionNameForLog(permission)
+             << " requesting_origin=" << requesting_origin.spec()
+@@ -73,9 +103,9 @@ void TsPermissionManager::RequestPermissionsFromCurrentDocument(
+   }
+ 
+   for (const auto& permission : request_description.permissions) {
+-    LogDenied("request-current-document", permission, requesting_origin,
+-              embedding_origin);
+-    results.push_back(DeniedResult());
++    LogDecision("request-current-document", permission, requesting_origin,
++                embedding_origin);
++    results.push_back(ResultForPermission(permission));
+   }
+   std::move(callback).Run(results);
+ }
+@@ -84,9 +114,9 @@ blink::mojom::PermissionStatus TsPermissionManager::GetPermissionStatus(
+     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+     const GURL& requesting_origin,
+     const GURL& embedding_origin) {
+-  LogDenied("status", permission_descriptor, requesting_origin,
+-            embedding_origin);
+-  return DeniedStatus();
++  LogDecision("status", permission_descriptor, requesting_origin,
++              embedding_origin);
++  return StatusForPermission(permission_descriptor);
+ }
+ 
+ PermissionResult
+@@ -94,9 +124,9 @@ TsPermissionManager::GetPermissionResultForOriginWithoutContext(
+     const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
+     const url::Origin& requesting_origin,
+     const url::Origin& embedding_origin) {
+-  LogDenied("origin-without-context", permission_descriptor,
+-            requesting_origin.GetURL(), embedding_origin.GetURL());
+-  return DeniedResult();
++  LogDecision("origin-without-context", permission_descriptor,
++              requesting_origin.GetURL(), embedding_origin.GetURL());
++  return ResultForPermission(permission_descriptor);
+ }
+ 
+ PermissionResult TsPermissionManager::GetPermissionResultForCurrentDocument(
+@@ -111,9 +141,9 @@ PermissionResult TsPermissionManager::GetPermissionResultForCurrentDocument(
+       embedding_origin = main_frame->GetLastCommittedURL();
+     }
+   }
+-  LogDenied("current-document", permission_descriptor, requesting_origin,
+-            embedding_origin);
+-  return DeniedResult();
++  LogDecision("current-document", permission_descriptor, requesting_origin,
++              embedding_origin);
++  return ResultForPermission(permission_descriptor);
+ }
+ 
+ PermissionResult TsPermissionManager::GetPermissionResultForWorker(
+@@ -121,8 +151,8 @@ PermissionResult TsPermissionManager::GetPermissionResultForWorker(
+     RenderProcessHost* render_process_host,
+     const GURL& worker_origin) {
+   (void)render_process_host;
+-  LogDenied("worker", permission_descriptor, worker_origin, worker_origin);
+-  return DeniedResult();
++  LogDecision("worker", permission_descriptor, worker_origin, worker_origin);
++  return ResultForPermission(permission_descriptor);
+ }
+ 
+ PermissionResult TsPermissionManager::GetPermissionResultForEmbeddedRequester(
+@@ -135,9 +165,9 @@ PermissionResult TsPermissionManager::GetPermissionResultForEmbeddedRequester(
+       embedding_origin = main_frame->GetLastCommittedURL();
+     }
+   }
+-  LogDenied("embedded-requester", permission_descriptor,
+-            requesting_origin.GetURL(), embedding_origin);
+-  return DeniedResult();
++  LogDecision("embedded-requester", permission_descriptor,
++              requesting_origin.GetURL(), embedding_origin);
++  return ResultForPermission(permission_descriptor);
+ }
+ 
+ void TsPermissionManager::ResetPermission(blink::PermissionType permission,
+-- 
+2.54.0
+

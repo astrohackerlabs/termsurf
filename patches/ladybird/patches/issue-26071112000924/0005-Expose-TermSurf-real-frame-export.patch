@@ -1,0 +1,113 @@
+From ee920963752c5a0ec9e1d197166a32292909a4ca Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 00:57:19 -0500
+Subject: [PATCH 05/18] Expose TermSurf real frame export
+
+Add a C ABI export that returns a transferable IOSurface Mach send right and allocation metadata from the TermSurf HeadlessWebView.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 70 +++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 0800529292..d2df084ec4 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -55,6 +55,16 @@ struct RenderSurfaceProbe {
+     bool has_usable_bitmap { false };
+ };
+ 
++struct RenderSurfaceExport {
++    bool has_surface { false };
++    mach_port_t surface_port { MACH_PORT_NULL };
++    int pixel_width { 0 };
++    int pixel_height { 0 };
++    u64 bytes_per_row { 0 };
++    u32 pixel_format { 0 };
++    u64 generation { 0 };
++};
++
+ class TermSurfWebView final : public WebView::HeadlessWebView {
+ public:
+     static NonnullOwnPtr<TermSurfWebView> create(Core::AnonymousBuffer theme, Web::DevicePixelSize window_size)
+@@ -95,6 +105,33 @@ public:
+         return probe;
+     }
+ 
++    RenderSurfaceExport export_render_surface() const
++    {
++        RenderSurfaceExport exported;
++        Gfx::SharedImageBuffer const* shared_image_buffer = nullptr;
++
++        if (m_client_state.has_usable_bitmap) {
++            shared_image_buffer = m_client_state.front_bitmap.shared_image_buffer.ptr();
++        } else {
++            shared_image_buffer = m_backup_shared_image_buffer.ptr();
++        }
++
++        exported.generation = m_render_surface_generation;
++        if (!shared_image_buffer)
++            return exported;
++
++#ifdef AK_OS_MACOS
++        auto mach_port = shared_image_buffer->iosurface_handle().create_mach_port();
++        exported.surface_port = mach_port.release();
++        exported.has_surface = MACH_PORT_VALID(exported.surface_port);
++        exported.pixel_width = static_cast<int>(shared_image_buffer->iosurface_handle().width());
++        exported.pixel_height = static_cast<int>(shared_image_buffer->iosurface_handle().height());
++        exported.bytes_per_row = shared_image_buffer->iosurface_handle().bytes_per_row();
++        exported.pixel_format = 0x42475241u;
++#endif
++        return exported;
++    }
++
+     void note_ready_to_paint()
+     {
+         m_ready_to_paint_seen = true;
+@@ -163,7 +200,18 @@ typedef struct TsLadybirdRenderSurfaceProbe {
+     bool has_usable_bitmap;
+ } TsLadybirdRenderSurfaceProbe;
+ 
++typedef struct TsLadybirdRenderSurfaceExport {
++    bool has_surface;
++    unsigned int surface_port;
++    int pixel_width;
++    int pixel_height;
++    unsigned long long bytes_per_row;
++    unsigned int pixel_format;
++    unsigned long long generation;
++} TsLadybirdRenderSurfaceExport;
++
+ extern "C" bool ts_ladybird_view_render_surface_probe(TsLadybirdView*, TsLadybirdRenderSurfaceProbe*);
++extern "C" bool ts_ladybird_view_export_render_surface(TsLadybirdView*, TsLadybirdRenderSurfaceExport*);
+ 
+ namespace {
+ 
+@@ -531,3 +579,25 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_render_surface_probe(TsLadybirdVi
+     out_probe->has_usable_bitmap = probe.has_usable_bitmap;
+     return true;
+ }
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_export_render_surface(TsLadybirdView* view, TsLadybirdRenderSurfaceExport* out_export)
++{
++    if (!out_export) {
++        set_runtime_error(view ? view->runtime : nullptr, "render surface export output is null");
++        return false;
++    }
++
++    memset(out_export, 0, sizeof(*out_export));
++    if (!validate_view(view))
++        return false;
++
++    auto exported = view->view->export_render_surface();
++    out_export->has_surface = exported.has_surface;
++    out_export->surface_port = exported.surface_port;
++    out_export->pixel_width = exported.pixel_width;
++    out_export->pixel_height = exported.pixel_height;
++    out_export->bytes_per_row = exported.bytes_per_row;
++    out_export->pixel_format = exported.pixel_format;
++    out_export->generation = exported.generation;
++    return true;
++}
+-- 
+2.54.0
+

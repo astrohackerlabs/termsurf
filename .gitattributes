@@ -1,1 +1,8 @@
+# Preserve byte-for-byte imports of legacy Terminal fixtures/source that carry
+# intentional or historical whitespace while keeping diff whitespace checks on
+# for ordinary files.
+bun/astrohacker-terminal-website/src/content/docs/vt/osc/*.mdx -whitespace
+rust/roastty/macos/Sources/** -whitespace
+rust/roastty/testdata/issue805-ghostty-default-config.txt -whitespace
+rust/test-html/public/test-interactions.html -whitespace
 *.patch whitespace=-blank-at-eol,-blank-at-eof

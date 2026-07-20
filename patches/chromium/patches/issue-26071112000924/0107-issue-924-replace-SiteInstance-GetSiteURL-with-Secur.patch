@@ -1,0 +1,147 @@
+From 5f8c4a996436bb7cf74fe0c7255b3c7783cf4059 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:44:42 -0500
+Subject: [PATCH 107/119] issue-924: replace SiteInstance::GetSiteURL with
+ SecurityPrincipal
+
+Chromium 150 removed SiteInstance::GetSiteURL; use
+GetSecurityPrincipal().GetDeprecatedSiteURL() for logging and site checks.
+---
+ .../extensions/ts_extensions_browser_client.cc       |  2 +-
+ .../libtermsurf_chromium/ts_browser_main_parts.cc    |  6 +++---
+ .../libtermsurf_chromium/ts_mime_handler_binders.cc  |  2 +-
+ .../libtermsurf_chromium/ts_pdf_browser_support.cc   | 12 ++++++------
+ .../ts_pdf_help_bubble_handler_factory.cc            |  2 +-
+ 5 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 234d1842a3..aa4f75d745 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -428,7 +428,7 @@ void TsExtensionsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+     const extensions::Extension* extension) const {
+   LOG(INFO) << "[termsurf-pdf] extensions-frame-binder-invoked frame_url="
+             << render_frame_host->GetLastCommittedURL() << " site_url="
+-            << render_frame_host->GetSiteInstance()->GetSiteURL()
++            << render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL()
+             << " extension_id=" << extension->id() << " populate_called=1";
+   extensions::PopulateExtensionFrameBinders(binder_map, render_frame_host,
+                                             extension);
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 700352ddca..e2cf78928c 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -130,7 +130,7 @@ void LogIssue794InputFrames(const char* tag,
+     auto* frame_view = rfh->GetView();
+     std::string site_url;
+     if (rfh->GetSiteInstance()) {
+-      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++      site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+     }
+     const bool pdf_related =
+         rfh->GetLastCommittedURL().spec().find(
+@@ -170,7 +170,7 @@ void LogIssue794InputFrames(const char* tag,
+ std::string Issue794FrameClassification(RenderFrameHost* rfh) {
+   std::string site_url;
+   if (rfh->GetSiteInstance()) {
+-    site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++    site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+   }
+   const std::string url = rfh->GetLastCommittedURL().spec();
+   if (!rfh->GetParent()) {
+@@ -204,7 +204,7 @@ void LogIssue794KeyTarget(const char* tag,
+     found = true;
+     std::string site_url;
+     if (rfh->GetSiteInstance()) {
+-      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++      site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+     }
+     LOG(INFO) << tag
+               << " key-target frame_tree_node_id=" << rfh->GetFrameTreeNodeId()
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index bc20b42695..e31ba47f53 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -34,7 +34,7 @@ std::string FrameUrl(RenderFrameHost* render_frame_host) {
+ }
+ 
+ std::string SiteUrl(RenderFrameHost* render_frame_host) {
+-  return render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++  return render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+ }
+ 
+ class TsBeforeUnloadControl
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+index aad634bb80..628ff3b220 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -178,7 +178,7 @@ void RegisterTsPdfBrowserInterfaceBindersForFrame(
+   const bool is_pdf_extension = IsTsPdfComponentExtension(extension);
+   const std::string frame_url = render_frame_host->GetLastCommittedURL().spec();
+   const std::string site_url =
+-      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++      render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+   const std::string extension_id = extension ? extension->id() : "none";
+ 
+   LOG(INFO) << "[termsurf-pdf] extension-frame-binder-check frame_url="
+@@ -203,7 +203,7 @@ void RegisterTsPdfBrowserInterfaceBindersForFrame(
+   if (!populated_extension_binders &&
+       (IsTsPdfComponentExtensionUrl(render_frame_host->GetLastCommittedURL()) ||
+        IsTsPdfComponentExtensionUrl(
+-           render_frame_host->GetSiteInstance()->GetSiteURL()))) {
++           render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL()))) {
+     const extensions::Extension* pdf_extension = GetEnabledPdfExtension(
+         render_frame_host->GetProcess()->GetBrowserContext());
+     if (pdf_extension) {
+@@ -252,7 +252,7 @@ void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
+          mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
+         LOG(INFO) << "[termsurf-pdf] pdf-host-binder frame_url="
+                   << render_frame_host->GetLastCommittedURL() << " site_url="
+-                  << render_frame_host->GetSiteInstance()->GetSiteURL();
++                  << render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL();
+         pdf::PDFDocumentHelper::BindPdfHost(
+             std::move(receiver), render_frame_host,
+             std::make_unique<pdf::TsPDFDocumentHelperClient>());
+@@ -410,7 +410,7 @@ bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled) {
+ }
+ 
+ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+-  if (!IsTsPdfComponentExtensionUrl(site_instance->GetSiteURL())) {
++  if (!IsTsPdfComponentExtensionUrl(site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL())) {
+     return;
+   }
+ 
+@@ -428,7 +428,7 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+       registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
+   if (!IsTsPdfComponentExtension(extension)) {
+     LOG(INFO) << "[termsurf-pdf] process-map-miss site_url="
+-              << site_instance->GetSiteURL();
++              << site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL();
+     return;
+   }
+ 
+@@ -441,7 +441,7 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+       ->Insert(extension->id(), process_id);
+   LOG(INFO) << "[termsurf-pdf] process-map-insert extension_id="
+             << extension->id() << " process_id=" << process_id
+-            << " site_url=" << site_instance->GetSiteURL();
++            << " site_url=" << site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL();
+ 
+   auto* renderer_startup_helper =
+       extensions::RendererStartupHelperFactory::GetForBrowserContext(
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+index d7e3f39291..ad21db6c37 100644
+--- a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+@@ -59,7 +59,7 @@ void BindTsPdfHelpBubbleHandlerFactory(
+   const std::string frame_url =
+       render_frame_host->GetLastCommittedURL().spec();
+   const std::string site_url =
+-      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++      render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+ 
+   if (!IsPdfExtensionFrame(render_frame_host)) {
+     LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-binder-reject frame_url="
+-- 
+2.54.0
+

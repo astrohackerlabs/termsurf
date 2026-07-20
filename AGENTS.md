@@ -1,20 +1,16 @@
-# TermSurf Public Source
+# Astrohacker Terminal Public Source
 
-This repository contains the open source TermSurf client: Ghostboard, the `web`
-TUI, the TermSurf protocol, and browser engine integration code.
+This repository contains open source Astrohacker Terminal client source synced
+from the private Astrohacker monorepo.
 
 ## Rules
 
 Do exactly what the user asks. Do not change code unless explicitly asked.
 
-When editing Rust code, run `cargo fmt`. Accept formatter output as the source
-of truth.
+When editing Rust code, run `cargo fmt` from `rust/`. Accept formatter output as
+the source of truth.
 
-When editing Markdown, run:
-
-```bash
-prettier --write --prose-wrap always --print-width 80 <file>
-```
+When editing Markdown, preserve the existing prose wrapping style.
 
 ## Build
 
@@ -22,43 +18,38 @@ Common build commands:
 
 ```bash
 ./scripts/build.sh chromium
-./scripts/build.sh roamium
+./scripts/build.sh chromium
 ./scripts/build.sh webkit
-./scripts/build.sh surfari-lib
-./scripts/build.sh surfari
-./scripts/build.sh webtui
-./scripts/build.sh ghostboard
+./scripts/build.sh webkit-lib
+./scripts/build.sh webkit
+./scripts/build.sh ahweb
+./scripts/build.sh ahterm
 ./scripts/build.sh all --release
-```
-
-Ghostboard development runs from `ghostboard/`:
-
-```bash
-cd ghostboard
-zig build run
 ```
 
 ## Engine Workspaces
 
-Before modifying or building engine workspaces, read the local instructions:
+Large upstream engine checkouts are local-only. Reconstruct them from the patch
+records under `patches/`; do not commit engine working trees, build products, or
+dependency caches.
 
-- `chromium/AGENTS.md`
-- `webkit/AGENTS.md`
+Relevant public patch docs:
 
-The main repository tracks engine workspace instructions and patch archives. The
-large upstream engine checkouts live outside Git history and are created locally
-under `chromium/src` and `webkit/src`.
+- `patches/chromium/README.md`
+- `patches/webkit/README.md`
+- `patches/ladybird/README.md`
+- `patches/ghostty/README.md`
+- `patches/gecko/README.md`
 
 ## Project Layout
 
-- `ghostboard/` — primary terminal frontend.
-- `webtui/` — `web` TUI.
-- `roamium/` — Chromium-backed engine process.
-- `surfari/` — WebKit-backed engine process.
-- `proto/` — TermSurf protobuf protocol.
-- `chromium/` — Chromium workspace docs and patches.
-- `webkit/` — WebKit workspace docs and patches.
-- `docs/` — public client documentation.
+- `assets/astrohacker-terminal/` — product images and Terminal assets.
+- `docs/` — product docs and public Terminal records.
+- `scripts/` — public build/install/test helpers.
+- `rust/` — Astrohacker Terminal Rust workspace.
+- `patches/` — fork patch archives and reconstruction notes.
 
-This public repository intentionally excludes private issue records, TermSurf
-Cloud work, internal release orchestration, and other non-client material.
+This public repository intentionally excludes private issue records, epics,
+company operations, marketing plans, terminal cloud work, private release
+orchestration, local agent metadata, ignored fork working trees, and build
+outputs.

@@ -1,0 +1,106 @@
+From 841f6d976a2ffac2174a81bb7d011df3507654ee Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 16:00:16 -0500
+Subject: [PATCH 044/122] Register PDF document MIME
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The renderer asked, “Who handles this?”
+A missing MIME had spoiled the bliss.
+Now PDF signs the plugin sheet,
+And wrappers walk on proper feet.
+---
+ .../libtermsurf_chromium/ts_content_client.cc |  4 ++
+ .../renderer/core/loader/frame_loader.cc      | 39 +++++++++++++++++--
+ 2 files changed, 40 insertions(+), 3 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index 45710d4ed0..faf2818dbb 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -47,11 +47,15 @@ void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
+                                            kPDFPluginExtension,
+                                            kPDFPluginExtensionDescription);
+   pdf_info.mime_types.push_back(pdf_mime_type);
++  content::WebPluginMimeType pdf_document_mime_type(
++      pdf::kPDFMimeType, kPDFPluginExtension, kPDFPluginExtensionDescription);
++  pdf_info.mime_types.push_back(pdf_document_mime_type);
+   pdf_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
+   plugins->push_back(pdf_info);
+ 
+   LOG(INFO) << "[issue-792-exp15] internal-pdf-plugin-registered mime_type="
+             << pdf::kInternalPluginMimeType
++            << " document_mime_type=" << pdf::kPDFMimeType
+             << " path=" << pdf_info.path.value();
+ #endif
+ }
+diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
+index c8ddfda7db..6c4cb8a38a 100644
+--- a/third_party/blink/renderer/core/loader/frame_loader.cc
++++ b/third_party/blink/renderer/core/loader/frame_loader.cc
+@@ -37,9 +37,11 @@
+ #include "third_party/blink/renderer/core/loader/frame_loader.h"
+ 
+ #include <memory>
++#include <string>
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/strings/strcat.h"
+ #include "base/time/time.h"
+@@ -1060,15 +1062,46 @@ static void FillStaticResponseIfNeeded(WebNavigationParams* params,
+     return;
+ 
+   const String& mime_type = params->response.MimeType();
+-  if (MIMETypeRegistry::IsSupportedMIMEType(mime_type))
++  const bool should_log_issue_792_exp23 =
++      url.GetString().Utf8().find("bitcoin.pdf") != std::string::npos;
++  const bool supported_mime = MIMETypeRegistry::IsSupportedMIMEType(mime_type);
++  if (supported_mime) {
++    if (should_log_issue_792_exp23) {
++      LOG(INFO) << "[issue-792-exp23] static-response-check url="
++                << url.GetString().Utf8()
++                << " mime_type=" << mime_type.Utf8()
++                << " supported_mime=" << (supported_mime ? 1 : 0)
++                << " has_plugin_data=0 plugin_supports_mime=0 action=return";
++    }
+     return;
++  }
+ 
+   PluginData* plugin_data = frame->GetPluginData();
+-  if (!mime_type.empty() && plugin_data &&
+-      plugin_data->SupportsMimeType(mime_type)) {
++  const bool plugin_supports_mime =
++      !mime_type.empty() && plugin_data &&
++      plugin_data->SupportsMimeType(mime_type);
++  if (plugin_supports_mime) {
++    if (should_log_issue_792_exp23) {
++      LOG(INFO) << "[issue-792-exp23] static-response-check url="
++                << url.GetString().Utf8()
++                << " mime_type=" << mime_type.Utf8()
++                << " supported_mime=" << (supported_mime ? 1 : 0)
++                << " has_plugin_data=" << (plugin_data ? 1 : 0)
++                << " plugin_supports_mime=" << (plugin_supports_mime ? 1 : 0)
++                << " action=return";
++    }
+     return;
+   }
+ 
++  if (should_log_issue_792_exp23) {
++    LOG(INFO) << "[issue-792-exp23] static-response-check url="
++              << url.GetString().Utf8() << " mime_type=" << mime_type.Utf8()
++              << " supported_mime=" << (supported_mime ? 1 : 0)
++              << " has_plugin_data=" << (plugin_data ? 1 : 0)
++              << " plugin_supports_mime=" << (plugin_supports_mime ? 1 : 0)
++              << " action=fallback";
++  }
++
+   // Typically, PlzNavigate checks that the MIME type can be handled on the
+   // browser side before sending it to the renderer. However, there are rare
+   // scenarios where it's possible for the renderer to send a commit request
+-- 
+2.50.1 (Apple Git-155)
+

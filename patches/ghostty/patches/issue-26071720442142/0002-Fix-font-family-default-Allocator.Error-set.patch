@@ -1,0 +1,30 @@
+From 1a3ab12fc8619b81d46e61a1be66ef697ae4962e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 15:49:10 -0500
+Subject: [PATCH 2/2] Fix font-family default Allocator.Error set
+
+parseCLI returned ValueRequired; default() only allows OOM.
+---
+ src/config/Config.zig | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 8b31d1818..c2ba275f1 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -3948,7 +3948,11 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
+ 
+     // Astrohacker Terminal: stock monospace + Nerd Font icons.
+     // Empty font-family falls back to the system default; set product face here.
+-    try result.@"font-family".parseCLI(alloc, "JetBrainsMono Nerd Font");
++    // Use list.append (not parseCLI) so the error set stays Allocator.Error.
++    try result.@"font-family".list.append(
++        alloc,
++        try alloc.dupeZ(u8, "JetBrainsMono Nerd Font"),
++    );
+ 
+     // Add our default command palette entries
+     try result.@"command-palette-entry".init(alloc);
+-- 
+2.50.1 (Apple Git-155)
+

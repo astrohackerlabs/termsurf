@@ -1,0 +1,332 @@
+From 08f4693d3619e8977f1f185569d4515a1bcf659f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:34:37 -0500
+Subject: [PATCH 099/119] issue-924: restore html_construction_site after bad
+ auto-merge
+
+---
+ .../html/parser/html_construction_site.cc     | 94 ++++++-------------
+ 1 file changed, 30 insertions(+), 64 deletions(-)
+
+diff --git a/third_party/blink/renderer/core/html/parser/html_construction_site.cc b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+index a79ced3934..2b1f3bed42 100644
+--- a/third_party/blink/renderer/core/html/parser/html_construction_site.cc
++++ b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+@@ -30,7 +30,6 @@
+ #include <limits>
+ 
+ #include "base/compiler_specific.h"
+-#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "third_party/blink/renderer/core/dom/comment.h"
+ #include "third_party/blink/renderer/core/dom/container_node.h"
+@@ -94,9 +93,8 @@ namespace blink {
+ 
+ void HTMLConstructionSite::SetAttributes(Element* element,
+                                          AtomicHTMLToken* token) {
+-  if (!is_scripting_content_allowed_) {
++  if (!is_scripting_content_allowed_)
+     element->StripScriptingAttributes(token->Attributes());
+-  }
+   element->ParserSetAttributes(token->Attributes());
+   if (token->HasDuplicateAttribute()) {
+     // UseCounter is not free, and only the first call matters. Only call to it
+@@ -141,9 +139,8 @@ static unsigned NextTextBreakPositionForContainer(
+     unsigned current_position,
+     unsigned string_length,
+     std::optional<unsigned>& length_limit) {
+-  if (string_length < Text::kDefaultLengthLimit) {
++  if (string_length < Text::kDefaultLengthLimit)
+     return string_length;
+-  }
+   if (!length_limit) {
+     length_limit = ShouldUseLengthLimit(node)
+                        ? Text::kDefaultLengthLimit
+@@ -227,9 +224,8 @@ static inline void Insert(HTMLConstructionSiteTask& task) {
+     }
+     // If the Document was detached in the middle of parsing, The template
+     // element won't be able to initialize its contents, so bail out.
+-    if (!task.parent) {
++    if (!task.parent)
+       return;
+-    }
+   }
+ 
+   // https://html.spec.whatwg.org/C/#insert-a-foreign-element
+@@ -248,9 +244,8 @@ static inline void ExecuteInsertTask(HTMLConstructionSiteTask& task) {
+   Insert(task);
+   if (auto* child = DynamicTo<Element>(task.child.Get())) {
+     child->BeginParsingChildren();
+-    if (task.self_closing) {
++    if (task.self_closing)
+       child->FinishParsingChildren();
+-    }
+   }
+ }
+ 
+@@ -338,15 +333,13 @@ static unsigned FindBreakIndexBetween(const StringBuilder& string,
+   DCHECK_LT(current_position, proposed_break_index);
+   DCHECK_LE(proposed_break_index, string.length());
+   // The end of the string is always a valid break.
+-  if (proposed_break_index == string.length()) {
++  if (proposed_break_index == string.length())
+     return proposed_break_index;
+-  }
+ 
+   // Latin-1 does not have breakable boundaries. If we ever moved to a different
+   // 8-bit encoding this could be wrong.
+-  if (string.Is8Bit()) {
++  if (string.Is8Bit())
+     return proposed_break_index;
+-  }
+ 
+   // We need at least two characters look-ahead to account for UTF-16
+   // surrogates, but can't search off the end of the buffer!
+@@ -356,23 +349,20 @@ static unsigned FindBreakIndexBetween(const StringBuilder& string,
+   CharacterBreakIterator it(
+       string.Span16().subspan(current_position, break_search_length));
+ 
+-  if (it.IsBreak(proposed_break_index - current_position)) {
++  if (it.IsBreak(proposed_break_index - current_position))
+     return proposed_break_index;
+-  }
+ 
+   int adjusted_break_index_in_substring =
+       it.Preceding(proposed_break_index - current_position);
+-  if (adjusted_break_index_in_substring > 0) {
++  if (adjusted_break_index_in_substring > 0)
+     return current_position + adjusted_break_index_in_substring;
+-  }
+   // We failed to find a breakable point, let the caller figure out what to do.
+   return 0;
+ }
+ 
+ void HTMLConstructionSite::FlushPendingText() {
+-  if (pending_text_.IsEmpty()) {
++  if (pending_text_.IsEmpty())
+     return;
+-  }
+ 
+   // Splitting text nodes into smaller chunks contradicts HTML5 spec, but is
+   // necessary for performance, see:
+@@ -424,7 +414,7 @@ void HTMLConstructionSite::FlushPendingText() {
+ 
+ void HTMLConstructionSite::QueueTask(HTMLConstructionSiteTask& task,
+                                      bool flush_pending_text) {
+-  if (flush_pending_text) {
++  if (flush_pending_text)
+     FlushPendingText();
+ 
+   if (sanitizer_ && task.child && task.parent &&
+@@ -479,9 +469,8 @@ void HTMLConstructionSite::ExecuteQueuedTasks() {
+   // This has no affect on pendingText, and we may have pendingText remaining
+   // after executing all other queued tasks.
+   const size_t size = task_queue_.size();
+-  if (!size) {
++  if (!size)
+     return;
+-  }
+ 
+   // Fast path for when |size| is 1, which is the common case
+   if (size == 1) {
+@@ -496,9 +485,8 @@ void HTMLConstructionSite::ExecuteQueuedTasks() {
+   TaskQueue queue;
+   queue.swap(task_queue_);
+ 
+-  for (auto& task : queue) {
++  for (auto& task : queue)
+     ExecuteTask(task);
+-  }
+ 
+   // We might be detached now.
+ }
+@@ -600,15 +588,13 @@ void HTMLConstructionSite::InsertHTMLHtmlStartTagBeforeHTML(
+ void HTMLConstructionSite::MergeAttributesFromTokenIntoElement(
+     AtomicHTMLToken* token,
+     Element* element) {
+-  if (token->Attributes().empty()) {
++  if (token->Attributes().empty())
+     return;
+-  }
+ 
+   for (const auto& token_attribute : token->Attributes()) {
+     if (element->AttributesWithoutUpdate().FindIndex(
+-            token_attribute.GetName()) == kNotFound) {
++            token_attribute.GetName()) == kNotFound)
+       element->setAttribute(token_attribute.GetName(), token_attribute.Value());
+-    }
+   }
+ 
+   if (sanitizer_) {
+@@ -622,9 +608,8 @@ void HTMLConstructionSite::InsertHTMLHtmlStartTagInBody(
+     AtomicHTMLToken* token) {
+   // Fragments do not have a root HTML element, so any additional HTML elements
+   // encountered during fragment parsing should be ignored.
+-  if (is_parsing_fragment_) {
++  if (is_parsing_fragment_)
+     return;
+-  }
+ 
+   MergeAttributesFromTokenIntoElement(token, open_elements_.HtmlElement());
+ }
+@@ -650,9 +635,8 @@ void HTMLConstructionSite::InsertHTMLBodyStartTagInBody(
+ }
+ 
+ void HTMLConstructionSite::SetDefaultCompatibilityMode() {
+-  if (is_parsing_fragment_) {
++  if (is_parsing_fragment_)
+     return;
+-  }
+   SetCompatibilityMode(Document::kQuirksMode);
+ }
+ 
+@@ -836,13 +820,12 @@ void HTMLConstructionSite::InsertDoctype(AtomicHTMLToken* token) {
+   // fragment, as changing the owning document's compatibility mode would be
+   // wrong.
+   DCHECK(!is_parsing_fragment_);
+-  if (is_parsing_fragment_) {
++  if (is_parsing_fragment_)
+     return;
+-  }
+ 
+-  if (token->ForceQuirks()) {
++  if (token->ForceQuirks())
+     SetCompatibilityMode(Document::kQuirksMode);
+-  } else {
++  else {
+     SetCompatibilityModeFromDoctype(token->GetHTMLTag(), public_id, system_id);
+   }
+ }
+@@ -961,9 +944,8 @@ void HTMLConstructionSite::InsertHTMLBodyElement(AtomicHTMLToken* token) {
+   Element* body = CreateElement(token, html_names::xhtmlNamespaceURI);
+   AttachLater(CurrentInsertionLocation(), body);
+   open_elements_.PushHTMLBodyElement(HTMLStackItem::Create(body, token));
+-  if (document_) {
++  if (document_)
+     document_->WillInsertBody();
+-  }
+ }
+ 
+ void HTMLConstructionSite::InsertHTMLFormElement(
+@@ -1055,12 +1037,6 @@ void HTMLConstructionSite::InsertHTMLTemplateElement(
+       should_attach_template = false;
+       template_element->SetOverrideInsertionTarget(*host->AuthorShadowRoot());
+     }
+-    LOG(INFO) << "[issue-792-exp21] declarative-shadow-root url="
+-              << host->GetDocument().Url().GetString().Utf8()
+-              << " host_tag=" << host->tagName().Utf8()
+-              << " mode=" << declarative_shadow_root_mode.Utf8()
+-              << " success=" << success
+-              << " should_attach_template=" << should_attach_template;
+   }
+ 
+   auto current_insertion_location = CurrentInsertionLocation();
+@@ -1149,9 +1125,8 @@ void HTMLConstructionSite::InsertScriptElement(AtomicHTMLToken* token) {
+         OwnerDocumentForCurrentNode(), flags);
+   }
+   SetAttributes(element, token);
+-  if (is_scripting_content_allowed_) {
++  if (is_scripting_content_allowed_)
+     AttachLater(CurrentInsertionLocation(), element);
+-  }
+   open_elements_.Push(HTMLStackItem::Create(element, token));
+ }
+ 
+@@ -1176,9 +1151,8 @@ void HTMLConstructionSite::InsertTextNode(const StringView& string,
+   HTMLConstructionSiteTask dummy_task(HTMLConstructionSiteTask::kInsert);
+   dummy_task.parent = CurrentNode();
+ 
+-  if (ShouldFosterParent()) {
++  if (ShouldFosterParent())
+     FindFosterSite(dummy_task);
+-  }
+ 
+   AdjustInsertionLocation(dummy_task);
+   if (auto* template_element =
+@@ -1204,9 +1178,8 @@ void HTMLConstructionSite::InsertTextNode(const StringView& string,
+   // pending text into the task queue before making more.
+   if (!pending_text_.IsEmpty() &&
+       (pending_text_.parent != dummy_task.parent ||
+-       pending_text_.next_child != dummy_task.next_child)) {
++       pending_text_.next_child != dummy_task.next_child))
+     FlushPendingText();
+-  }
+   pending_text_.Append(dummy_task.parent, dummy_task.next_child, string,
+                        whitespace_mode);
+ }
+@@ -1271,9 +1244,8 @@ CustomElementDefinition* HTMLConstructionSite::LookUpCustomElementDefinition(
+     const AtomicString& is,
+     CustomElementRegistry* registry) {
+   // "2. If namespace is not the HTML namespace, return null."
+-  if (tag_name.NamespaceURI() != html_names::xhtmlNamespaceURI) {
++  if (tag_name.NamespaceURI() != html_names::xhtmlNamespaceURI)
+     return nullptr;
+-  }
+ 
+   if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
+     if (!registry) {
+@@ -1396,9 +1368,8 @@ Element* HTMLConstructionSite::CreateElement(
+     // TODO(dominicc): This is the way the Blink HTML parser performs
+     // checkpoints, but note the spec is different--it talks about the
+     // JavaScript stack, not the script nesting level.
+-    if (0u == reentry_permit_->ScriptNestingLevel()) {
++    if (0u == reentry_permit_->ScriptNestingLevel())
+       document.GetAgent().event_loop()->PerformMicrotaskCheckpoint();
+-    }
+ 
+     // "6.3 Push a new element queue onto the custom element
+     // reactions stack."
+@@ -1418,9 +1389,8 @@ Element* HTMLConstructionSite::CreateElement(
+     // "8. Append each attribute in the given token to element." We don't use
+     // setAttributes here because the custom element constructor may have
+     // manipulated attributes.
+-    for (const auto& attribute : token->Attributes()) {
++    for (const auto& attribute : token->Attributes())
+       element->setAttribute(attribute.GetName(), attribute.Value());
+-    }
+ 
+     // "9. If will execute script is true, then ..." etc. The CEReactionsScope
+     // and ThrowOnDynamicMarkupInsertionCountIncrementer destructors implement
+@@ -1513,9 +1483,8 @@ HTMLStackItem* HTMLConstructionSite::CreateElementFromSavedToken(
+ 
+ bool HTMLConstructionSite::IndexOfFirstUnopenFormattingElement(
+     unsigned& first_unopen_element_index) const {
+-  if (active_formatting_elements_.IsEmpty()) {
++  if (active_formatting_elements_.IsEmpty())
+     return false;
+-  }
+   unsigned index = active_formatting_elements_.size();
+   do {
+     --index;
+@@ -1532,9 +1501,8 @@ bool HTMLConstructionSite::IndexOfFirstUnopenFormattingElement(
+ 
+ void HTMLConstructionSite::ReconstructTheActiveFormattingElements() {
+   unsigned first_unopen_element_index;
+-  if (!IndexOfFirstUnopenFormattingElement(first_unopen_element_index)) {
++  if (!IndexOfFirstUnopenFormattingElement(first_unopen_element_index))
+     return;
+-  }
+ 
+   unsigned unopen_entry_index = first_unopen_element_index;
+   DCHECK_LT(unopen_entry_index, active_formatting_elements_.size());
+@@ -1553,15 +1521,13 @@ void HTMLConstructionSite::ReconstructTheActiveFormattingElements() {
+ void HTMLConstructionSite::GenerateImpliedEndTagsWithExclusion(
+     const HTMLTokenName& name) {
+   while (HasImpliedEndTag(CurrentStackItem()) &&
+-         !CurrentStackItem()->MatchesHTMLTag(name)) {
++         !CurrentStackItem()->MatchesHTMLTag(name))
+     open_elements_.Pop();
+-  }
+ }
+ 
+ void HTMLConstructionSite::GenerateImpliedEndTags() {
+-  while (HasImpliedEndTag(CurrentStackItem())) {
++  while (HasImpliedEndTag(CurrentStackItem()))
+     open_elements_.Pop();
+-  }
+ }
+ 
+ bool HTMLConstructionSite::InQuirksMode() {
+-- 
+2.54.0
+

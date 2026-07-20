@@ -1,0 +1,103 @@
+From b62aeef2acc895212c9ccde753d139c9497e9cb2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 00:46:01 -0500
+Subject: [PATCH] Route Gecko editing keys natively
+
+Command enters dressed in Meta,
+not as a lonely letter c.
+Plain commits shed composition robes,
+and edits reach the widget sea.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 58 +++++++++++++++++--
+ 1 file changed, 52 insertions(+), 6 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index 40def14af705..91ece3dc0c0c 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -828,6 +828,32 @@ function ensureGenericTextInputScript(browser) {
+           ahTextInputProcessor = tip;
+           return tip;
+         }
++        function activateKeyModifiers(tip, modifiers) {
++          var activated = [];
++          var modifierKeys = [
++            [1, "Shift"],
++            [2, "Control"],
++            [4, "Alt"],
++            [8, "Meta"],
++          ];
++          var flags = tip.KEY_NON_PRINTABLE_KEY |
++            tip.KEY_DONT_DISPATCH_MODIFIER_KEY_EVENT;
++          for (var modifierKey of modifierKeys) {
++            if (!(modifiers & modifierKey[0]) ||
++                tip.getModifierState(modifierKey[1]))
++              continue;
++            var event = new content.KeyboardEvent("", { key: modifierKey[1] });
++            tip.keydown(event, flags);
++            activated.push(event);
++          }
++          return activated;
++        }
++        function releaseKeyModifiers(tip, activated) {
++          var flags = tip.KEY_NON_PRINTABLE_KEY |
++            tip.KEY_DONT_DISPATCH_MODIFIER_KEY_EVENT;
++          for (var i = activated.length - 1; i >= 0; --i)
++            tip.keyup(activated[i], flags);
++        }
+         function setPendingComposition(tip, text) {
+           var selected = validRange(d.selected_start, d.selected_length, "selected");
+           tip.setPendingCompositionString(text);
+@@ -847,14 +873,34 @@ function ensureGenericTextInputScript(browser) {
+           if (raw !== "down" && raw !== "up" && raw !== "repeat")
+             throw new Error("unknown_key_type");
+           var code = Number(d.keyCode) || 0;
++          var sharedKeyModifiers = Number(d.modifiers);
++          if (!Number.isSafeInteger(sharedKeyModifiers) || sharedKeyModifiers < 0 ||
++              (sharedKeyModifiers & ~15))
++            throw new Error("invalid_key_modifiers");
+           var names = {8:["Backspace","Backspace"],9:["Tab","Tab"],13:["Enter","Enter"],27:["Escape","Escape"],32:[" ","Space"],37:["ArrowLeft","ArrowLeft"],38:["ArrowUp","ArrowUp"],39:["ArrowRight","ArrowRight"],40:["ArrowDown","ArrowDown"],46:["Delete","Delete"]};
+           var pair = names[code] || [code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : "Unidentified", code >= 65 && code <= 90 ? "Key" + String.fromCharCode(code) : ""];
+-          var event = new content.KeyboardEvent("", { key: pair[0], code: pair[1], keyCode: code, repeat: raw === "repeat" });
++          var event = new content.KeyboardEvent("", {
++            key: pair[0],
++            code: pair[1],
++            keyCode: code,
++            repeat: raw === "repeat",
++            shiftKey: !!(sharedKeyModifiers & 1),
++            ctrlKey: !!(sharedKeyModifiers & 2),
++            altKey: !!(sharedKeyModifiers & 4),
++            metaKey: !!(sharedKeyModifiers & 8),
++          });
+           var tip = getTIP();
+-          if (raw === "up") tip.keyup(event, 0);
+-          else tip.keydown(event, tip.KEY_DEFAULT_PREVENTED);
++          var activated = activateKeyModifiers(tip, sharedKeyModifiers);
++          try {
++            if (raw === "up") tip.keyup(event, 0);
++            else tip.keydown(event, 0);
++          } finally {
++            releaseKeyModifiers(tip, activated);
++          }
++          await new Promise(resolve =>
++            content.requestAnimationFrame(() => content.requestAnimationFrame(resolve)));
+           result.ok = 1;
+-          result.error = "widget_key_" + raw;
++          result.error = "widget_key_" + raw + "_modifiers=" + sharedKeyModifiers;
+         } else if (d.op === "text_input") {
+           var text = String(d.text || "");
+           var utf8Bytes = new TextEncoder().encode(text).length;
+@@ -875,8 +921,8 @@ function ensureGenericTextInputScript(browser) {
+               wu.sendContentCommandEvent("insertText", null, text);
+               if (replacementEditor.value !== expectedReplacement)
+                 throw new Error("native_replace_not_applied");
+-            } else if (!textTip.commitCompositionWith(text, null, 0)) {
+-              throw new Error("tip_commit_rejected");
++            } else {
++              wu.sendContentCommandEvent("insertText", null, text);
+             }
+           } else if (kind === "ime_start") {
+             await applyReplacementRange();
+-- 
+2.54.0
+

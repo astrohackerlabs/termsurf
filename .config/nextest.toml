@@ -1,0 +1,29 @@
+# Deadlock-proof test gate for the Roastty suite (Issue 801, Experiment 829).
+#
+# The suite spawns real child processes and background PTY-worker threads, so a
+# regression can deadlock a test instead of failing it. Rust has no per-test
+# timeout, so a hang is an indefinite wait, not a failure. This config makes a
+# hang loud and fatal: a test that blocks past the window is SIGKILLed and
+# reported as a failure by name.
+
+[profile.default]
+# A test is "slow" after 30s; terminate-after = 1 kills it after one such period
+# (~30s) and reports it as timed-out. Tune the period up only if a legitimate
+# test genuinely needs longer.
+slow-timeout = { period = "30s", terminate-after = 1 }
+
+# The CoreText-backed font tests load real macOS fonts. nextest runs each test in
+# its own process with no shared CoreText cache, so each pays a cold ~10s font
+# load; at full parallelism 100+ processes thrash the system font daemon and each
+# stretches to ~58s (and *which* tests are slowest varies run to run). They are
+# slow, not deadlocked. Cap the whole `font::` module's concurrency (less fontd
+# thrash) and give it a longer window so slow-but-finite tests are not killed as
+# false positives — a true deadlock (infinite) is still caught at 120s. Fast font
+# tests are unaffected: they finish in milliseconds regardless of the window.
+[test-groups]
+coretext = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'test(/^font::/)'
+test-group = 'coretext'
+slow-timeout = { period = "120s", terminate-after = 1 }

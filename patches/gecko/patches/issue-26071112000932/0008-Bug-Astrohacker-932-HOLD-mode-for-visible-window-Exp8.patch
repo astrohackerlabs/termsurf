@@ -1,0 +1,77 @@
+From ffe9a2944791ca0a7cd126bde682cc5f0025d752 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 21:38:35 -0500
+Subject: [PATCH] Bug Astrohacker 932: HOLD mode for visible window (Exp8)
+
+When ASTROHACKER_GECKO_HOLD=1, keep the chrome window and event loop
+alive after load for parent AX resize; otherwise keep Exp7 quit path.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 27 +++++++++++++++----
+ 1 file changed, 22 insertions(+), 5 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index b075f191a7a2..a2bf55fcdf3a 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -49,18 +49,26 @@ export class CommandLineHandler {
+     }
+     dump(`headless=${headless ? 1 : 0}\n`);
+ 
+-    runVisible(urlParam, headless)
++    // HOLD mode (Exp8): leave the normal event loop running after load so
++    // the parent can AX-resize the window; do not force-quit.
++    let hold =
++      Services.env.get("ASTROHACKER_GECKO_HOLD") === "1" && !headless;
++
++    runVisible(urlParam, headless, hold)
+       .catch(err => {
+         dump(`probe_error=${String(err)}\n`);
+         dump("visible_window_ok=0\n");
+       })
+       .finally(() => {
++        if (hold) {
++          // Keep AppKit/Gecko event loop alive until parent SIGTERM.
++          return;
++        }
+         try {
+           Services.startup.quit(
+             Ci.nsIAppStartup.eForceQuit | Ci.nsIAppStartup.eAttemptQuit
+           );
+         } catch (e) {
+-          // Last resort: hard exit so the harness reaps the process.
+           dump("force_exit=1\n");
+           // eslint-disable-next-line no-undef
+           quit(0);
+@@ -178,7 +186,7 @@ function waitTabLoad(browser, expectedUrlHint) {
+   });
+ }
+ 
+-async function runVisible(urlStr, headless) {
++async function runVisible(urlStr, headless, hold) {
+   dump("state=open_browser_window\n");
+   let args = Cc["@mozilla.org/supports-string;1"].createInstance(
+     Ci.nsISupportsString
+@@ -263,9 +271,18 @@ async function runVisible(urlStr, headless) {
+   } else {
+     dump("visible_window_ok=0\n");
+   }
++
++  if (hold) {
++    // Exp8: retain window; normal event loop continues (no nested busy loop).
++    // Parent reaps via SIGTERM; do not claim teardown here.
++    dump("hold_mode=1\n");
++    dump("hold_ms=0\n");
++    dump("hold_retained=1\n");
++    return;
++  }
++
+   dump("hold_ms=1500\n");
+-  // Spin the main event loop so timers/paint keep running while we hold
+-  // the window open for external CG observation.
++  // Exp7: brief hold for CG observation, then quit.
+   let holdEnd = Date.now() + 1500;
+   Services.tm.spinEventLoopUntilOrQuit("astrohacker-visible-hold", () => {
+     return Date.now() >= holdEnd;
+-- 
+2.54.0
+

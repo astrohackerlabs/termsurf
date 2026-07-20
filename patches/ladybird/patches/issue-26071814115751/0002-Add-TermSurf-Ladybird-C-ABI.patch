@@ -1,0 +1,214 @@
+From 0d3c994be322a303db151d87ccf80980136c5f83 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 1 Jul 2026 20:40:55 -0500
+Subject: [PATCH 02/22] Add TermSurf Ladybird C ABI
+
+A Ladybird met a little bat,
+And offered it a C-shaped hat.
+The webview woke, the data flew,
+A dylib learned a trick or two.
+---
+ Libraries/CMakeLists.txt                      |   1 +
+ Libraries/LibTermSurfLadybird/CMakeLists.txt  |  19 +++
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 151 ++++++++++++++++++
+ 3 files changed, 171 insertions(+)
+ create mode 100644 Libraries/LibTermSurfLadybird/CMakeLists.txt
+ create mode 100644 Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+
+diff --git a/Libraries/CMakeLists.txt b/Libraries/CMakeLists.txt
+index a3aae2a197..e3d38d2d87 100644
+--- a/Libraries/CMakeLists.txt
++++ b/Libraries/CMakeLists.txt
+@@ -34,6 +34,7 @@ if (ENABLE_GUI_TARGETS)
+     add_subdirectory(LibMedia)
+     add_subdirectory(LibWeb)
+     add_subdirectory(LibWebView)
++    add_subdirectory(LibTermSurfLadybird)
+ endif()
+ 
+ # FIXME: Increase support for building targets on Windows
+diff --git a/Libraries/LibTermSurfLadybird/CMakeLists.txt b/Libraries/LibTermSurfLadybird/CMakeLists.txt
+new file mode 100644
+index 0000000000..1afb1d6b1a
+--- /dev/null
++++ b/Libraries/LibTermSurfLadybird/CMakeLists.txt
+@@ -0,0 +1,19 @@
++add_library(TermSurfLadybird SHARED
++    TermSurfLadybird.cpp
++)
++
++set_target_properties(TermSurfLadybird PROPERTIES
++    OUTPUT_NAME termsurf_ladybird
++    MACOSX_RPATH ON
++    INSTALL_NAME_DIR "@rpath"
++    BUILD_RPATH "${CMAKE_BINARY_DIR}/lib;$<TARGET_FILE_DIR:ladybird>"
++    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
++)
++
++add_dependencies(TermSurfLadybird ${ladybird_helper_processes})
++target_link_libraries(TermSurfLadybird PRIVATE AK LibCore LibDiff LibFileSystem LibGfx LibImageDecoders LibImageDecoderClient LibIPC LibJS LibMain LibRequests LibURL LibWeb LibWebView)
++target_link_libraries(TermSurfLadybird PUBLIC GenericClangPlugin)
++
++if (APPLE)
++    target_compile_definitions(TermSurfLadybird PRIVATE LADYBIRD_BINARY_PATH="$<TARGET_FILE_DIR:ladybird>")
++endif()
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+new file mode 100644
+index 0000000000..e0739111b3
+--- /dev/null
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -0,0 +1,151 @@
++/*
++ * Copyright (c) 2026, Ryan X. Charles <ryan@ryanxcharles.com>
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <AK/String.h>
++#include <AK/StringView.h>
++#include <AK/Vector.h>
++#include <LibCore/AnonymousBuffer.h>
++#include <LibCore/EventLoop.h>
++#include <LibCore/System.h>
++#include <LibGfx/SystemTheme.h>
++#include <LibMain/Main.h>
++#include <LibURL/URL.h>
++#include <LibWeb/Bindings/Navigation.h>
++#include <LibWebView/Application.h>
++#include <LibWebView/HeadlessWebView.h>
++#include <LibWebView/Options.h>
++#include <string.h>
++#include <time.h>
++
++namespace {
++
++class TermSurfLadybirdApplication final : public WebView::Application {
++    WEB_VIEW_APPLICATION(TermSurfLadybirdApplication)
++
++public:
++    explicit TermSurfLadybirdApplication(Optional<ByteString> ladybird_binary_path)
++        : WebView::Application(move(ladybird_binary_path))
++    {
++    }
++
++private:
++    virtual void create_platform_options(WebView::BrowserOptions& browser_options, WebView::RequestServerOptions&, WebView::WebContentOptions& web_content_options) override
++    {
++        browser_options.headless_mode = WebView::HeadlessMode::Test;
++        browser_options.disable_sql_database = WebView::DisableSQLDatabase::Yes;
++        web_content_options.force_fontconfig = WebView::ForceFontconfig::Yes;
++    }
++};
++
++static ErrorOr<Core::AnonymousBuffer> load_default_theme()
++{
++    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(sizeof(Gfx::SystemTheme)));
++    auto* theme = buffer.data<Gfx::SystemTheme>();
++    for (auto& color : theme->color)
++        color = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::Window)] = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::WindowText)] = Color(Color::Black).value();
++    theme->color[to_underlying(Gfx::ColorRole::Base)] = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::BaseText)] = Color(Color::Black).value();
++    return buffer;
++}
++
++static ErrorOr<int> run_headless_lifecycle_probe()
++{
++    tzset();
++
++    char argument0[] = "libtermsurf_ladybird";
++    char* argv[] = { argument0, nullptr };
++    Vector<StringView> argument_strings;
++    TRY(argument_strings.try_append({ argument0, strlen(argument0) }));
++    Main::Arguments arguments {
++        .argc = 1,
++        .argv = argv,
++        .strings = argument_strings.span(),
++    };
++
++#if defined(LADYBIRD_BINARY_PATH)
++    auto app = TRY(TermSurfLadybirdApplication::create(arguments, LADYBIRD_BINARY_PATH));
++#else
++    auto app = TRY(TermSurfLadybirdApplication::create(arguments, OptionalNone {}));
++#endif
++
++    auto theme = TRY(load_default_theme());
++    auto view = WebView::HeadlessWebView::create(move(theme), { 800, 600 });
++    outln("TIER2: TermSurf Ladybird ABI constructed HeadlessWebView handle={}", view->handle());
++
++    bool finished = false;
++    bool crashed = false;
++    bool timed_out = false;
++
++    view->on_load_finish = [&](URL::URL const& url) {
++        outln("PROBE: TermSurf Ladybird ABI load_finish url={}", url.serialize());
++        if (url.scheme() == "data"sv) {
++            outln("TIER3: TermSurf Ladybird ABI load_finish url={}", url.serialize());
++            finished = true;
++        }
++    };
++    view->on_web_content_crashed = [&] {
++        crashed = true;
++    };
++
++    auto url = URL::create_with_data("text/html"sv, "<title>Girlbat ABI</title><p>ok</p>"sv);
++    view->load(url, Web::Bindings::NavigationHistoryBehavior::Auto);
++
++    auto& event_loop = Core::EventLoop::current();
++    for (u32 elapsed_ms = 0; elapsed_ms < 30'000 && !finished && !crashed; elapsed_ms += 5) {
++        (void)event_loop.pump(Core::EventLoop::WaitMode::PollForEvents);
++        TRY(Core::System::sleep_ms(5));
++    }
++
++    if (!finished && !crashed)
++        timed_out = true;
++
++    if (crashed || timed_out || !finished)
++        return 1;
++
++    outln("PASS: TermSurf Ladybird ABI lifecycle probe reached Tier 3");
++    return 0;
++}
++
++}
++
++#define TERMSURF_LADYBIRD_EXPORT extern "C" __attribute__((visibility("default")))
++
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name();
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version();
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup();
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_initialize_runtime();
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_shutdown_runtime();
++
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
++{
++    return "libtermsurf_ladybird-ladybird";
++}
++
++TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
++{
++    return "ladybird-a80d01fc-issue-0884-ladybird-c-abi-lifecycle";
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
++{
++    auto result = run_headless_lifecycle_probe();
++    if (result.is_error()) {
++        warnln("TermSurf Ladybird ABI warmup failed: {}", result.error());
++        return false;
++    }
++    return result.value() == 0;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_initialize_runtime()
++{
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT void ts_ladybird_shutdown_runtime()
++{
++}
+-- 
+2.50.1 (Apple Git-155)
+

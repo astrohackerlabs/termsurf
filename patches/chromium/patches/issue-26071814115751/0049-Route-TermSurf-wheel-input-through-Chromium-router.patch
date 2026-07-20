@@ -1,0 +1,126 @@
+From 41aa7c238ead490322ffeab00c706b80e5156419 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 08:24:42 -0500
+Subject: [PATCH 049/122] Route TermSurf wheel input through Chromium router
+
+---
+ .../ts_browser_main_parts.cc                  | 85 ++++++++++++++++++-
+ 1 file changed, 83 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 675d587674..7e3908d178 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -13,9 +13,12 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
++#include "components/input/render_widget_host_input_event_router.h"
+ #include "components/keyed_service/content/browser_context_dependency_manager.h"
+ #include "components/prefs/pref_service.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
++#include "content/browser/renderer_host/render_widget_host_view_base.h"
++#include "content/browser/web_contents/web_contents_impl.h"
+ #include "content/libtermsurf_chromium/extensions/ts_browser_context_keyed_service_factories.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_prefs.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+@@ -71,6 +74,12 @@ bool Issue779TraceEnabled() {
+   return enabled;
+ }
+ 
++bool Issue794InputTraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_PDF_INPUT_TRACE") != nullptr;
++  return enabled;
++}
++
+ void Issue779TraceAnnounce() {
+   static bool announced = false;
+   if (!announced) {
+@@ -700,9 +709,81 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+                                 ? ui::ScrollGranularity::kScrollByPrecisePixel
+                                 : ui::ScrollGranularity::kScrollByLine;
+ 
+-  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (view) {
++  auto* web_contents = tab->shell->web_contents();
++  auto* view = web_contents->GetRenderWidgetHostView();
++  auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents);
++  auto* router =
++      web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
++
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp4] wheel-received web_contents=" << web_contents
++              << " url=" << web_contents->GetLastCommittedURL().spec()
++              << " view=" << view
++              << " rwh=" << (view ? view->GetRenderWidgetHost() : nullptr)
++              << " router=" << router << " coords=(" << x << ", " << y
++              << ") delta=(" << delta_x << ", " << delta_y
++              << ") phase=" << phase << " momentum_phase=" << momentum_phase
++              << " precise=" << (precise ? 1 : 0) << " modifiers=" << modifiers;
++
++    web_contents->ForEachRenderFrameHost([&](RenderFrameHost* rfh) {
++      auto* frame_view = rfh->GetView();
++      std::string site_url;
++      if (rfh->GetSiteInstance()) {
++        site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++      }
++      const bool pdf_related =
++          rfh->GetLastCommittedURL().spec().find(
++              "mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos ||
++          rfh->GetLastCommittedURL().spec().find("bitcoin.pdf") !=
++              std::string::npos ||
++          site_url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") !=
++              std::string::npos;
++
++      if (!frame_view) {
++        LOG(INFO) << "[issue-794-exp4] frame frame_tree_node_id="
++                  << rfh->GetFrameTreeNodeId()
++                  << " has_parent=" << (rfh->GetParent() ? 1 : 0)
++                  << " url=" << rfh->GetLastCommittedURL().spec()
++                  << " site_url=" << site_url << " view=0"
++                  << " pdf_related=" << (pdf_related ? 1 : 0);
++        return;
++      }
++
++      const gfx::Rect view_bounds = frame_view->GetViewBounds();
++      const gfx::PointF root_origin =
++          frame_view->TransformPointToRootCoordSpaceF(gfx::PointF(0, 0));
++      const gfx::RectF root_bounds(root_origin.x(), root_origin.y(),
++                                   view_bounds.width(), view_bounds.height());
++      const bool contains_input = root_bounds.Contains(gfx::PointF(x, y));
++      LOG(INFO) << "[issue-794-exp4] frame frame_tree_node_id="
++                << rfh->GetFrameTreeNodeId()
++                << " has_parent=" << (rfh->GetParent() ? 1 : 0)
++                << " url=" << rfh->GetLastCommittedURL().spec()
++                << " site_url=" << site_url << " view=" << frame_view
++                << " view_bounds=" << view_bounds.ToString()
++                << " root_bounds=" << root_bounds.ToString()
++                << " contains_input=" << (contains_input ? 1 : 0)
++                << " pdf_related=" << (pdf_related ? 1 : 0);
++    });
++  }
++
++  if (view && router) {
++    auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=input-router"
++                << " root_view=" << root_view << " router=" << router;
++    }
++    ui::LatencyInfo latency;
++    router->RouteMouseWheelEvent(root_view, &wheel_event, latency);
++  } else if (view) {
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=direct-fallback"
++                << " reason=" << (router ? "missing-view" : "missing-router");
++    }
+     view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
++  } else if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp4] wheel-route route_mode=drop"
++              << " reason=missing-view";
+   }
+ #endif
+ }
+-- 
+2.50.1 (Apple Git-155)
+

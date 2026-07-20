@@ -1,0 +1,52 @@
+From edb39910e6ab68df65ecf73a5e31a613627d44f6 Mon Sep 17 00:00:00 2001
+From: Astrohacker <astrohacker@local>
+Date: Sat, 11 Jul 2026 20:30:03 -0500
+Subject: [PATCH 3/6] Bug Astrohacker 932: ignore initial about:blank
+ STATE_STOP
+
+---
+ .../AstrohackerWindowlessProbe.sys.mjs          | 17 ++++++++++++++---
+ 1 file changed, 14 insertions(+), 3 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+index 35235577d9ed..5d730b8d1c8d 100644
+--- a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+@@ -66,6 +66,7 @@ async function runWindowlessProbe(urlStr) {
+     .getInterface(Ci.nsIWebProgress);
+ 
+   let loadDone = new Promise(resolve => {
++    let sawStart = false;
+     let listener = {
+       QueryInterface: ChromeUtils.generateQI([
+         Ci.nsIWebProgressListener,
+@@ -73,13 +74,23 @@ async function runWindowlessProbe(urlStr) {
+       ]),
+       onStateChange(aWebProgress, _aRequest, aStateFlags, _aStatus) {
+         const L = Ci.nsIWebProgressListener;
+-        if (!(aStateFlags & L.STATE_STOP)) {
++        if (!aWebProgress.isTopLevel) {
+           return;
+         }
+-        if (!(aStateFlags & L.STATE_IS_NETWORK)) {
++        if (!(aStateFlags & L.STATE_IS_NETWORK) && !(aStateFlags & L.STATE_IS_DOCUMENT)) {
+           return;
+         }
+-        if (!aWebProgress.isTopLevel) {
++        if (aStateFlags & L.STATE_START) {
++          sawStart = true;
++          dump("STATE_START\n");
++          return;
++        }
++        if (!(aStateFlags & L.STATE_STOP)) {
++          return;
++        }
++        // Ignore initial about:blank stop before our navigation starts.
++        if (!sawStart) {
++          dump("STATE_STOP_ignore_initial\n");
+           return;
+         }
+         dump("STATE_STOP\n");
+-- 
+2.54.0
+

@@ -1,0 +1,1057 @@
+From 2b93f789303216bde48de1c0627b3c1f9f2dc679 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 12:54:32 -0500
+Subject: [PATCH 1/2] astrohacker: Shannon shell product patch on nushell tip
+ (issue 924)
+
+---
+ Cargo.lock                           | 202 ++++++++++++++++-----------
+ Cargo.toml                           |   6 +-
+ crates/nu-cli/Cargo.toml             |   7 +-
+ crates/nu-cli/src/bash_highlight.rs  | 137 ++++++++++++++++++
+ crates/nu-cli/src/lib.rs             |   5 +
+ crates/nu-cli/src/mode_dispatcher.rs |  39 ++++++
+ crates/nu-cli/src/repl.rs            | 177 ++++++++++++++++++-----
+ crates/nu-lsp/Cargo.toml             |   4 +-
+ 8 files changed, 447 insertions(+), 130 deletions(-)
+ create mode 100644 crates/nu-cli/src/bash_highlight.rs
+ create mode 100644 crates/nu-cli/src/mode_dispatcher.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 3de994d..7edbbe7 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -201,7 +201,7 @@ dependencies = [
+  "objc2-foundation",
+  "parking_lot",
+  "percent-encoding",
+- "windows-sys 0.60.2",
++ "windows-sys 0.52.0",
+  "wl-clipboard-rs",
+  "x11rb",
+ ]
+@@ -2057,7 +2057,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+ dependencies = [
+  "libc",
+- "windows-sys 0.61.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -2167,7 +2167,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
+ dependencies = [
+  "cfg-if",
+  "rustix 1.1.4",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -3085,7 +3085,7 @@ dependencies = [
+  "js-sys",
+  "log",
+  "wasm-bindgen",
+- "windows-core 0.62.2",
++ "windows-core 0.56.0",
+ ]
+ 
+ [[package]]
+@@ -3486,7 +3486,7 @@ dependencies = [
+  "portable-atomic",
+  "portable-atomic-util",
+  "serde_core",
+- "windows-sys 0.61.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -4373,7 +4373,6 @@ dependencies = [
+  "miette",
+  "multipart-rs",
+  "nix 0.31.3",
+- "nu-cli",
+  "nu-cmd-base",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+@@ -4382,7 +4381,6 @@ dependencies = [
+  "nu-engine",
+  "nu-experimental",
+  "nu-explore",
+- "nu-lsp",
+  "nu-mcp",
+  "nu-parser",
+  "nu-path",
+@@ -4401,6 +4399,8 @@ dependencies = [
+  "rstest",
+  "same-file",
+  "serde_json",
++ "shannon-nu-cli",
++ "shannon-nu-lsp",
+  "simplelog",
+  "tango-bench",
+  "tempfile",
+@@ -4417,44 +4417,6 @@ dependencies = [
+  "windows-sys 0.61.2",
+ ]
+ 
+-[[package]]
+-name = "nu-cli"
+-version = "0.114.1"
+-dependencies = [
+- "chrono",
+- "crossterm",
+- "fancy-regex",
+- "is_executable",
+- "log",
+- "lscolors",
+- "miette",
+- "nu-ansi-term",
+- "nu-cmd-base",
+- "nu-cmd-lang",
+- "nu-color-config",
+- "nu-command",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-path",
+- "nu-plugin-engine",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "percent-encoding",
+- "reedline",
+- "rstest",
+- "strum",
+- "sysinfo 0.39.3",
+- "tempfile",
+- "unicode-segmentation",
+- "uuid",
+- "which 8.0.2",
+-]
+-
+ [[package]]
+ name = "nu-cmd-base"
+ version = "0.114.1"
+@@ -4768,36 +4730,6 @@ dependencies = [
+  "serde_json",
+ ]
+ 
+-[[package]]
+-name = "nu-lsp"
+-version = "0.114.1"
+-dependencies = [
+- "assert-json-diff",
+- "crossbeam-channel",
+- "fancy-regex",
+- "lsp-server",
+- "lsp-textdocument",
+- "lsp-types",
+- "memchr",
+- "miette",
+- "nu-cli",
+- "nu-cmd-lang",
+- "nu-command",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "rstest",
+- "serde",
+- "serde_json",
+- "url",
+-]
+-
+ [[package]]
+ name = "nu-mcp"
+ version = "0.114.1"
+@@ -5052,7 +4984,6 @@ dependencies = [
+  "lexopt",
+  "linkme",
+  "nu-ansi-term",
+- "nu-cli",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+  "nu-command",
+@@ -5068,6 +4999,7 @@ dependencies = [
+  "num-format",
+  "rstest",
+  "serde_json",
++ "shannon-nu-cli",
+  "tempfile",
+  "thiserror 2.0.18",
+  "which 8.0.2",
+@@ -5640,7 +5572,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
+ dependencies = [
+  "libc",
+- "windows-sys 0.61.2",
++ "windows-sys 0.45.0",
+ ]
+ 
+ [[package]]
+@@ -6994,7 +6926,7 @@ dependencies = [
+  "once_cell",
+  "socket2 0.6.3",
+  "tracing",
+- "windows-sys 0.60.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -7292,8 +7224,6 @@ dependencies = [
+ [[package]]
+ name = "reedline"
+ version = "0.49.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "826c1fc22a2b1f14c3f6a80fc3d56adfbfb913d07f170bce4246700de7adfd50"
+ dependencies = [
+  "arboard",
+  "chrono",
+@@ -7657,7 +7587,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys 0.4.15",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -7670,7 +7600,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys 0.12.1",
+- "windows-sys 0.61.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -7729,7 +7659,7 @@ dependencies = [
+  "security-framework",
+  "security-framework-sys",
+  "webpki-root-certs",
+- "windows-sys 0.61.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -8085,6 +8015,77 @@ dependencies = [
+  "jiff",
+ ]
+ 
++[[package]]
++name = "shannon-nu-cli"
++version = "0.114.1"
++dependencies = [
++ "chrono",
++ "crossterm",
++ "fancy-regex",
++ "is_executable",
++ "log",
++ "lscolors",
++ "miette",
++ "nu-ansi-term",
++ "nu-cmd-base",
++ "nu-cmd-lang",
++ "nu-color-config",
++ "nu-command",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-path",
++ "nu-plugin-engine",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "percent-encoding",
++ "reedline",
++ "rstest",
++ "strum",
++ "sysinfo 0.39.3",
++ "tempfile",
++ "tree-sitter",
++ "tree-sitter-bash",
++ "tree-sitter-language",
++ "unicode-segmentation",
++ "uuid",
++ "which 8.0.2",
++]
++
++[[package]]
++name = "shannon-nu-lsp"
++version = "0.114.1"
++dependencies = [
++ "assert-json-diff",
++ "crossbeam-channel",
++ "fancy-regex",
++ "lsp-server",
++ "lsp-textdocument",
++ "lsp-types",
++ "memchr",
++ "miette",
++ "nu-cmd-lang",
++ "nu-command",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "rstest",
++ "serde",
++ "serde_json",
++ "shannon-nu-cli",
++ "url",
++]
++
+ [[package]]
+ name = "sharded-slab"
+ version = "0.1.7"
+@@ -8343,6 +8344,7 @@ dependencies = [
+  "cfg-if",
+  "libc",
+  "psm",
++ "windows-sys 0.52.0",
+  "windows-sys 0.59.0",
+ ]
+ 
+@@ -8646,7 +8648,7 @@ dependencies = [
+  "getrandom 0.4.2",
+  "once_cell",
+  "rustix 1.1.4",
+- "windows-sys 0.61.2",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -9117,6 +9119,36 @@ dependencies = [
+  "windows 0.56.0",
+ ]
+ 
++[[package]]
++name = "tree-sitter"
++version = "0.26.10"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3c343ed63e3f5c64d1acdecb5d2c13d4e169cb5fde0052106ebaa6c6f27f9e55"
++dependencies = [
++ "cc",
++ "regex",
++ "regex-syntax 0.8.10",
++ "serde_json",
++ "streaming-iterator",
++ "tree-sitter-language",
++]
++
++[[package]]
++name = "tree-sitter-bash"
++version = "0.23.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "329a4d48623ac337d42b1df84e81a1c9dbb2946907c102ca72db158c1964a52e"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
++[[package]]
++name = "tree-sitter-language"
++version = "0.1.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "009994f150cc0cd50ff54917d5bc8bffe8cad10ca10d81c34da2ec421ae61782"
++
+ [[package]]
+ name = "tree_magic_mini"
+ version = "3.2.2"
+@@ -10028,7 +10060,7 @@ version = "0.1.11"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+ dependencies = [
+- "windows-sys 0.61.2",
++ "windows-sys 0.48.0",
+ ]
+ 
+ [[package]]
+diff --git a/Cargo.toml b/Cargo.toml
+index 228547c..0808646 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -87,7 +87,7 @@ members = [
+ 
+ [workspace.dependencies]
+ 
+-nu-cli = { path = "crates/nu-cli", version = "0.114.1", default-features = false }
++nu-cli = { path = "crates/nu-cli", version = "0.114.1", package = "shannon-nu-cli", default-features = false }
+ nu-cmd-base = { path = "crates/nu-cmd-base", version = "0.114.1", default-features = false }
+ nu-cmd-extra = { path = "crates/nu-cmd-extra", version = "0.114.1", default-features = false }
+ nu-cmd-lang = { path = "crates/nu-cmd-lang", version = "0.114.1", default-features = false }
+@@ -101,7 +101,7 @@ nu-explore = { path = "crates/nu-explore", version = "0.114.1", default-features
+ nu-glob = { path = "crates/nu-glob", version = "0.114.1", default-features = false }
+ nu-heavy-utils = { path = "crates/nu-heavy-utils", version = "0.114.1", default-features = false }
+ nu-json = { path = "crates/nu-json", version = "0.114.1", default-features = false }
+-nu-lsp = { path = "crates/nu-lsp", version = "0.114.1", default-features = false }
++nu-lsp = { path = "crates/nu-lsp", version = "0.114.1", package = "shannon-nu-lsp", default-features = false }
+ nu-mcp = { path = "crates/nu-mcp", version = "0.114.1", default-features = false }
+ nu-parser = { path = "crates/nu-parser", version = "0.114.1", default-features = false }
+ nu-path = { path = "crates/nu-path", version = "0.114.1", default-features = false }
+@@ -229,7 +229,7 @@ ratatui = { version = "0.30", default-features = false, features = [
+   #"underline-color" # leave out so we don't bring in termwiz
+ ] }
+ rayon = "1.12.0"
+-reedline = "0.49.0"
++reedline = { path = "../reedline", version = "0.49.0" }
+ rmp = "0.8.15"
+ rmp-serde = "1.3.1"
+ roxmltree = "0.21.1"
+diff --git a/crates/nu-cli/Cargo.toml b/crates/nu-cli/Cargo.toml
+index e37cb3a..f51efa5 100644
+--- a/crates/nu-cli/Cargo.toml
++++ b/crates/nu-cli/Cargo.toml
+@@ -4,9 +4,9 @@ description = "CLI-related functionality for Nushell"
+ repository = "https://github.com/nushell/nushell/tree/main/crates/nu-cli"
+ edition.workspace = true
+ license.workspace = true
+-name = "nu-cli"
++name = "shannon-nu-cli"
+ rust-version.workspace = true
+-version.workspace = true
++version = "0.114.1"
+ autotests = false
+ 
+ [lib]
+@@ -40,6 +40,9 @@ nu-color-config.workspace = true
+ nu-experimental.workspace = true
+ nu-ansi-term.workspace = true
+ reedline = { workspace = true, features = ["bashisms"] }
++tree-sitter = "0.26"
++tree-sitter-bash = "0.23"
++tree-sitter-language = "0.1"
+ 
+ chrono = { default-features = false, features = ["std"], workspace = true }
+ crossterm = { workspace = true }
+diff --git a/crates/nu-cli/src/bash_highlight.rs b/crates/nu-cli/src/bash_highlight.rs
+new file mode 100644
+index 0000000..1ff9449
+--- /dev/null
++++ b/crates/nu-cli/src/bash_highlight.rs
+@@ -0,0 +1,137 @@
++use nu_ansi_term::{Color, Style};
++use nu_color_config::get_shape_color;
++use nu_protocol::Config;
++use reedline::{Highlighter, StyledText};
++use tree_sitter::{Node, Parser};
++
++/// Syntax highlighter for bash using tree-sitter-bash.
++/// Colors are read from nushell's color_config so bash highlighting
++/// matches the user's nushell theme.
++pub struct BashHighlighter {
++    keyword: Style,
++    command: Style,
++    string: Style,
++    number: Style,
++    variable: Style,
++    operator: Style,
++    comment: Style,
++    foreground: Style,
++}
++
++impl BashHighlighter {
++    pub fn new(config: &Config) -> Self {
++        BashHighlighter {
++            keyword: get_shape_color("shape_keyword", config),
++            command: get_shape_color("shape_external", config),
++            string: get_shape_color("shape_string", config),
++            number: get_shape_color("shape_int", config),
++            variable: get_shape_color("shape_variable", config),
++            operator: get_shape_color("shape_operator", config),
++            comment: Style::new().fg(Color::DarkGray),
++            foreground: Style::default(),
++        }
++    }
++
++    fn bash_style(&self, node: &Node) -> Style {
++        match node.kind() {
++            "if" | "then" | "else" | "elif" | "fi" | "for" | "in" | "do" | "done" | "while"
++            | "until" | "case" | "esac" | "function" | "export" | "declare" | "local"
++            | "return" | "select" => self.keyword,
++
++            "command_name" => self.command,
++
++            "string" | "raw_string" | "heredoc_body" | "string_content" | "ansii_c_string" => {
++                self.string
++            }
++
++            "number" => self.number,
++
++            "variable_name" | "special_variable_name" => self.variable,
++            "simple_expansion" | "expansion" => self.variable,
++            "$" => self.variable,
++
++            "|" | ">" | ">>" | "<" | "<<" | "&&" | "||" | ";" | ";;" | "&" => self.operator,
++            "test_operator" => self.operator,
++
++            "comment" => self.comment,
++
++            _ => self.foreground,
++        }
++    }
++}
++
++impl Highlighter for BashHighlighter {
++    fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
++        let mut styled = StyledText::new();
++
++        if line.is_empty() {
++            return styled;
++        }
++
++        let language: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
++        let mut parser = Parser::new();
++        if parser.set_language(&language).is_err() {
++            styled.push((self.foreground, line.to_string()));
++            return styled;
++        }
++
++        let tree = match parser.parse(line, None) {
++            Some(tree) => tree,
++            None => {
++                styled.push((self.foreground, line.to_string()));
++                return styled;
++            }
++        };
++
++        let mut segments: Vec<(usize, usize, Style)> = Vec::new();
++        collect_leaf_styles(&tree.root_node(), self, &mut segments);
++
++        segments.sort_by_key(|s| s.0);
++
++        let mut pos = 0;
++        for (start, end, style) in &segments {
++            let start = *start;
++            let end = (*end).min(line.len());
++            if start > pos {
++                styled.push((self.foreground, line[pos..start].to_string()));
++            }
++            if start >= pos && end > start {
++                styled.push((*style, line[start..end].to_string()));
++                pos = end;
++            }
++        }
++        if pos < line.len() {
++            styled.push((self.foreground, line[pos..].to_string()));
++        }
++
++        styled
++    }
++}
++
++fn collect_leaf_styles(
++    node: &Node,
++    highlighter: &BashHighlighter,
++    segments: &mut Vec<(usize, usize, Style)>,
++) {
++    if node.child_count() == 0 {
++        let start = node.start_byte();
++        let end = node.end_byte();
++        let style = highlighter.bash_style(node);
++        segments.push((start, end, style));
++    } else {
++        let parent_style = match node.kind() {
++            "command_name" => Some(highlighter.command),
++            "simple_expansion" | "expansion" => Some(highlighter.variable),
++            "string" => Some(highlighter.string),
++            _ => None,
++        };
++
++        if let Some(style) = parent_style {
++            segments.push((node.start_byte(), node.end_byte(), style));
++        } else {
++            for child in node.children(&mut node.walk()) {
++                collect_leaf_styles(&child, highlighter, segments);
++            }
++        }
++    }
++}
+diff --git a/crates/nu-cli/src/lib.rs b/crates/nu-cli/src/lib.rs
+index d890366..8cd237a 100644
+--- a/crates/nu-cli/src/lib.rs
++++ b/crates/nu-cli/src/lib.rs
+@@ -1,6 +1,7 @@
+ #![doc = include_str!("../README.md")]
+ #![cfg_attr(test, allow(clippy::unwrap_used))]
+ 
++mod bash_highlight;
+ mod commands;
+ mod completions;
+ mod config_files;
+@@ -8,6 +9,7 @@ mod eval_cmds;
+ mod eval_file;
+ mod hints;
+ mod menus;
++mod mode_dispatcher;
+ mod prompt;
+ mod prompt_update;
+ mod reedline_config;
+@@ -16,12 +18,15 @@ mod syntax_highlight;
+ mod util;
+ mod validation;
+ 
++pub use bash_highlight::BashHighlighter;
+ pub use commands::add_cli_context;
+ pub use completions::{FileCompletion, NuCompleter, SemanticSuggestion, SuggestionKind};
+ pub use config_files::eval_config_contents;
+ pub use eval_cmds::{EvaluateCommandsOpts, evaluate_commands};
+ pub use eval_file::evaluate_file;
+ pub use menus::NuHelpCompleter;
++pub use mode_dispatcher::{ModeDispatcher, ModeResult};
++pub use commands::{NuHighlight, Print};
+ pub use prompt::NushellPrompt;
+ pub use prompt_update::update_prompt;
+ pub use repl::evaluate_repl;
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+new file mode 100644
+index 0000000..7ebb75b
+--- /dev/null
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -0,0 +1,39 @@
++//! Mode dispatcher trait for external shell integration (e.g., Shannon).
++//!
++//! When a host binary provides a `ModeDispatcher`, the REPL checks
++//! `$env.SHANNON_MODE` each iteration. If the mode is not "nu", the
++//! dispatcher handles the command instead of nushell's parser/evaluator.
++
++use std::collections::HashMap;
++use std::path::PathBuf;
++
++/// Trait for dispatching commands to non-nushell modes (e.g., brush, AI).
++///
++/// The dispatcher receives string env vars (already converted from nushell's
++/// typed Values) and returns strings. The REPL handles conversion back to
++/// nushell Values.
++pub trait ModeDispatcher: Send {
++    /// Execute a command in the given mode.
++    ///
++    /// - `mode`: the active mode name (e.g., "brush", "ai")
++    /// - `command`: the raw command string from the user
++    /// - `env_vars`: all exported env vars as strings
++    /// - `cwd`: the current working directory
++    fn execute(
++        &mut self,
++        mode: &str,
++        command: &str,
++        env_vars: HashMap<String, String>,
++        cwd: PathBuf,
++    ) -> ModeResult;
++}
++
++/// Result of a mode dispatch execution.
++pub struct ModeResult {
++    /// Updated environment variables (as strings).
++    pub env: HashMap<String, String>,
++    /// Updated working directory.
++    pub cwd: PathBuf,
++    /// Exit code of the command.
++    pub exit_code: i32,
++}
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index dfd90af..98cbd99 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -74,6 +74,7 @@ pub fn evaluate_repl(
+     prerun_command: Option<Spanned<String>>,
+     load_std_lib: Option<Spanned<String>>,
+     entire_start_time: Instant,
++    mode_dispatcher: Option<std::sync::Arc<std::sync::Mutex<Box<dyn crate::ModeDispatcher>>>>,
+ ) -> Result<()> {
+     // throughout this code, we hold this stack uniquely.
+     // During the main REPL loop, we hand ownership of this value to an Arc,
+@@ -208,6 +209,7 @@ pub fn evaluate_repl(
+                 entry_num: &mut entry_num,
+                 hostname: hostname.as_deref(),
+                 is_hostcommand: &mut is_hostcommand,
++                mode_dispatcher: mode_dispatcher.clone(),
+             });
+ 
+             // pass the most recent version of the line_editor back
+@@ -323,6 +325,7 @@ struct LoopContext<'a> {
+     entry_num: &'a mut usize,
+     hostname: Option<&'a str>,
+     is_hostcommand: &'a mut bool,
++    mode_dispatcher: Option<std::sync::Arc<std::sync::Mutex<Box<dyn crate::ModeDispatcher>>>>,
+ }
+ 
+ struct RunContext<'a> {
+@@ -334,6 +337,7 @@ struct RunContext<'a> {
+     use_color: bool,
+     shell_integration: &'a ShellIntegrationConfig,
+     entry_num: &'a mut usize,
++    mode_dispatcher: Option<std::sync::Arc<std::sync::Mutex<Box<dyn crate::ModeDispatcher>>>>,
+ }
+ 
+ fn run_command(ctx: RunContext) -> Reedline {
+@@ -348,6 +352,7 @@ fn run_command(ctx: RunContext) -> Reedline {
+         use_color,
+         shell_integration,
+         entry_num,
++        mode_dispatcher,
+     } = ctx;
+ 
+     let history_supports_meta = match engine_state.history_config().map(|h| h.file_format) {
+@@ -431,40 +436,75 @@ fn run_command(ctx: RunContext) -> Reedline {
+     // Actual command execution logic starts from here
+     let cmd_execution_start_time = Instant::now();
+ 
+-    match parse_operation(command.clone(), engine_state, stack) {
+-        Ok(ReplOperation::AutoCd { cwd, target, span }) => {
+-            do_auto_cd(target, cwd, stack, engine_state, span);
+-
+-            run_finaliziation_ansi_sequence(
+-                stack,
+-                engine_state,
+-                use_color,
+-                shell_integration.osc633,
+-                shell_integration.osc133,
++    let mut shannon_handled = false;
++    if let Some(ref dispatcher) = mode_dispatcher {
++        let mode = stack
++            .get_env_var(engine_state, "SHANNON_MODE")
++            .and_then(|v| v.as_str().ok().map(str::to_string))
++            .unwrap_or_else(|| "nu".to_string());
++        if mode != "nu" {
++            let env_strings = env_to_strings(engine_state, stack).unwrap_or_else(|e| {
++                warn!("Couldn't convert environment variable values to strings: {e}");
++                HashMap::default()
++            });
++            let cwd = stack
++                .get_env_var(engine_state, "PWD")
++                .and_then(|v| v.as_str().ok())
++                .map(PathBuf::from)
++                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
++            let result = dispatcher.lock().expect("mode dispatcher mutex").execute(
++                &mode,
++                &command,
++                env_strings,
++                cwd,
+             );
++
++            for (key, value) in &result.env {
++                stack.add_env_var(key.clone(), Value::string(value, Span::unknown()));
++            }
++            let _ = stack.set_cwd(&result.cwd);
++            let _ = std::env::set_current_dir(&result.cwd);
++            stack.set_last_exit_code(result.exit_code, Span::unknown());
++            shannon_handled = true;
+         }
+-        Ok(ReplOperation::RunCommand(cmd)) => {
+-            line_editor = do_run_cmd(
+-                &cmd,
+-                stack,
+-                engine_state,
+-                line_editor,
+-                shell_integration.osc2,
+-                *entry_num,
+-                use_color,
+-            );
++    }
+ 
+-            run_finaliziation_ansi_sequence(
+-                stack,
+-                engine_state,
+-                use_color,
+-                shell_integration.osc633,
+-                shell_integration.osc133,
+-            );
++    if !shannon_handled {
++        match parse_operation(command.clone(), engine_state, stack) {
++            Ok(ReplOperation::AutoCd { cwd, target, span }) => {
++                do_auto_cd(target, cwd, stack, engine_state, span);
++
++                run_finaliziation_ansi_sequence(
++                    stack,
++                    engine_state,
++                    use_color,
++                    shell_integration.osc633,
++                    shell_integration.osc133,
++                );
++            }
++            Ok(ReplOperation::RunCommand(cmd)) => {
++                line_editor = do_run_cmd(
++                    &cmd,
++                    stack,
++                    engine_state,
++                    line_editor,
++                    shell_integration.osc2,
++                    *entry_num,
++                    use_color,
++                );
++
++                run_finaliziation_ansi_sequence(
++                    stack,
++                    engine_state,
++                    use_color,
++                    shell_integration.osc633,
++                    shell_integration.osc133,
++                );
++            }
++            // as the name implies, we do nothing in this case
++            Ok(ReplOperation::DoNothing) => {}
++            Err(ref e) => error!("Error parsing operation: {e}"),
+         }
+-        // as the name implies, we do nothing in this case
+-        Ok(ReplOperation::DoNothing) => {}
+-        Err(ref e) => error!("Error parsing operation: {e}"),
+     }
+     let cmd_duration = cmd_execution_start_time.elapsed();
+ 
+@@ -524,6 +564,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+         entry_num,
+         hostname,
+         is_hostcommand,
++        mode_dispatcher,
+     } = ctx;
+ 
+     let mut start_time = Instant::now();
+@@ -596,11 +637,24 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+         // try to enable bracketed paste
+         // It doesn't work on windows system: https://github.com/crossterm-rs/crossterm/issues/737
+         .use_bracketed_paste(cfg!(not(target_os = "windows")) && config.bracketed_paste)
+-        .with_highlighter(Box::new(NuHighlighter::new(
+-            engine_reference.clone(),
+-            // STACK-REFERENCE 1
+-            stack_arc.clone(),
+-        )))
++        .with_highlighter({
++            let shannon_mode = stack_arc
++                .get_env_var(engine_state, "SHANNON_MODE")
++                .and_then(|v| v.as_str().ok().map(str::to_string))
++                .unwrap_or_else(|| "nu".to_string());
++            if shannon_mode == "bash" {
++                Box::new(crate::bash_highlight::BashHighlighter::new(&config))
++                    as Box<dyn reedline::Highlighter>
++            } else if shannon_mode != "nu" {
++                Box::<NoOpHighlighter>::default() as Box<dyn reedline::Highlighter>
++            } else {
++                Box::new(NuHighlighter::new(
++                    engine_reference.clone(),
++                    // STACK-REFERENCE 1
++                    stack_arc.clone(),
++                )) as Box<dyn reedline::Highlighter>
++            }
++        })
+         .with_validator(Box::new(NuValidator {
+             engine_state: engine_reference.clone(),
+         }))
+@@ -762,6 +816,18 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+     let line_editor_input_time = Instant::now();
+     match input {
+         Ok(Signal::Success(command)) => {
++            if command.trim() == "__shannon_switch" {
++                switch_shannon_mode(engine_state, &mut stack);
++                return (true, stack, line_editor);
++            }
++            if command.trim() == "exit"
++                && stack
++                    .get_env_var(engine_state, "SHANNON_MODE")
++                    .and_then(|v| v.as_str().ok().map(str::to_string))
++                    .is_some_and(|mode| mode != "nu")
++            {
++                return (false, stack, line_editor);
++            }
+             line_editor = run_command(RunContext {
+                 engine_state,
+                 stack: &mut stack,
+@@ -771,10 +837,15 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 use_color,
+                 shell_integration,
+                 entry_num,
++                mode_dispatcher: mode_dispatcher.clone(),
+             });
+         }
+         Ok(Signal::HostCommand(command)) => {
+             *is_hostcommand = true;
++            if command.trim() == "__shannon_switch" {
++                switch_shannon_mode(engine_state, &mut stack);
++                return (true, stack, line_editor);
++            }
+             line_editor = run_command(RunContext {
+                 engine_state,
+                 stack: &mut stack,
+@@ -784,6 +855,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 use_color,
+                 shell_integration,
+                 entry_num,
++                mode_dispatcher: mode_dispatcher.clone(),
+             });
+         }
+         Ok(Signal::CtrlC) => {
+@@ -1261,6 +1333,23 @@ fn flush_engine_state_repl_buffer(
+     line_editor
+ }
+ 
++fn switch_shannon_mode(engine_state: &EngineState, stack: &mut Stack) {
++    let current = stack
++        .get_env_var(engine_state, "SHANNON_MODE")
++        .and_then(|v| v.as_str().ok().map(str::to_string))
++        .unwrap_or_else(|| "nu".to_string());
++    let modes = ["nu", "bash"];
++    let next_idx = modes
++        .iter()
++        .position(|mode| *mode == current)
++        .map(|idx| (idx + 1) % modes.len())
++        .unwrap_or(0);
++    stack.add_env_var(
++        "SHANNON_MODE".to_string(),
++        Value::string(modes[next_idx], Span::unknown()),
++    );
++}
++
+ ///
+ /// Setup history management for Reedline
+ ///
+@@ -1294,14 +1383,26 @@ fn setup_history(
+ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedline {
+     match create_keybindings(engine_state.get_config()) {
+         Ok(keybindings) => match keybindings {
+-            KeybindingsMode::Emacs(keybindings) => {
++            KeybindingsMode::Emacs(mut keybindings) => {
++                keybindings.add_binding(
++                    crossterm::event::KeyModifiers::SHIFT,
++                    crossterm::event::KeyCode::BackTab,
++                    reedline::ReedlineEvent::ExecuteHostCommand("__shannon_switch".into()),
++                );
+                 let edit_mode = Box::new(Emacs::new(keybindings));
+                 line_editor.with_edit_mode(edit_mode)
+             }
+             KeybindingsMode::Vi {
+-                insert_keybindings,
+-                normal_keybindings,
++                mut insert_keybindings,
++                mut normal_keybindings,
+             } => {
++                for keybindings in [&mut insert_keybindings, &mut normal_keybindings] {
++                    keybindings.add_binding(
++                        crossterm::event::KeyModifiers::SHIFT,
++                        crossterm::event::KeyCode::BackTab,
++                        reedline::ReedlineEvent::ExecuteHostCommand("__shannon_switch".into()),
++                    );
++                }
+                 let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
+                 line_editor.with_edit_mode(edit_mode)
+             }
+diff --git a/crates/nu-lsp/Cargo.toml b/crates/nu-lsp/Cargo.toml
+index 08743ce..fd9e49a 100644
+--- a/crates/nu-lsp/Cargo.toml
++++ b/crates/nu-lsp/Cargo.toml
+@@ -2,8 +2,8 @@
+ authors.workspace = true
+ description = "Nushell's integrated LSP server"
+ repository = "https://github.com/nushell/nushell/tree/main/crates/nu-lsp"
+-name = "nu-lsp"
+-version.workspace = true
++name = "shannon-nu-lsp"
++version = "0.114.1"
+ edition.workspace = true
+ rust-version.workspace = true
+ license.workspace = true
+-- 
+2.54.0
+
+
+From 5e14c7ec243c5b37ea668e8a88c3c51024dfd4cd Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 15:08:58 -0500
+Subject: [PATCH 2/2] astrohacker: honor configured alt shell
+
+Shift+Tab now follows SHANNON_ALT_MODE for bash or zsh.
+
+Keep highlighting and binary mode tests aligned with the product config.
+---
+ crates/nu-cli/src/repl.rs | 48 ++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 42 insertions(+), 6 deletions(-)
+
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 98cbd99..286e56e 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -642,7 +642,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 .get_env_var(engine_state, "SHANNON_MODE")
+                 .and_then(|v| v.as_str().ok().map(str::to_string))
+                 .unwrap_or_else(|| "nu".to_string());
+-            if shannon_mode == "bash" {
++            if shannon_mode == "bash" || shannon_mode == "zsh" {
+                 Box::new(crate::bash_highlight::BashHighlighter::new(&config))
+                     as Box<dyn reedline::Highlighter>
+             } else if shannon_mode != "nu" {
+@@ -1338,16 +1338,52 @@ fn switch_shannon_mode(engine_state: &EngineState, stack: &mut Stack) {
+         .get_env_var(engine_state, "SHANNON_MODE")
+         .and_then(|v| v.as_str().ok().map(str::to_string))
+         .unwrap_or_else(|| "nu".to_string());
+-    let modes = ["nu", "bash"];
++    let alt = stack
++        .get_env_var(engine_state, "SHANNON_ALT_MODE")
++        .and_then(|v| v.as_str().ok().map(str::to_string))
++        .unwrap_or_else(|| "zsh".to_string());
++    stack.add_env_var(
++        "SHANNON_MODE".to_string(),
++        Value::string(next_shannon_mode(&current, &alt), Span::unknown()),
++    );
++}
++
++fn next_shannon_mode(current: &str, alt: &str) -> String {
++    let alt = match alt {
++        "bash" | "zsh" => alt,
++        _ => "zsh",
++    };
++    let modes = ["nu", alt];
+     let next_idx = modes
+         .iter()
+         .position(|mode| *mode == current)
+         .map(|idx| (idx + 1) % modes.len())
+         .unwrap_or(0);
+-    stack.add_env_var(
+-        "SHANNON_MODE".to_string(),
+-        Value::string(modes[next_idx], Span::unknown()),
+-    );
++    modes[next_idx].to_string()
++}
++
++#[cfg(test)]
++mod shannon_mode_tests {
++    use super::next_shannon_mode;
++
++    #[test]
++    fn configured_alt_is_the_only_non_nu_mode() {
++        assert_eq!(next_shannon_mode("nu", "zsh"), "zsh");
++        assert_eq!(next_shannon_mode("zsh", "zsh"), "nu");
++        assert_ne!(next_shannon_mode("nu", "zsh"), "bash");
++
++        assert_eq!(next_shannon_mode("nu", "bash"), "bash");
++        assert_eq!(next_shannon_mode("bash", "bash"), "nu");
++        assert_ne!(next_shannon_mode("nu", "bash"), "zsh");
++    }
++
++    #[test]
++    fn missing_invalid_or_unknown_current_mode_recovers_safely() {
++        assert_eq!(next_shannon_mode("nu", ""), "zsh");
++        assert_eq!(next_shannon_mode("nu", "fish"), "zsh");
++        assert_eq!(next_shannon_mode("unknown", "bash"), "nu");
++        assert_eq!(next_shannon_mode("unknown", "zsh"), "nu");
++    }
+ }
+ 
+ ///
+-- 
+2.54.0
+

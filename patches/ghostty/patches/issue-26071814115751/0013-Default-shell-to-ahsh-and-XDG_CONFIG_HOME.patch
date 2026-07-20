@@ -1,0 +1,117 @@
+From fadfbac228da7b5f74ac98ea6e1aeba74967cec7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 16:12:50 -0500
+Subject: [PATCH 13/17] Default shell to ahsh and XDG_CONFIG_HOME
+
+Prefer packaged ahsh absolute paths for Dock launches;
+inject XDG_CONFIG_HOME=$HOME/.config when unset.
+---
+ src/config/Config.zig | 71 ++++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 70 insertions(+), 1 deletion(-)
+
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index c2ba275f1..80da71155 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1165,7 +1165,11 @@ palette: Palette = .{},
+ /// be looked up in the `PATH`. If this is not set, a default will be looked up
+ /// from your system. The rules for the default lookup are:
+ ///
+-///   * `SHELL` environment variable
++///   * Astrohacker Terminal: packaged `ahsh` if present at
++///     `/opt/homebrew/bin/ahsh` or `/usr/local/bin/ahsh` (GUI apps do not
++///     inherit Homebrew PATH, so we use absolute paths)
++///
++///   * `SHELL` environment variable (when launched from a CLI environment)
+ ///
+ ///   * `passwd` entry (user information)
+ ///
+@@ -1334,6 +1338,10 @@ command: ?Command = null,
+ /// browser.
+ ///
+ /// Available since: 1.2.0
++///
++/// Astrohacker Terminal: if neither the process environment nor this map sets
++/// `XDG_CONFIG_HOME`, finalize injects `$HOME/.config` so session children
++/// (including ahsh) use the XDG layout on macOS as well as Linux.
+ env: RepeatableStringMap = .{},
+ 
+ /// The default homepage URL opened by `web` when no URL is supplied.
+@@ -4558,6 +4566,48 @@ pub fn finalize(self: *Config) !void {
+     // specific variable use sites for more details.
+     const probable_cli = probableCliEnvironment();
+ 
++    // Astrohacker Terminal: default XDG_CONFIG_HOME to $HOME/.config when the
++    // process and config do not already set it. Dock-launched .app processes
++    // often lack XDG_*; ahsh and other tools then prefer platform dirs.
++    // User `env = XDG_CONFIG_HOME=…` and a pre-set process env both win.
++    {
++        const process_xdg = std.posix.getenv("XDG_CONFIG_HOME");
++        const process_empty = process_xdg == null or process_xdg.?.len == 0;
++        const config_has_xdg = self.env.map.get("XDG_CONFIG_HOME") != null;
++        if (process_empty and !config_has_xdg) {
++            const home: ?[]const u8 = home: {
++                if (std.posix.getenv("HOME")) |h| {
++                    if (h.len > 0) break :home h;
++                }
++                if ((comptime !builtin.target.cpu.arch.isWasm()) and
++                    (comptime !builtin.is_test) and
++                    builtin.os.tag != .windows)
++                {
++                    if (internal_os.passwd.get(alloc)) |pw| {
++                        if (pw.home) |h| {
++                            if (h.len > 0) break :home h;
++                        }
++                    } else |_| {}
++                }
++                break :home null;
++            };
++            if (home) |h| {
++                const xdg = try std.fmt.allocPrintSentinel(
++                    alloc,
++                    "{s}/.config",
++                    .{h},
++                    0,
++                );
++                try self.env.map.put(
++                    alloc,
++                    try alloc.dupeZ(u8, "XDG_CONFIG_HOME"),
++                    xdg,
++                );
++                log.info("default XDG_CONFIG_HOME={s}", .{xdg});
++            }
++        }
++    }
++
+     // If we have a font-family set and don't set the others, default
+     // the others to the font family. This way, if someone does
+     // --font-family=foo, then we try to get the stylized versions of
+@@ -4594,6 +4644,25 @@ pub fn finalize(self: *Config) !void {
+         (comptime !builtin.is_test))
+     {
+         if (self.command == null or wd == .home) command: {
++            // Astrohacker Terminal: prefer packaged ahsh via absolute paths.
++            // GUI-launched .app processes do not inherit Homebrew PATH, so a
++            // bare `ahsh` name is unreliable; fall through to SHELL/passwd if
++            // neither candidate exists.
++            if (self.command == null and !internal_os.isFlatpak()) {
++                const ahsh_candidates = [_][]const u8{
++                    "/opt/homebrew/bin/ahsh",
++                    "/usr/local/bin/ahsh",
++                };
++                for (ahsh_candidates) |path| {
++                    if (std.fs.accessAbsolute(path, .{})) {
++                        const copy = try alloc.dupeZ(u8, path);
++                        self.command = .{ .shell = copy };
++                        log.info("default shell src=ahsh value={s}", .{path});
++                        break;
++                    } else |_| {}
++                }
++            }
++
+             // First look up the command using the SHELL env var if needed.
+             // We don't do this in flatpak because SHELL in Flatpak is always
+             // set to /bin/sh.
+-- 
+2.50.1 (Apple Git-155)
+

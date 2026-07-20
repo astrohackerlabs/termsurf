@@ -1,0 +1,1052 @@
+From 4dc5afd74c3751eea5985e8d1426867cde1b2343 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 08:54:31 -0500
+Subject: [PATCH] Add semantic navigation actions
+
+Back and Forward found names,
+Refresh stopped wearing keycode masks.
+Two tabs kept separate lanes,
+While history answered what toolbar asks.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   6 +-
+ .../libtermsurf_chromium.cc                   |  49 ++
+ .../libtermsurf_chromium.h                    |  12 +
+ .../run-navigation-actions-smoke.sh           | 125 +++++
+ content/libtermsurf_chromium/test_main.cc     | 485 +++++++++++++++++-
+ .../ts_browser_main_parts.cc                  |  81 +++
+ .../ts_browser_main_parts.h                   |   7 +
+ .../libtermsurf_chromium/ts_tab_observer.cc   |  23 +
+ .../libtermsurf_chromium/ts_tab_observer.h    |   5 +
+ extensions/browser/renderer_startup_helper.cc |   6 +-
+ 10 files changed, 785 insertions(+), 14 deletions(-)
+ create mode 100755 content/libtermsurf_chromium/smoke-test/run-navigation-actions-smoke.sh
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 01278ce254..83e8acde58 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -156,9 +156,5 @@ shared_library("libtermsurf_chromium") {
+ executable("libtermsurf_chromium_test") {
+   testonly = true
+   sources = [ "test_main.cc" ]
+-  deps = [
+-    ":libtermsurf_chromium",
+-    "//content/shell:content_shell_app",
+-    "//content/shell:content_shell_lib",
+-  ]
++  deps = [ ":libtermsurf_chromium" ]
+ }
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index bd0bf6f7f0..e8d0a3b124 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -101,6 +101,13 @@ void (*g_on_renderer_crashed)(ts_web_contents_t,
+                               void*) = nullptr;
+ void* g_on_renderer_crashed_data = nullptr;
+ 
++void (*g_on_navigation_state)(ts_web_contents_t,
++                              bool,
++                              bool,
++                              bool,
++                              void*) = nullptr;
++void* g_on_navigation_state_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -142,6 +149,16 @@ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress) {
+   }
+ }
+ 
++void TsNotifyNavigationState(void* wc_handle,
++                             bool can_go_back,
++                             bool can_go_forward,
++                             bool can_refresh) {
++  if (g_on_navigation_state) {
++    g_on_navigation_state(wc_handle, can_go_back, can_go_forward, can_refresh,
++                          g_on_navigation_state_data);
++  }
++}
++
+ void TsNotifyTitleChanged(void* wc_handle, const char* title) {
+   if (g_on_title_changed) {
+     g_on_title_changed(wc_handle, title, g_on_title_changed_data);
+@@ -302,6 +319,27 @@ void ts_load_url(ts_web_contents_t wc, const char* url) {
+   g_main_parts->NavigateTab(wc, url);
+ }
+ 
++bool ts_navigation_action(ts_web_contents_t wc, const char* action) {
++  if (!g_main_parts || !action) {
++    return false;
++  }
++  return g_main_parts->NavigationAction(wc, action);
++}
++
++bool ts_test_crash_current_page(ts_web_contents_t wc) {
++  if (!g_main_parts) {
++    return false;
++  }
++  return g_main_parts->TestCrashCurrentPage(wc);
++}
++
++bool ts_test_execute_javascript(ts_web_contents_t wc, const char* script) {
++  if (!g_main_parts || !script) {
++    return false;
++  }
++  return g_main_parts->TestExecuteJavaScript(wc, script);
++}
++
+ void ts_forward_mouse_event(ts_web_contents_t wc,
+                             int type,
+                             int button,
+@@ -449,6 +487,17 @@ void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+   g_on_loading_state_data = user_data;
+ }
+ 
++void ts_set_on_navigation_state(
++    void (*cb)(ts_web_contents_t wc,
++               bool can_go_back,
++               bool can_go_forward,
++               bool can_refresh,
++               void* user_data),
++    void* user_data) {
++  g_on_navigation_state = cb;
++  g_on_navigation_state_data = user_data;
++}
++
+ void ts_set_on_title_changed(void (*cb)(ts_web_contents_t wc,
+                                         const char* title,
+                                         void* user_data),
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 0e3174ee29..a037fa5015 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -92,6 +92,10 @@ TS_EXPORT void ts_destroy_web_contents(ts_web_contents_t wc);
+ 
+ /* Synchronous — safe. */
+ TS_EXPORT void ts_load_url(ts_web_contents_t wc, const char* url);
++TS_EXPORT bool ts_navigation_action(ts_web_contents_t wc, const char* action);
++TS_EXPORT bool ts_test_crash_current_page(ts_web_contents_t wc);
++TS_EXPORT bool ts_test_execute_javascript(ts_web_contents_t wc,
++                                          const char* script);
+ 
+ /* --- Input --- */
+ 
+@@ -185,6 +189,14 @@ TS_EXPORT void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+                                                   void* user_data),
+                                        void* user_data);
+ 
++TS_EXPORT void ts_set_on_navigation_state(
++    void (*cb)(ts_web_contents_t wc,
++               bool can_go_back,
++               bool can_go_forward,
++               bool can_refresh,
++               void* user_data),
++    void* user_data);
++
+ TS_EXPORT void ts_set_on_title_changed(void (*cb)(ts_web_contents_t wc,
+                                                   const char* title,
+                                                   void* user_data),
+diff --git a/content/libtermsurf_chromium/smoke-test/run-navigation-actions-smoke.sh b/content/libtermsurf_chromium/smoke-test/run-navigation-actions-smoke.sh
+new file mode 100755
+index 0000000000..36087625f5
+--- /dev/null
++++ b/content/libtermsurf_chromium/smoke-test/run-navigation-actions-smoke.sh
+@@ -0,0 +1,125 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++CHROMIUM_SRC="$(cd "$SCRIPT_DIR/../../.." && pwd)"
++OUT_DIR="${CHROMIUM_OUT_DIR:-$CHROMIUM_SRC/out/Default}"
++TEST_BIN="$OUT_DIR/libtermsurf_chromium_test"
++
++if [[ ! -x "$TEST_BIN" ]]; then
++  echo "missing executable: $TEST_BIN" >&2
++  echo "build it with: autoninja -C $OUT_DIR libtermsurf_chromium_test" >&2
++  exit 1
++fi
++
++TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/termsurf-chromium-nav.XXXXXX")"
++PORT_FILE="$TMP_DIR/port"
++
++cleanup() {
++  if [[ -n "${SERVER_PID:-}" ]]; then
++    kill "$SERVER_PID" 2>/dev/null || true
++    wait "$SERVER_PID" 2>/dev/null || true
++  fi
++  rm -rf "$TMP_DIR"
++}
++trap cleanup EXIT
++
++python3 - "$PORT_FILE" <<'PY' &
++import http.server
++import socketserver
++import sys
++
++port_file = sys.argv[1]
++counts = {}
++
++def page(label, variant, count):
++    if variant == "a2":
++        return f"""<!doctype html>
++<meta charset='utf-8'>
++<script>
++window.reloadCount = {count};
++function setBaseTitle() {{
++  document.title = location.hash === '#state'
++    ? 'A2 state reload=' + window.reloadCount
++    : 'A2 base reload=' + window.reloadCount;
++}}
++window.addEventListener('popstate', setBaseTitle);
++window.addEventListener('hashchange', setBaseTitle);
++window.addEventListener('pageshow', setBaseTitle);
++setBaseTitle();
++</script>
++<body>A2 reload {count}</body>
++"""
++    return f"""<!doctype html>
++<meta charset='utf-8'>
++<script>
++window.reloadCount = {count};
++document.title = '{label} reload=' + window.reloadCount;
++</script>
++<body>{label} reload {count}</body>
++"""
++
++class Handler(http.server.BaseHTTPRequestHandler):
++    protocol_version = "HTTP/1.1"
++
++    def do_GET(self):
++        path = self.path.split("?", 1)[0].split("#", 1)[0]
++        if path not in ("/a1", "/a2", "/b1"):
++            self.send_response(404)
++            self.send_header("Content-Length", "0")
++            self.end_headers()
++            return
++        counts[path] = counts.get(path, 0) + 1
++        label = {" /a1": "A1"}.get(path)
++        if path == "/a1":
++            body = page("A1", "plain", counts[path])
++        elif path == "/b1":
++            body = page("B1", "plain", counts[path])
++        else:
++            body = page("A2", "a2", counts[path])
++        data = body.encode("utf-8")
++        self.send_response(200)
++        self.send_header("Content-Type", "text/html; charset=utf-8")
++        self.send_header("Cache-Control", "no-store")
++        self.send_header("Content-Length", str(len(data)))
++        self.end_headers()
++        self.wfile.write(data)
++
++    def log_message(self, fmt, *args):
++        return
++
++class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
++    daemon_threads = True
++    allow_reuse_address = True
++
++server = Server(("127.0.0.1", 0), Handler)
++with open(port_file, "w", encoding="utf-8") as f:
++    f.write(str(server.server_address[1]))
++server.serve_forever()
++PY
++SERVER_PID=$!
++
++for _ in {1..100}; do
++  [[ -s "$PORT_FILE" ]] && break
++  sleep 0.05
++done
++
++if [[ ! -s "$PORT_FILE" ]]; then
++  echo "fixture server did not start" >&2
++  exit 1
++fi
++
++PORT="$(cat "$PORT_FILE")"
++export TERMSURF_CHROMIUM_SMOKE_A1_URL="http://a.test:$PORT/a1"
++export TERMSURF_CHROMIUM_SMOKE_A2_URL="http://a.test:$PORT/a2"
++export TERMSURF_CHROMIUM_SMOKE_B1_URL="http://b.test:$PORT/b1"
++
++"$TEST_BIN" \
++  --user-data-dir="$TMP_DIR/profile" \
++  --host-resolver-rules="MAP *.test 127.0.0.1" \
++  --no-sandbox \
++  --disable-gpu \
++  --disable-software-rasterizer \
++  --disable-extensions \
++  --disable-background-networking \
++  --disable-component-update
+diff --git a/content/libtermsurf_chromium/test_main.cc b/content/libtermsurf_chromium/test_main.cc
+index 36b3cdc114..9addff9a54 100644
+--- a/content/libtermsurf_chromium/test_main.cc
++++ b/content/libtermsurf_chromium/test_main.cc
+@@ -1,17 +1,486 @@
+ // Copyright 2025 TermSurf
+-// Minimal test: initialize libtermsurf_chromium and quit.
++// Semantic navigation smoke for libtermsurf_chromium.
+ 
+-#include <stdio.h>
+ #include "content/libtermsurf_chromium/libtermsurf_chromium.h"
+ 
+-static void on_initialized(void* user_data) {
+-  printf("[test_main] Chromium initialized, quitting.\n");
++#include <stdlib.h>
++#include <unistd.h>
++
++#include <atomic>
++#include <chrono>
++#include <cstring>
++#include <string>
++#include <thread>
++
++namespace {
++
++struct NavState {
++  bool back = false;
++  bool forward = false;
++  bool refresh = false;
++  bool seen = false;
++};
++
++struct Tab {
++  ts_web_contents_t wc = nullptr;
++  int tab_id = 0;
++  NavState nav;
++  std::string url;
++  std::string title;
++  bool crashed = false;
++};
++
++enum class Step {
++  kWaitInitial,
++  kNavigateA2,
++  kWaitA2,
++  kBackToA1,
++  kWaitBackA1,
++  kDisabledBack,
++  kForwardToA2,
++  kWaitForwardA2,
++  kPushState,
++  kWaitPushed,
++  kBackSameDocument,
++  kWaitBackSameDocument,
++  kForwardSameDocument,
++  kWaitForwardSameDocument,
++  kRefresh,
++  kWaitRefresh,
++  kCrash,
++  kWaitCrash,
++  kRecoverRefresh,
++  kWaitRecovery,
++  kCleanup,
++  kDone,
++};
++
++struct Smoke {
++  Tab a;
++  Tab b;
++  ts_browser_context_t ctx = nullptr;
++  Step step = Step::kWaitInitial;
++  std::string a1_url;
++  std::string a2_url;
++  std::string b1_url;
++  int expected_reload = 1;
++  bool initial_disabled = false;
++  bool push_delay_elapsed = false;
++  bool back = false;
++  bool forward = false;
++  bool refresh = false;
++  bool capabilities = false;
++  bool disabled = false;
++  bool isolation = false;
++  bool same_document = false;
++  bool crash_recovery = false;
++  bool cleanup = false;
++  bool cleanup_scheduled = false;
++};
++
++Smoke* g_smoke = new Smoke;
++#define g (*g_smoke)
++std::atomic<bool> g_done(false);
++
++bool Contains(const std::string& value, const char* needle) {
++  return value.find(needle) != std::string::npos;
++}
++
++bool IsA(ts_web_contents_t wc) {
++  return wc && g.a.wc == wc;
++}
++
++bool IsB(ts_web_contents_t wc) {
++  return wc && g.b.wc == wc;
++}
++
++Tab* TabFor(ts_web_contents_t wc) {
++  if (IsA(wc)) {
++    return &g.a;
++  }
++  if (IsB(wc)) {
++    return &g.b;
++  }
++  if (!g.a.wc) {
++    return &g.a;
++  }
++  if (!g.b.wc) {
++    return &g.b;
++  }
++  return nullptr;
++}
++
++bool NavIs(const Tab& tab, bool back, bool forward, bool refresh) {
++  return tab.nav.seen && tab.nav.back == back && tab.nav.forward == forward &&
++         tab.nav.refresh == refresh;
++}
++
++int ExtractReloadCount(const std::string& title) {
++  const std::string marker = "reload=";
++  size_t pos = title.find(marker);
++  if (pos == std::string::npos) {
++    return 0;
++  }
++  pos += marker.size();
++  int value = 0;
++  while (pos < title.size() && title[pos] >= '0' && title[pos] <= '9') {
++    value = value * 10 + (title[pos] - '0');
++    ++pos;
++  }
++  return value;
++}
++
++void WriteLine(int fd, const std::string& line) {
++  std::string output = line + "\n";
++  ssize_t ignored = write(fd, output.data(), output.size());
++  (void)ignored;
++}
++
++void Fail(const char* message) {
++  WriteLine(STDERR_FILENO,
++            "NAVIGATION_ACTIONS_SMOKE_FAIL engine=chromium step=" +
++                std::to_string(static_cast<int>(g.step)) + " message=" +
++                std::string(message ? message : "") + " a_url=" + g.a.url +
++                " a_title=" + g.a.title + " a_nav=" +
++                std::to_string(g.a.nav.back ? 1 : 0) + "/" +
++                std::to_string(g.a.nav.forward ? 1 : 0) + "/" +
++                std::to_string(g.a.nav.refresh ? 1 : 0) + " b_url=" +
++                g.b.url + " b_title=" + g.b.title + " b_nav=" +
++                std::to_string(g.b.nav.back ? 1 : 0) + "/" +
++                std::to_string(g.b.nav.forward ? 1 : 0) + "/" +
++                std::to_string(g.b.nav.refresh ? 1 : 0));
++  g_done = true;
++  _Exit(1);
++}
++
++void Finish() {
++  WriteLine(STDOUT_FILENO,
++            "NAVIGATION_ACTIONS_SMOKE_PASS engine=chromium tabs=2 back=" +
++                std::to_string(g.back ? 1 : 0) + " forward=" +
++                std::to_string(g.forward ? 1 : 0) + " refresh=" +
++                std::to_string(g.refresh ? 1 : 0) + " capabilities=" +
++                std::to_string(g.capabilities ? 1 : 0) + " disabled=" +
++                std::to_string(g.disabled ? 1 : 0) + " isolation=" +
++                std::to_string(g.isolation ? 1 : 0) + " same_document=" +
++                std::to_string(g.same_document ? 1 : 0) +
++                " crash_recovery=" +
++                std::to_string(g.crash_recovery ? 1 : 0) + " cleanup=" +
++                std::to_string(g.cleanup ? 1 : 0));
++  g_done = true;
+   ts_quit();
+ }
+ 
++void Advance();
++
++void DoCleanupAndFinish(void*) {
++  ts_destroy_web_contents(g.a.wc);
++  ts_destroy_web_contents(g.b.wc);
++  g.cleanup = true;
++  g.step = Step::kDone;
++  Finish();
++}
++
++void MarkPushDelayElapsed(void*) {
++  g.push_delay_elapsed = true;
++  Advance();
++}
++
++void PostPushDelay() {
++  std::thread([] {
++    std::this_thread::sleep_for(std::chrono::milliseconds(250));
++    ts_post_task(MarkPushDelayElapsed, nullptr);
++  }).detach();
++}
++
++void OnInitialized(void*) {
++  g.ctx = ts_create_incognito_browser_context();
++  if (!g.ctx) {
++    Fail("missing browser context");
++  }
++
++  g.a.wc = ts_create_web_contents(g.ctx, g.a1_url.c_str(), 800, 600, true);
++  g.b.wc = ts_create_web_contents(g.ctx, g.b1_url.c_str(), 800, 600, true);
++  if (!g.a.wc || !g.b.wc || g.a.wc == g.b.wc) {
++    Fail("failed to create two tabs");
++  }
++  Advance();
++}
++
++void OnTabReady(ts_web_contents_t wc, int tab_id, void*) {
++  Tab* tab = TabFor(wc);
++  if (!tab) {
++    return;
++  }
++  tab->wc = wc;
++  tab->tab_id = tab_id;
++  Advance();
++}
++
++void OnNavigationState(ts_web_contents_t wc,
++                       bool can_go_back,
++                       bool can_go_forward,
++                       bool can_refresh,
++                       void*) {
++  Tab* tab = TabFor(wc);
++  if (!tab) {
++    return;
++  }
++  tab->wc = wc;
++  tab->nav = {can_go_back, can_go_forward, can_refresh, true};
++  Advance();
++}
++
++void OnUrlChanged(ts_web_contents_t wc, const char* url, void*) {
++  Tab* tab = TabFor(wc);
++  if (!tab) {
++    return;
++  }
++  tab->wc = wc;
++  tab->url = url ? url : "";
++  Advance();
++}
++
++void OnTitleChanged(ts_web_contents_t wc, const char* title, void*) {
++  Tab* tab = TabFor(wc);
++  if (!tab) {
++    return;
++  }
++  tab->wc = wc;
++  tab->title = title ? title : "";
++  Advance();
++}
++
++void OnRendererCrashed(ts_web_contents_t wc,
++                       const char*,
++                       int,
++                       const char*,
++                       bool can_reload,
++                       void*) {
++  Tab* tab = TabFor(wc);
++  if (!tab) {
++    return;
++  }
++  tab->crashed = true;
++  if (!can_reload) {
++    Fail("crash callback reported non-reloadable tab");
++  }
++  Advance();
++}
++
++bool BUnchanged() {
++  return Contains(g.b.url, "/b1") && Contains(g.b.title, "B1 reload=1") &&
++         NavIs(g.b, false, false, true) && !g.b.crashed;
++}
++
++void Advance() {
++  switch (g.step) {
++    case Step::kWaitInitial:
++      if (g.a.nav.seen && g.b.nav.seen && g.a.tab_id > 0 && g.b.tab_id > 0) {
++        if (!g.initial_disabled) {
++          if (!NavIs(g.a, false, false, false) ||
++              !NavIs(g.b, false, false, false)) {
++            Fail("initial precommit navigation state was not disabled");
++          }
++          g.initial_disabled = true;
++        }
++        if (Contains(g.a.url, "/a1") && Contains(g.a.title, "A1 reload=1") &&
++            NavIs(g.a, false, false, true) && BUnchanged()) {
++          g.capabilities = true;
++          g.step = Step::kNavigateA2;
++          ts_load_url(g.a.wc, g.a2_url.c_str());
++          g.step = Step::kWaitA2;
++        }
++      }
++      break;
++
++    case Step::kWaitA2:
++      if (Contains(g.a.url, "/a2") &&
++          Contains(g.a.title, "A2 base reload=") &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.step = Step::kBackToA1;
++        if (!ts_navigation_action(g.a.wc, "back")) {
++          Fail("semantic back action rejected");
++        }
++        g.step = Step::kWaitBackA1;
++      }
++      break;
++
++    case Step::kWaitBackA1:
++      if (Contains(g.a.url, "/a1") &&
++          NavIs(g.a, false, true, true) && BUnchanged()) {
++        g.back = true;
++        g.step = Step::kDisabledBack;
++        const std::string before_url = g.a.url;
++        const std::string before_title = g.a.title;
++        if (ts_navigation_action(g.a.wc, "back")) {
++          Fail("disabled back action was accepted");
++        }
++        if (g.a.url != before_url || g.a.title != before_title) {
++          Fail("disabled back action mutated the page");
++        }
++        g.disabled = true;
++        g.step = Step::kForwardToA2;
++        if (!ts_navigation_action(g.a.wc, "forward")) {
++          Fail("semantic forward action rejected");
++        }
++        g.step = Step::kWaitForwardA2;
++      }
++      break;
++
++    case Step::kWaitForwardA2:
++      if (Contains(g.a.url, "/a2") &&
++          Contains(g.a.title, "A2 base reload=") &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.forward = true;
++        g.expected_reload = ExtractReloadCount(g.a.title);
++        g.step = Step::kPushState;
++        if (!ts_test_execute_javascript(
++                g.a.wc,
++                "(() => {"
++                "const match = document.title.match(/reload=(\\d+)/);"
++                "const reload = match ? match[1] : 'unknown';"
++                "const update = () => { document.title = 'A2 ' + "
++                "(location.hash === '#state' ? 'state' : 'base') + "
++                "' reload=' + reload; };"
++                "window.addEventListener('popstate', update);"
++                "history.pushState({ termsurf: 'state' }, '', "
++                "location.pathname + location.search + '#state');"
++                "update();"
++                "})()")) {
++          Fail("pushState script rejected");
++        }
++        g.push_delay_elapsed = false;
++        PostPushDelay();
++        g.step = Step::kWaitPushed;
++      }
++      break;
++
++    case Step::kWaitPushed:
++      if (g.push_delay_elapsed && Contains(g.a.url, "/a2#state") &&
++          Contains(g.a.title,
++                   ("A2 state reload=" + std::to_string(g.expected_reload))
++                       .c_str()) &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.step = Step::kBackSameDocument;
++        if (!ts_navigation_action(g.a.wc, "back")) {
++          Fail("same-document back rejected");
++        }
++        g.step = Step::kWaitBackSameDocument;
++      }
++      break;
++
++    case Step::kWaitBackSameDocument:
++      if (Contains(g.a.url, "/a2") && !Contains(g.a.url, "#state") &&
++          NavIs(g.a, true, true, true) && BUnchanged()) {
++        g.step = Step::kForwardSameDocument;
++        if (!ts_navigation_action(g.a.wc, "forward")) {
++          Fail("same-document forward rejected");
++        }
++        g.step = Step::kWaitForwardSameDocument;
++      }
++      break;
++
++    case Step::kWaitForwardSameDocument:
++      if (Contains(g.a.url, "/a2#state") &&
++          Contains(g.a.title,
++                   ("A2 state reload=" + std::to_string(g.expected_reload))
++                       .c_str()) &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.same_document = true;
++        g.step = Step::kRefresh;
++        if (!ts_navigation_action(g.a.wc, "refresh")) {
++          Fail("semantic refresh action rejected");
++        }
++        g.expected_reload += 1;
++        g.step = Step::kWaitRefresh;
++      }
++      break;
++
++    case Step::kWaitRefresh:
++      if (Contains(g.a.url, "/a2#state") &&
++          Contains(g.a.title,
++                   ("A2 state reload=" + std::to_string(g.expected_reload))
++                       .c_str()) &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.refresh = true;
++        g.step = Step::kCrash;
++        if (!ts_test_crash_current_page(g.a.wc)) {
++          Fail("test crash hook rejected tab");
++        }
++        g.step = Step::kWaitCrash;
++      }
++      break;
++
++    case Step::kWaitCrash:
++      if (g.a.crashed && NavIs(g.a, false, false, true) && BUnchanged()) {
++        g.step = Step::kRecoverRefresh;
++        if (!ts_navigation_action(g.a.wc, "refresh")) {
++          Fail("semantic refresh rejected crashed reloadable tab");
++        }
++        g.expected_reload += 1;
++        g.step = Step::kWaitRecovery;
++      }
++      break;
++
++    case Step::kWaitRecovery:
++      if (Contains(g.a.url, "/a2#state") &&
++          Contains(g.a.title,
++                   ("A2 state reload=" + std::to_string(g.expected_reload))
++                       .c_str()) &&
++          NavIs(g.a, true, false, true) && BUnchanged()) {
++        g.crash_recovery = true;
++        g.isolation = true;
++        if (!g.cleanup_scheduled) {
++          g.cleanup_scheduled = true;
++          g.step = Step::kCleanup;
++          ts_post_task(DoCleanupAndFinish, nullptr);
++        }
++      }
++      break;
++
++    case Step::kNavigateA2:
++    case Step::kBackToA1:
++    case Step::kDisabledBack:
++    case Step::kForwardToA2:
++    case Step::kPushState:
++    case Step::kBackSameDocument:
++    case Step::kForwardSameDocument:
++    case Step::kRefresh:
++    case Step::kCrash:
++    case Step::kRecoverRefresh:
++    case Step::kCleanup:
++    case Step::kDone:
++      break;
++  }
++}
++
++}  // namespace
++
+ int main(int argc, const char** argv) {
+-  ts_set_on_initialized(on_initialized, nullptr);
+-  int result = ts_content_main(argc, argv);
+-  printf("[test_main] Exited with code %d\n", result);
+-  return result;
++  const char* a1 = getenv("TERMSURF_CHROMIUM_SMOKE_A1_URL");
++  const char* a2 = getenv("TERMSURF_CHROMIUM_SMOKE_A2_URL");
++  const char* b1 = getenv("TERMSURF_CHROMIUM_SMOKE_B1_URL");
++  if (!a1 || !a2 || !b1) {
++    WriteLine(STDERR_FILENO, "missing TERMSURF_CHROMIUM_SMOKE_* fixture URLs");
++    return 64;
++  }
++  g.a1_url = a1;
++  g.a2_url = a2;
++  g.b1_url = b1;
++
++  ts_set_on_initialized(OnInitialized, nullptr);
++  ts_set_on_tab_ready(OnTabReady, nullptr);
++  ts_set_on_navigation_state(OnNavigationState, nullptr);
++  ts_set_on_url_changed(OnUrlChanged, nullptr);
++  ts_set_on_title_changed(OnTitleChanged, nullptr);
++  ts_set_on_renderer_crashed(OnRendererCrashed, nullptr);
++
++  std::thread([] {
++    std::this_thread::sleep_for(std::chrono::seconds(45));
++    if (!g_done.load()) {
++      Fail("timeout");
++    }
++  }).detach();
++
++  return ts_content_main(argc, argv);
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 048817c14d..4a3d97fc37 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -37,10 +37,12 @@
+ #include "content/public/browser/origin_trials_controller_delegate.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
+ #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/isolated_world_ids.h"
+ #include "content/public/common/page_zoom.h"
+ #include "content/public/common/stop_find_action.h"
+ #include "content/shell/browser/shell.h"
+@@ -439,6 +441,7 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+ 
+   // Fire tab ready callback.
+   TsNotifyTabReady(handle, tab->tab_id);
++  tab_observer->NotifyNavigationState();
+ 
+ #if BUILDFLAG(IS_MAC)
+   // Register cursor and CALayerParams callbacks.
+@@ -615,6 +618,7 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx,
+   tab_observer->ObserveContents(shell->web_contents());
+ 
+   TsNotifyTabReady(handle, tab->tab_id);
++  tab->tab_observer->NotifyNavigationState();
+ 
+ #if BUILDFLAG(IS_MAC)
+   if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
+@@ -1280,6 +1284,83 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+ #endif
+ }
+ 
++bool TsBrowserMainParts::NavigationAction(void* wc_handle,
++                                          const std::string& action) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab || !tab->shell || !tab->tab_observer) {
++    return false;
++  }
++  WebContents* web_contents = tab->shell->web_contents();
++  NavigationController& controller = web_contents->GetController();
++  if (action == "back") {
++    if (tab->tab_observer->renderer_crashed() || !controller.CanGoBack()) {
++      return false;
++    }
++    controller.GoBack();
++  } else if (action == "forward") {
++    if (tab->tab_observer->renderer_crashed() || !controller.CanGoForward()) {
++      return false;
++    }
++    controller.GoForward();
++  } else if (action == "refresh") {
++    if (!tab->tab_observer->CanRefresh()) {
++      return false;
++    }
++    controller.Reload(content::ReloadType::NORMAL, false);
++  } else {
++    return false;
++  }
++  tab->tab_observer->NotifyNavigationState();
++  return true;
++#else
++  return false;
++#endif
++}
++
++bool TsBrowserMainParts::TestCrashCurrentPage(void* wc_handle) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab || !tab->shell) {
++    return false;
++  }
++  WebContents* web_contents = tab->shell->web_contents();
++  if (!web_contents) {
++    return false;
++  }
++  RenderFrameHost* main_frame = web_contents->GetPrimaryMainFrame();
++  if (!main_frame || !main_frame->GetProcess()) {
++    return false;
++  }
++  return main_frame->GetProcess()->Shutdown(0);
++#else
++  return false;
++#endif
++}
++
++bool TsBrowserMainParts::TestExecuteJavaScript(void* wc_handle,
++                                               const std::string& script) {
++#if BUILDFLAG(IS_MAC)
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  TabState* tab = FindTab(wc_handle);
++  if (!tab || !tab->shell) {
++    return false;
++  }
++  WebContents* web_contents = tab->shell->web_contents();
++  if (!web_contents || !web_contents->GetPrimaryMainFrame()) {
++    return false;
++  }
++  web_contents->GetPrimaryMainFrame()->ExecuteJavaScriptWithUserGestureForTests(
++      base::UTF8ToUTF16(script), base::NullCallback(),
++      ISOLATED_WORLD_ID_GLOBAL);
++  return true;
++#else
++  return false;
++#endif
++}
++
+ void TsBrowserMainParts::SetFocus(void* wc_handle, bool focused) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   TabState* tab = FindTab(wc_handle);
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 9d15dcac38..fa2a861662 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -48,6 +48,10 @@ void TsNotifyCAContextId(void* wc_handle,
+                          int height);
+ void TsNotifyUrlChanged(void* wc_handle, const char* url);
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
++void TsNotifyNavigationState(void* wc_handle,
++                             bool can_go_back,
++                             bool can_go_forward,
++                             bool can_refresh);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
+@@ -113,6 +117,9 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+                        int keycode,
+                        const std::string& utf8,
+                        int modifiers);
++  bool NavigationAction(void* wc_handle, const std::string& action);
++  bool TestCrashCurrentPage(void* wc_handle);
++  bool TestExecuteJavaScript(void* wc_handle, const std::string& script);
+   void SetFocus(void* wc_handle, bool focused);
+   void SetGuiActive(void* wc_handle, bool active, const std::string& reason);
+   void SetColorScheme(void* wc_handle, bool dark);
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index aa7db70236..48b05d0380 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -10,6 +10,7 @@
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/render_view_host.h"
+@@ -99,6 +100,19 @@ void TsTabObserver::ObserveContents(WebContents* web_contents) {
+   Observe(web_contents);
+ }
+ 
++void TsTabObserver::NotifyNavigationState() {
++#if BUILDFLAG(IS_MAC)
++  bool can_go_back = false;
++  bool can_go_forward = false;
++  if (!renderer_crashed_ && web_contents()) {
++    can_go_back = web_contents()->GetController().CanGoBack();
++    can_go_forward = web_contents()->GetController().CanGoForward();
++  }
++  TsNotifyNavigationState(reinterpret_cast<void*>(handle_), can_go_back,
++                          can_go_forward, CanRefresh());
++#endif
++}
++
+ void TsTabObserver::DidFinishNavigation(NavigationHandle* navigation_handle) {
+   if (!navigation_handle->HasCommitted()) {
+     return;
+@@ -107,6 +121,9 @@ void TsTabObserver::DidFinishNavigation(NavigationHandle* navigation_handle) {
+     return;
+   }
+ 
++  renderer_crashed_ = false;
++  has_committed_document_ = true;
++
+ #if BUILDFLAG(IS_MAC)
+   if (last_ca_context_id_) {
+     *last_ca_context_id_ = 0;
+@@ -120,18 +137,21 @@ void TsTabObserver::DidFinishNavigation(NavigationHandle* navigation_handle) {
+   }
+ 
+   TsNotifyUrlChanged(reinterpret_cast<void*>(handle_), url.c_str());
++  NotifyNavigationState();
+ #endif
+ }
+ 
+ void TsTabObserver::DidStartLoading() {
+ #if BUILDFLAG(IS_MAC)
+   TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "loading", 0);
++  NotifyNavigationState();
+ #endif
+ }
+ 
+ void TsTabObserver::DidStopLoading() {
+ #if BUILDFLAG(IS_MAC)
+   TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "done", 100);
++  NotifyNavigationState();
+ #endif
+ }
+ 
+@@ -162,6 +182,8 @@ void TsTabObserver::PrimaryMainFrameRenderProcessGone(
+   if (IsNonCrashTerminationStatus(status)) {
+     return;
+   }
++  renderer_crashed_ = true;
++  has_committed_document_ = false;
+   std::string url;
+   if (web_contents()) {
+     url = web_contents()->GetVisibleURL().spec();
+@@ -169,6 +191,7 @@ void TsTabObserver::PrimaryMainFrameRenderProcessGone(
+   TsNotifyRendererCrashed(reinterpret_cast<void*>(handle_),
+                           TerminationStatusToString(status),
+                           static_cast<int>(status), url.c_str(), true);
++  NotifyNavigationState();
+   TsNotifyLoadingState(reinterpret_cast<void*>(handle_), "error", 0);
+ #endif
+ }
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.h b/content/libtermsurf_chromium/ts_tab_observer.h
+index e2d1f8d813..0e791d04b6 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.h
++++ b/content/libtermsurf_chromium/ts_tab_observer.h
+@@ -39,6 +39,9 @@ class TsTabObserver : public WebContentsObserver {
+   void ObserveContents(WebContents* web_contents);
+   void SetTabId(int tab_id);
+   void SetInspectedTabId(int id);
++  void NotifyNavigationState();
++  bool CanRefresh() const { return renderer_crashed_ || has_committed_document_; }
++  bool renderer_crashed() const { return renderer_crashed_; }
+ 
+   // The opaque handle passed to C callbacks to identify the tab.
+   void SetHandle(void* handle) {
+@@ -81,6 +84,8 @@ class TsTabObserver : public WebContentsObserver {
+   int tab_id_ = 0;
+   int inspected_tab_id_ = 0;
+   uintptr_t handle_ = 0;
++  bool has_committed_document_ = false;
++  bool renderer_crashed_ = false;
+ 
+ #if BUILDFLAG(IS_MAC)
+   CALayerParamsCallback ca_layer_params_callback_;
+diff --git a/extensions/browser/renderer_startup_helper.cc b/extensions/browser/renderer_startup_helper.cc
+index 996a39f1cc..cae0d9dc0b 100644
+--- a/extensions/browser/renderer_startup_helper.cc
++++ b/extensions/browser/renderer_startup_helper.cc
+@@ -268,7 +268,7 @@ void RendererStartupHelper::OnRenderProcessLaunched(
+     // extensions should have already been initialized in
+     // OnRenderProcessHostCreated(), if it corresponds to the same context.
+     ExtensionsBrowserClient* client = ExtensionsBrowserClient::Get();
+-#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_MAC)
+     // On Android and ChromeOS, handle race condition during process restart:
+     // 1. OnRenderProcessHostCreated() initializes extensions and populates
+     // process_mojo_map_.
+@@ -278,6 +278,10 @@ void RendererStartupHelper::OnRenderProcessLaunched(
+     //
+     // Re-register the process to restore Mojo communication without
+     // re-initializing extensions to avoid duplicate loading.
++    //
++    // TermSurf's macOS smoke tests deliberately shut down a tab renderer and
++    // recover it through semantic Refresh, which reaches the same restart
++    // shape.
+     if (GetRenderer(host) == nullptr &&
+         client->IsSameContext(browser_context_, host->GetBrowserContext())) {
+       RegisterProcess(host);
+-- 
+2.54.0
+

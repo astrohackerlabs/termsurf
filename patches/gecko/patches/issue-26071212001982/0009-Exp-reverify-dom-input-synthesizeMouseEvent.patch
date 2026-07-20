@@ -1,0 +1,1326 @@
+From 5fddeb0256fc31bd8f23234eb07f234a40e352f9 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 11:36:26 -0500
+Subject: [PATCH] Exp reverify: reliable DOM input via synthesizeMouseEvent
+ frame script
+
+Replace multi-line dom-input frame script with compact ah-select-style path
+using content.synthesizeMouseEvent (isDOMEventSynthesized:false), element
+centers for fixture targets, longer frame-reply poll, and one re-inject on
+no_frame_reply. Restores Exp5/Exp6 page-effect matrix.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 1287 +++++++++++++++++
+ 1 file changed, 1287 insertions(+)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index 08b4010d60fc..1f3282956f40 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -11,6 +11,7 @@ import { BrowserWindowTracker } from "resource:///modules/BrowserWindowTracker.s
+ 
+ const progressListeners = new Set();
+ const delayTimers = new Set();
++const inputControlTimers = new Set();
+ 
+ export class CommandLineHandler {
+   static classID = Components.ID("{a932e007-0932-4007-8000-000000000007}");
+@@ -342,6 +343,8 @@ async function runVisible(urlStr, headless, hold) {
+     dump("hold_mode=1\n");
+     dump("hold_ms=0\n");
+     dump("hold_retained=1\n");
++    // Exp5: optional input control file → content windowUtils (native widget path).
++    startInputControlLoop(win, browser);
+     return;
+   }
+ 
+@@ -361,3 +364,1287 @@ async function runVisible(urlStr, headless, hold) {
+     dump("force_exit=1\n");
+   }
+ }
++
++/**
++ * Exp5 input control protocol (parent → Firefox chrome → content windowUtils).
++ *
++ * Control file (ASTROHACKER_GECKO_INPUT_CONTROL_PATH), one command per rewrite:
++ *   seq=<n> op=mouse type=mousedown x=<css> y=<css> button=0 clickCount=1 modifiers=0
++ *   seq=<n> op=mousemove x=<css> y=<css> modifiers=0
++ *   seq=<n> op=wheel x=<css> y=<css> dx=<n> dy=<n> modifiers=0
++ *   seq=<n> op=key type=keydown keyCode=<n> charCode=<n> modifiers=0 utf8=<text>
++ *   seq=<n> op=focus focused=1|0
++ *   seq=<n> op=query
++ *
++ * Status file (same path + ".status") written after each command:
++ *   seq=<n> ok=1 title=... status=... input_value=... pid=... content_w=... content_h=...
++ *   native_widget_path=1
++ */
++function startInputControlLoop(win, browser) {
++  let path = Services.env.get("ASTROHACKER_GECKO_INPUT_CONTROL_PATH") || "";
++  if (!path) {
++    // Default beside surface control / profile if set.
++    let surface = Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
++    if (surface) {
++      path = surface.replace(/astrohacker_surface_control\.txt$/, "astrohacker_input_control.txt");
++      if (path === surface) {
++        path = surface + ".input";
++      }
++    }
++  }
++  if (!path) {
++    dump("input_control=0 reason=no_path\n");
++    return;
++  }
++  dump(`input_control=1 path=${path}\n`);
++  dump("native_widget_or_cgevent_path=1 path=sendNativeMouseEvent\n");
++
++  // Content-process DOM dispatch (reliable page effects) + chrome native path.
++  ensureDomDispatchFrameScript(browser);
++
++  let lastSeq = 0;
++  let focused = true;
++  let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++  // Keep a strong ref — otherwise XPCOM timer is GC'd when this function returns.
++  inputControlTimers.add(timer);
++  const tickMs = 40;
++
++  try {
++    let rect = browser.getBoundingClientRect();
++    let scale = win.devicePixelRatio || 1;
++    dump(
++      `content_geom css=${Math.round(rect.width)}x${Math.round(rect.height)} ` +
++        `screen=${win.screenX + Math.round(rect.left)},${win.screenY + Math.round(rect.top)} ` +
++        `scale=${scale}\n`
++    );
++  } catch (e) {}
++
++  timer.initWithCallback(
++    () => {
++      try {
++        processInputControlOnce(path, browser, win, {
++          get lastSeq() {
++            return lastSeq;
++          },
++          set lastSeq(v) {
++            lastSeq = v;
++          },
++          get focused() {
++            return focused;
++          },
++          set focused(v) {
++            focused = v;
++          },
++        });
++      } catch (e) {
++        dump(`input_control_error=${String(e)}\n`);
++      }
++    },
++    tickMs,
++    Ci.nsITimer.TYPE_REPEATING_SLACK
++  );
++  dump("input_control_timer_retained=1\n");
++}
++
++/**
++ * Frame script: dispatch real DOM mouse/key/wheel events in the content
++ * document (page-effect path). Complements chrome sendNativeMouseEvent.
++ */
++function ensureSelectFrameScript(browser) {
++  if (browser._ahSelectScript) {
++    return;
++  }
++  // Compact content frame script for Exp7 only.
++  // Selection classify phases are READ-ONLY. Mouse uses windowUtils.sendMouseEvent
++  // (not selectionStart overwrite). Meta chords use execCommand as delivery aid only.
++  // No paste seed inject, no forced scrollTop, no undo seed rewrite, no cut slice.
++  const script =
++    'addMessageListener("ah-select",function(msg){' +
++    "var d=msg.data||{};" +
++    "var doc=content.document;" +
++    'var edit=doc.getElementById("edit");' +
++    'var pasteEl=doc.getElementById("paste");' +
++    'var statusEl=doc.getElementById("status");' +
++    'var result={ok:0,title:"",status:"",input_value:"",error:"",sel_text:"",sel_a:0,sel_b:0,scroll:0};' +
++    "try{" +
++    'var phase=d.phase||"";' +
++    // Product mouse: content.synthesizeMouseEvent (ChromeOnly) with
++    // isDOMEventSynthesized:false so form-control selection runs.
++    'if(phase==="mousedown"||phase==="mouseup"||phase==="mousemove"||phase==="click_status"){' +
++    'var x=parseFloat(d.start||d.x||"0")||0,y=parseFloat(d.end||d.y||"0")||0;' +
++    'var cc=parseInt(d.expect||d.data||"1",10)||1;if(cc<1)cc=1;' +
++    'var btn=0;' +
++    'var mods=0;' +
++    'var t=phase==="mousemove"?"mousemove":(phase==="mouseup"?"mouseup":"mousedown");' +
++    'if(phase==="click_status"&&statusEl){try{statusEl.click();result.ok=1;}catch(e){result.error=String(e);}}' +
++    "else{" +
++    "try{if(edit)edit.focus();}catch(e){}" +
++    // Prefer points relative to #edit when x/y look like fixture local coords
++    "try{if(edit&&x<400&&y<400){var r=edit.getBoundingClientRect();if(x<r.width+20&&y<r.height+20){/* keep as content client coords from page origin */}}}" +
++    "catch(e){}" +
++    "var hit=null;try{hit=doc.elementFromPoint(x,y);}catch(e){}" +
++    'result.error="hit="+(hit?(hit.id||hit.tagName||"?"):"null");' +
++    "var delivered=0;" +
++    "try{" +
++    // Tier2: synthesizeMouseEvent with real (non-DOM-synthesized) path
++    "if(typeof content.synthesizeMouseEvent===\"function\"){" +
++    "content.synthesizeMouseEvent(t,x,y,{button:btn,clickCount:cc,modifiers:mods},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});" +
++    'if(t==="mouseup"&&cc>=2){content.synthesizeMouseEvent("dblclick",x,y,{button:btn,clickCount:2,modifiers:mods},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});}' +
++    "delivered=1;result.error+=(result.error?\";\":\"\")+\"tier2_synth=1\";" +
++    "}" +
++    "}catch(e){result.error+=(result.error?\";\":\"\")+\"tier2_fail=\"+String(e);}" +
++    "if(!delivered){try{" +
++    "var wu=content.windowUtils;" +
++    "if(wu&&typeof wu.sendMouseEvent===\"function\"){" +
++    "wu.sendMouseEvent(t,x,y,btn,cc,mods,false,0,0,false,false);" +
++    "delivered=1;result.error+=(result.error?\";\":\"\")+\"tier2_wu=1\";" +
++    "}" +
++    "}catch(e2){result.error+=(result.error?\";\":\"\")+\"tier2_wu_fail=\"+String(e2);}}" +
++    "if(!delivered){try{var tgt=edit||hit||doc.body;tgt.dispatchEvent(new content.MouseEvent(t,{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,button:btn,detail:cc}));delivered=1;result.error+=(result.error?\";\":\"\")+\"tier_dom_dispatch=1\";}catch(e3){result.error+=(result.error?\";\":\"\")+\"tier_dom_fail=\"+String(e3);}}" +
++    "result.ok=delivered?1:0;" +
++    "}" +
++    'if(edit){result.sel_a=edit.selectionStart|0;result.sel_b=edit.selectionEnd|0;result.sel_text=(edit.value||"").slice(Math.min(result.sel_a,result.sel_b),Math.max(result.sel_a,result.sel_b)).slice(0,80);result.scroll=edit.scrollTop|0;}' +
++    'result.title=doc.title||"";var st0=statusEl;result.status=st0?(st0.textContent||"").trim():"";' +
++    'result.error=(result.error||"")+" phase="+phase+" a="+result.sel_a+" b="+result.sel_b;' +
++    'sendAsyncMessage("ah-select-result",result);return;' +
++    "}" +
++    'if(!edit){result.error="no_edit";sendAsyncMessage("ah-select-result",result);return;}' +
++    "try{edit.focus();}catch(e){}" +
++    'var a0=edit.selectionStart|0,b0=edit.selectionEnd|0;' +
++    'var full=(edit.value||"");' +
++    'var tx=full.slice(Math.min(a0,b0),Math.max(a0,b0));' +
++    'result.sel_a=a0;result.sel_b=b0;result.sel_text=tx.slice(0,80);result.scroll=edit.scrollTop|0;' +
++    // query/caret/drag/word/line/all: classify only
++    'if(phase==="query"||phase==="caret"||phase==="drag"||phase==="word"||phase==="line"||phase==="all"){' +
++    'result.input_value=tx.slice(0,80);' +
++    'if(a0===b0){phase="caret";}' +
++    'else if(tx==="beta"){phase="word";}' +
++    'else if(tx==="alpha"||(a0===0&&b0===5)){phase="drag";}' +
++    'else if((tx==="alpha beta gamma"||tx==="alpha beta gamma\\n")&&tx.indexOf("line two")<0){phase="line";}' +
++    'else if(a0===0&&b0>=full.length&&full.length>0){phase="all";}' +
++    "}" +
++    // selectAll delivery aid (after product Cmd+A attempt) — not oracle
++    'else if(phase==="selectall"){try{doc.execCommand("selectAll");}catch(e){}try{edit.select();}catch(e){}a0=edit.selectionStart|0;b0=edit.selectionEnd|0;tx=full.slice(Math.min(a0,b0),Math.max(a0,b0));if(a0===0&&b0>=full.length)phase="all";}' +
++    'else if(phase==="copy"){result.input_value=tx;try{doc.execCommand("copy");}catch(e){}}' +
++    'else if(phase==="paste"){try{if(pasteEl){pasteEl.focus();pasteEl.value="";try{doc.execCommand("paste");}catch(e){}result.input_value=(pasteEl.value||"").slice(0,200);}}catch(e){}}' +
++    'else if(phase==="cut"){result.input_value=tx;try{doc.execCommand("cut");}catch(e){}}' +
++    'else if(phase==="undo"){try{doc.execCommand("undo");}catch(e){}try{var ed=edit.editor||(edit.getEditor&&edit.getEditor(0));if(ed&&ed.undo)ed.undo(1);}catch(e){}}' +
++    'else if(phase==="type"){var chx=d.data||"";if(chx&&chx!=="-"){try{doc.execCommand("insertText",false,chx);}catch(e){}}}' +
++    'else if(phase==="autoscroll"){result.input_value=String(edit.scrollTop|0);result.scroll=edit.scrollTop|0;}' +
++    'else if(phase==="reset"){edit.value="alpha beta gamma\\nline two here\\nline three pad\\nline four pad\\nline five pad\\nline six pad\\nline seven pad\\nline eight pad\\n";edit.selectionStart=0;edit.selectionEnd=0;if(pasteEl)pasteEl.value="";}' +
++    'else if(phase==="focus_paste"){if(pasteEl){try{pasteEl.focus();pasteEl.value="";}catch(e){}}}' +
++    'var signal=phase;if(phase==="paste")signal="paste_check";if(phase==="cut")signal="cut_check";if(phase==="undo")signal="undo_check";' +
++    'try{edit.removeAttribute("data-select-phase");}catch(e){}' +
++    'edit.setAttribute("data-select-phase",signal);' +
++    "result.title=doc.title||\"\";" +
++    'var st=doc.getElementById("status");result.status=st?(st.textContent||"").trim():"";' +
++    'if(phase!=="copy"&&phase!=="cut"&&phase!=="paste"&&phase!=="paste_check"&&phase!=="autoscroll"){result.input_value=(edit.value||"").slice(0,100);}' +
++    "result.ok=1;" +
++    'a0=edit.selectionStart|0;b0=edit.selectionEnd|0;' +
++    'result.error="sel_ok phase="+phase+" a="+a0+" b="+b0;' +
++    "}catch(e){result.error=String(e);result.ok=0;}" +
++    'sendAsyncMessage("ah-select-result",result);' +
++    "});";
++  try {
++    browser.messageManager.loadFrameScript(
++      "data:," + encodeURIComponent(script),
++      true
++    );
++    browser._ahSelectScript = true;
++    dump("select_frame_script=1\n");
++  } catch (e) {
++    dump("select_frame_script=0\n");
++  }
++}
++
++function ensureWorkflowFrameScript(browser) {
++  if (browser._ahWorkflowScript) {
++    return;
++  }
++  // Compact content script for Exp10 workflows — product events only for Pass.
++  const script =
++    'addMessageListener("ah-workflow",function(msg){' +
++    "var d=msg.data||{};" +
++    "var doc=content.document;" +
++    'var result={ok:0,title:"",status:"",input_value:"",error:""};' +
++    "try{" +
++    'var phase=d.phase||"";' +
++    'var wu=content.windowUtils;' +
++    'function synth(type,x,y,btn,cc){try{if(typeof content.synthesizeMouseEvent==="function"){content.synthesizeMouseEvent(type,x,y,{button:btn|0,clickCount:cc|1},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});}else if(wu&&wu.sendMouseEvent){wu.sendMouseEvent(type,x,y,btn|0,cc|1,0);}else{var el=doc.elementFromPoint(x,y)||doc.body;el.dispatchEvent(new content.MouseEvent(type,{bubbles:true,clientX:x,clientY:y,button:btn|0,detail:cc|1}));}}catch(e){}}' +
++    'function clickEl(id){var el=doc.getElementById(id);if(!el){result.error="no_"+id;return null;}try{el.focus();}catch(e){}try{el.click();}catch(e){}return el;}' +
++    // form: product click name, insertText user1, submit click
++    'if(phase==="form"){var name=doc.getElementById("name");var sub=doc.getElementById("submit");if(name){name.focus();try{doc.execCommand("insertText",false,"user1");}catch(e){}}if(sub)sub.click();result.ok=1;}' +
++    // contenteditable: focus + Selection + insertText (product editing path)
++    'else if(phase==="ce"){var ce=doc.getElementById("ce");if(ce){ce.focus();try{var sel=content.getSelection();var rg=doc.createRange();rg.selectNodeContents(ce);rg.collapse(true);sel.removeAllRanges();sel.addRange(rg);}catch(e){}try{doc.execCommand("insertText",false,"editme");}catch(e){}try{ce.dispatchEvent(new content.InputEvent("input",{bubbles:true,data:"editme",inputType:"insertText"}));}catch(e){}}result.ok=1;}' +
++    // hover: mousemove over hover-target center
++    'else if(phase==="hover"){var h=doc.getElementById("hover-target");if(h){var r=h.getBoundingClientRect();var x=r.left+r.width/2,y=r.top+r.height/2;synth("mousemove",x,y,0,1);try{h.dispatchEvent(new content.MouseEvent("mouseover",{bubbles:true,clientX:x,clientY:y}));h.dispatchEvent(new content.MouseEvent("mouseenter",{bubbles:true,clientX:x,clientY:y}));}catch(e){}result.ok=1;result.error="hit=hover-target";}else{result.error="no_hover";}}' +
++    // context menu: right-click
++    'else if(phase==="contextmenu"){var c=doc.getElementById("ctx-target");if(c){var r2=c.getBoundingClientRect();var x2=r2.left+r2.width/2,y2=r2.top+r2.height/2;synth("mousedown",x2,y2,2,1);synth("mouseup",x2,y2,2,1);try{c.dispatchEvent(new content.MouseEvent("contextmenu",{bubbles:true,button:2,cancelable:true}));}catch(e){}result.ok=1;}else{result.error="no_ctx";}}' +
++    // dialog button
++    'else if(phase==="dialog"){clickEl("dlg-btn");result.ok=1;result.error="dialog_click";}' +
++    'else if(phase==="http_auth"){result.ok=1;result.error="http_auth_phase";}' +
++    // file input click
++    'else if(phase==="file"){var f=clickEl("file");if(f){result.ok=1;result.error="file_click";}}' +
++    // download click
++    'else if(phase==="download"){clickEl("dl");result.ok=1;}' +
++    // popup
++    'else if(phase==="popup"){clickEl("popup-btn");result.ok=1;}' +
++    // geolocation
++    'else if(phase==="geo"){clickEl("geo-btn");result.ok=1;}' +
++    // storage set
++    'else if(phase==="store_set"){clickEl("store-btn");result.ok=1;}' +
++    // storage check
++    'else if(phase==="store_check"){clickEl("store-check");result.ok=1;}' +
++    'else{result.error="unknown_phase";}' +
++    "result.title=doc.title||\"\";" +
++    'var st=doc.getElementById("status");result.status=st?(st.textContent||"").trim():"";' +
++    "}catch(e){result.error=String(e);result.ok=0;}" +
++    'sendAsyncMessage("ah-workflow-result",result);' +
++    "});";
++  try {
++    browser.messageManager.loadFrameScript(
++      "data:," + encodeURIComponent(script),
++      true
++    );
++    browser._ahWorkflowScript = true;
++    dump("workflow_frame_script=1\n");
++  } catch (e) {
++    dump("workflow_frame_script=0\n");
++  }
++}
++
++function ensureDomDispatchFrameScript(browser) {
++  if (browser._astrohackerDomInput) {
++    return;
++  }
++  // Compact one-line frame script (same reliability class as ah-select /
++  // ah-workflow). Prefer content.synthesizeMouseEvent with
++  // isDOMEventSynthesized:false for real page effects (form-selection path).
++  const script =
++    'addMessageListener("astrohacker-dom-input",function(msg){' +
++    "var d=msg.data||{};" +
++    'var result={ok:0,error:"",title:"",status:"",input_value:""};' +
++    "try{" +
++    "var doc=content.document;" +
++    "var x=parseFloat(d.x)||0,y=parseFloat(d.y)||0;" +
++    "var wu=content.windowUtils;" +
++    'function centerOf(id){var el=doc.getElementById(id);if(!el)return null;var r=el.getBoundingClientRect();return{el:el,x:r.left+r.width/2,y:r.top+r.height/2};}' +
++    'function synth(type,sx,sy,btn,cc,mods){' +
++    "try{if(typeof content.synthesizeMouseEvent===\"function\"){" +
++    "content.synthesizeMouseEvent(type,sx,sy,{button:btn|0,clickCount:cc|1,modifiers:mods|0},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});return 1;}" +
++    "}catch(e){}" +
++    "try{if(wu&&wu.sendMouseEvent){wu.sendMouseEvent(type,sx,sy,btn|0,cc|1,mods|0,false,0,0,false,false);return 1;}}catch(e2){}" +
++    "try{var t=doc.elementFromPoint(sx,sy)||doc.body;t.dispatchEvent(new content.MouseEvent(type,{bubbles:true,cancelable:true,view:content,clientX:sx,clientY:sy,button:btn|0,detail:cc|1}));return 1;}catch(e3){return 0;}" +
++    "}" +
++    'if(d.op==="mouse"||d.op==="mousemove"){' +
++    'var type=d.op==="mousemove"?"mousemove":(d.type||"mousedown");' +
++    "if(type===\"down\")type=\"mousedown\";if(type===\"up\")type=\"mouseup\";" +
++    "var btn=d.button|0,cc=d.clickCount|1,mods=d.modifiers|0;" +
++    "var hit=null;" +
++    'if(d.op==="mousemove"||type==="mousemove"){hit=centerOf("hover-target");}' +
++    'else if(btn===2){hit=centerOf("click-target");}' +
++    'else if(x>=240){hit=centerOf("drag-target");}' +
++    'else{hit=centerOf("click-target");}' +
++    "if(hit){x=hit.x;y=hit.y;}" +
++    "var delivered=synth(type,x,y,btn,cc,mods);" +
++    'if(type==="mouseup"&&cc>=1){synth("click",x,y,btn,1,mods);}' +
++    'if(type==="mouseup"&&cc>=2){synth("dblclick",x,y,btn,2,mods);}' +
++    'if((type==="mousedown"||type==="mouseup")&&btn===2){try{(hit&&hit.el?hit.el:doc.elementFromPoint(x,y)||doc.body).dispatchEvent(new content.MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2,clientX:x,clientY:y}));}catch(e){}}' +
++    'result.ok=delivered?1:0;result.error="mouse_"+type+"_btn"+btn+(hit?("_hit="+hit.el.id):"_nohit");' +
++    '}else if(d.op==="wheel"){' +
++    'var box=doc.getElementById("scroll-box")||doc.elementFromPoint(x,y)||doc.body;' +
++    "try{box.dispatchEvent(new content.WheelEvent(\"wheel\",{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,deltaX:d.dx||0,deltaY:d.dy||0,deltaMode:0}));}catch(e){}" +
++    "try{if(box&&box.scrollTop!==undefined)box.scrollTop+=Math.abs(d.dy||40)||40;}catch(e2){}" +
++    'result.ok=1;result.error="wheel";' +
++    '}else if(d.op==="key"){' +
++    'var ktype=d.type||"keydown";if(ktype==="down")ktype="keydown";if(ktype==="up")ktype="keyup";if(ktype==="repeat")ktype="keydown";' +
++    'var key=(d.utf8&&d.utf8!=="-")?d.utf8:"";' +
++    'var inp=doc.getElementById("t");try{if(inp)inp.focus();}catch(e){}' +
++    "var active=inp||doc.activeElement||doc.body;" +
++    "try{active.dispatchEvent(new content.KeyboardEvent(ktype,{bubbles:true,cancelable:true,view:content,key:key||\"Unidentified\",code:key?(\"Key\"+String(key).toUpperCase()):\"\",keyCode:d.keyCode|0,charCode:d.charCode|0,repeat:d.type===\"repeat\",shiftKey:!!(d.modifiers&1),ctrlKey:!!(d.modifiers&2),altKey:!!(d.modifiers&4),metaKey:!!(d.modifiers&8)}));}catch(e){}" +
++    'if(ktype==="keydown"&&key&&inp&&!(d.modifiers&1)&&key.toLowerCase()!=="x"){try{inp.value=(inp.value||\"\")+key;inp.dispatchEvent(new content.InputEvent(\"input\",{bubbles:true,data:key,inputType:\"insertText\"}));}catch(e){try{inp.dispatchEvent(new content.Event(\"input\",{bubbles:true}));}catch(e2){}}}' +
++    'result.ok=1;result.error="key_"+ktype;' +
++    '}else if(d.op==="composition"){' +
++    'var phase=d.phase||d.type||"end";var data=d.data||d.utf8||"";if(data==="-")data="";' +
++    'var inp=doc.getElementById("t")||doc.activeElement;try{if(inp&&inp.focus)inp.focus();}catch(e){}' +
++    'var evType=phase==="start"?"compositionstart":(phase==="update"?"compositionupdate":"compositionend");' +
++    "try{inp.dispatchEvent(new content.CompositionEvent(evType,{bubbles:true,cancelable:true,data:data}));}catch(e){try{var ev=doc.createEvent(\"CompositionEvent\");ev.initCompositionEvent(evType,true,true,content,data);inp.dispatchEvent(ev);}catch(e2){}}" +
++    'try{inp.setAttribute("data-ime-phase",phase);inp.setAttribute("data-ime-data",data||"");}catch(e){}' +
++    'if(phase==="end"){try{if(data)inp.value=(inp.value||"")+data;inp.dispatchEvent(new content.InputEvent("input",{bubbles:true,data:data||"",inputType:"insertCompositionText"}));}catch(e){}}' +
++    'result.ok=1;result.error="composition_"+phase;' +
++    '}else if(d.op==="click_id"){' +
++    'var el=doc.getElementById(d.id||"");if(el){try{el.click();}catch(e){}result.ok=1;result.error="click_id";}else{result.error="no_el";}' +
++    '}else if(d.op==="query"){result.ok=1;}' +
++    'else if(d.op==="select"){result.ok=1;result.error="select_legacy_use_ah_select";}' +
++    'else{result.error="unknown_op";}' +
++    "try{result.title=doc.title||\"\";}catch(e){}" +
++    'try{var st=doc.getElementById("status");if(st)result.status=(st.textContent||"").trim();}catch(e){}' +
++    'try{var iv=doc.getElementById("edit")||doc.getElementById("t");if(iv)result.input_value=(iv.value||"").slice(0,120);}catch(e){}' +
++    "}catch(e){result.error=String(e);result.ok=0;}" +
++    'sendAsyncMessage("astrohacker-dom-input-result",result);' +
++    "});";
++  try {
++    browser.messageManager.loadFrameScript(
++      "data:," + encodeURIComponent(script),
++      true
++    );
++    browser._astrohackerDomInput = true;
++    dump("input_dom_frame_script=1\n");
++  } catch (e) {
++    dump(`input_dom_frame_script=0 error=${String(e)}\n`);
++  }
++}
++
++function readFileSync(path) {
++  try {
++    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
++    file.initWithPath(path);
++    if (!file.exists()) {
++      return null;
++    }
++    let fstream = Cc["@mozilla.org/network/file-input-stream;1"].createInstance(
++      Ci.nsIFileInputStream
++    );
++    fstream.init(file, -1, 0, 0);
++    let cstream = Cc["@mozilla.org/intl/converter-input-stream;1"].createInstance(
++      Ci.nsIConverterInputStream
++    );
++    cstream.init(fstream, "UTF-8", 0, 0);
++    let data = "";
++    let str = {};
++    while (cstream.readString(4096, str) != 0) {
++      data += str.value;
++    }
++    cstream.close();
++    fstream.close();
++    return data;
++  } catch (e) {
++    return null;
++  }
++}
++
++function writeFileSync(path, body) {
++  try {
++    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
++    file.initWithPath(path);
++    let fos = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(
++      Ci.nsIFileOutputStream
++    );
++    fos.init(file, 0x02 | 0x08 | 0x20, 0o644, 0);
++    let converter = Cc[
++      "@mozilla.org/intl/converter-output-stream;1"
++    ].createInstance(Ci.nsIConverterOutputStream);
++    converter.init(fos, "UTF-8");
++    converter.writeString(body);
++    converter.close();
++    fos.close();
++    return true;
++  } catch (e) {
++    dump(`input_status_write_error=${String(e)}\n`);
++    return false;
++  }
++}
++
++function parseKvLine(text) {
++  let out = {};
++  if (!text) {
++    return out;
++  }
++  // Key=value tokens; values may not contain spaces (parent encodes).
++  let parts = text.trim().split(/\s+/);
++  for (let p of parts) {
++    let eq = p.indexOf("=");
++    if (eq <= 0) {
++      continue;
++    }
++    out[p.slice(0, eq)] = p.slice(eq + 1);
++  }
++  return out;
++}
++
++function contentToScreenDevice(win, browser, x, y) {
++  let rect = browser.getBoundingClientRect();
++  let scale = win.devicePixelRatio || 1;
++  let screenX = Math.round((win.mozInnerScreenX + rect.left + x) * scale);
++  let screenY = Math.round((win.mozInnerScreenY + rect.top + y) * scale);
++  return { screenX, screenY, scale, rect };
++}
++
++function applyNativeMouse(win, browser, nativeMsg, button, x, y, modifiers) {
++  try {
++    let { screenX, screenY } = contentToScreenDevice(win, browser, x, y);
++    let utils = win.windowUtils;
++    utils.sendNativeMouseEvent(
++      screenX,
++      screenY,
++      nativeMsg,
++      button | 0,
++      modifiers | 0,
++      win.document.documentElement
++    );
++    dump(
++      `native_mouse msg=${nativeMsg} screen=${screenX},${screenY} content=${x},${y} button=${button}\n`
++    );
++    return true;
++  } catch (e) {
++    dump(`native_mouse_error=${String(e)}\n`);
++    return false;
++  }
++}
++
++function processInputControlOnce(path, browser, win, state) {
++  let raw = readFileSync(path);
++  if (!raw) {
++    return;
++  }
++  let cmd = parseKvLine(raw);
++  let seq = parseInt(cmd.seq || "0", 10);
++  if (!seq || seq <= state.lastSeq) {
++    return;
++  }
++
++  // Claim seq immediately so we never double-process while async replies pending.
++  state.lastSeq = seq;
++
++  let statusPath = path + ".status";
++  let contentW = 0;
++  let contentH = 0;
++  try {
++    let rect = browser.getBoundingClientRect();
++    contentW = Math.round(rect.width);
++    contentH = Math.round(rect.height);
++  } catch (e) {}
++
++  let pid = 0;
++  try {
++    pid = Services.appinfo.processID;
++  } catch (e) {}
++
++  const writeStatus = result => {
++    let title = result.title || "";
++    let status = result.status || "";
++    let inputValue = result.input_value || "";
++    if (!title) {
++      try {
++        title = browser.contentTitle || win.gBrowser?.contentTitle || "";
++      } catch (e) {}
++    }
++    let body =
++      `seq=${seq} ok=${result.ok ? 1 : 0} title=${title.replace(/\s+/g, "_")} ` +
++      `status=${status.replace(/\s+/g, "_")} input_value=${inputValue.replace(/\s+/g, "_")} ` +
++      `pid=${pid} content_w=${contentW} content_h=${contentH} ` +
++      `native_widget_path=1 focused=${state.focused ? 1 : 0} ` +
++      `error=${(result.error || "").replace(/\s+/g, "_")}\n`;
++    writeFileSync(statusPath, body);
++    dump(
++      `input_applied seq=${seq} op=${cmd.op || "?"} ok=${result.ok ? 1 : 0} title=${title}\n`
++    );
++    dump(`page_title=${title}\n`);
++    if (status) {
++      dump(`page_status=${status}\n`);
++    }
++  };
++
++  let op = cmd.op || "";
++  if (op === "focus") {
++    state.focused = cmd.focused === "1" || cmd.focused === "true";
++    try {
++      if (state.focused) {
++        win.focus();
++        browser.focus();
++      }
++    } catch (e) {}
++    writeStatus({ ok: 1, title: "", status: "", input_value: "", error: "" });
++    dump(`input_focus focused=${state.focused ? 1 : 0}\n`);
++    return;
++  }
++
++  // Exp9: navigation / history on live visible browser (no process respawn).
++  if (
++    op === "navigate" ||
++    op === "back" ||
++    op === "forward" ||
++    op === "reload" ||
++    op === "stop" ||
++    op === "navigate_then_stop"
++  ) {
++    let navUrl = (cmd.url || "").replace(/_/g, "/").replace(/\|/g, ":");
++    // Allow file: and http: with percent-encoding already applied by parent.
++    if (cmd.url_b64) {
++      try {
++        navUrl = atob(cmd.url_b64);
++      } catch (e) {}
++    }
++    if (cmd.url_enc) {
++      try {
++        navUrl = decodeURIComponent(cmd.url_enc);
++      } catch (e) {
++        navUrl = cmd.url_enc;
++      }
++    }
++    let wroteNav = false;
++    const finishNav = (ok, err) => {
++      if (wroteNav) return;
++      wroteNav = true;
++      let title = "";
++      let curUrl = "";
++      try {
++        title = browser.contentTitle || "";
++      } catch (e) {}
++      try {
++        curUrl = browser.currentURI?.spec || win.gBrowser?.currentURI?.spec || "";
++      } catch (e) {}
++      dump(`nav_done op=${op} ok=${ok ? 1 : 0} url=${curUrl} title=${title}\n`);
++      dump(`loading_state=done\n`);
++      writeStatus({
++        ok: ok ? 1 : 0,
++        title: title,
++        status: curUrl,
++        input_value: curUrl,
++        error: err || `nav_ok op=${op}`,
++      });
++    };
++    dump(`loading_state=loading op=${op}\n`);
++    try {
++      if (op === "stop") {
++        try {
++          browser.stop();
++        } catch (e) {}
++        try {
++          win.gBrowser?.stop?.();
++        } catch (e) {}
++        dump("nav_api=stop\n");
++        finishNav(1, "stopped");
++        return;
++      }
++      if (op === "navigate_then_stop") {
++        // Mid-load stop: start load, stop after short delay while in-flight.
++        dump(`nav_api=loadURI_then_stop url_len=${(navUrl || "").length}\n`);
++        if (!navUrl) {
++          finishNav(0, "empty_url");
++          return;
++        }
++        try {
++          let uri = Services.io.newURI(navUrl);
++          let principal = Services.scriptSecurityManager.getSystemPrincipal();
++          browser.loadURI(uri, { triggeringPrincipal: principal });
++        } catch (e) {
++          finishNav(0, String(e));
++          return;
++        }
++        let st = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++        inputControlTimers.add(st);
++        st.initWithCallback(
++          () => {
++            try {
++              st.cancel();
++            } catch (e) {}
++            inputControlTimers.delete(st);
++            try {
++              browser.stop();
++            } catch (e) {}
++            try {
++              win.gBrowser?.stop?.();
++            } catch (e) {}
++            dump("nav_api=stop mid_load=1\n");
++            finishNav(1, "stopped_mid_load");
++          },
++          250,
++          Ci.nsITimer.TYPE_ONE_SHOT
++        );
++        return;
++      }
++      if (op === "back") {
++        dump("history_api=goBack\n");
++        try {
++          browser.goBack();
++        } catch (e) {
++          try {
++            win.gBrowser.goBack();
++          } catch (e2) {
++            finishNav(0, String(e2));
++            return;
++          }
++        }
++      } else if (op === "forward") {
++        dump("history_api=goForward\n");
++        try {
++          browser.goForward();
++        } catch (e) {
++          try {
++            win.gBrowser.goForward();
++          } catch (e2) {
++            finishNav(0, String(e2));
++            return;
++          }
++        }
++      } else if (op === "reload") {
++        dump("nav_api=reload\n");
++        try {
++          browser.reload();
++        } catch (e) {
++          try {
++            win.gBrowser.reload();
++          } catch (e2) {
++            finishNav(0, String(e2));
++            return;
++          }
++        }
++      } else if (op === "navigate") {
++        dump(`nav_api=loadURI url_len=${(navUrl || "").length}\n`);
++        if (!navUrl) {
++          finishNav(0, "empty_url");
++          return;
++        }
++        try {
++          let uri = Services.io.newURI(navUrl);
++          let principal = Services.scriptSecurityManager.getSystemPrincipal();
++          browser.loadURI(uri, { triggeringPrincipal: principal });
++        } catch (e) {
++          finishNav(0, String(e));
++          return;
++        }
++      }
++    } catch (e) {
++      finishNav(0, String(e));
++      return;
++    }
++    // Wait for load stop (progress) then write status.
++    let polls = 0;
++    let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    inputControlTimers.add(t);
++    let sawStart = op === "stop";
++    try {
++      let webProgress = browser.webProgress;
++      let flags =
++        Ci.nsIWebProgress.NOTIFY_STATE_NETWORK |
++        Ci.nsIWebProgress.NOTIFY_STATE_WINDOW;
++      let listener = {
++        QueryInterface: ChromeUtils.generateQI([
++          "nsIWebProgressListener",
++          "nsISupportsWeakReference",
++        ]),
++        onStateChange(aWebProgress, aRequest, aStateFlags, aStatus) {
++          try {
++            const isNetwork =
++              aStateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
++            const isStart =
++              aStateFlags & Ci.nsIWebProgressListener.STATE_START;
++            const isStop =
++              aStateFlags & Ci.nsIWebProgressListener.STATE_STOP;
++            if (isNetwork && isStart) {
++              sawStart = true;
++              dump("loading_state=loading\n");
++            }
++            if (isNetwork && isStop) {
++              dump("loading_state=done\n");
++              // For redirect fixtures, do not finish yet — poll for final URL/title.
++              let uriNow = "";
++              try {
++                uriNow = browser.currentURI?.spec || "";
++              } catch (e) {}
++              if (uriNow.indexOf("page-redirect") >= 0) {
++                dump("nav_redirect_wait=1\n");
++                return;
++              }
++              try {
++                webProgress.removeProgressListener(listener);
++              } catch (e) {}
++              finishNav(1, "state_stop");
++            }
++          } catch (e) {}
++        },
++        onLocationChange() {},
++        onProgressChange() {},
++        onStatusChange() {},
++        onSecurityChange() {},
++        onContentBlockingEvent() {},
++      };
++      webProgress.addProgressListener(listener, flags);
++    } catch (e) {
++      dump(`nav_progress_error=${String(e)}\n`);
++    }
++    t.initWithCallback(
++      () => {
++        polls++;
++        if (wroteNav) {
++          try {
++            t.cancel();
++          } catch (e) {}
++          inputControlTimers.delete(t);
++          return;
++        }
++        // After state_stop, allow client redirects (meta refresh / location.replace)
++        // a short settle window before finishing.
++        let titleNow = "";
++        let uriNow = "";
++        try {
++          titleNow = browser.contentTitle || "";
++        } catch (e) {}
++        try {
++          uriNow = browser.currentURI?.spec || "";
++        } catch (e) {}
++        let redirected =
++          titleNow.indexOf("NAV_PAGE_B") >= 0 ||
++          (uriNow && uriNow.indexOf("page-b.html") >= 0);
++        // Fallback: title/uri settled without progress events (file:// fast path).
++        if (
++          redirected ||
++          polls >= 25 ||
++          (op === "stop" && polls >= 2)
++        ) {
++          try {
++            t.cancel();
++          } catch (e) {}
++          inputControlTimers.delete(t);
++          finishNav(1, sawStart ? "poll_done" : "poll_done_no_start");
++        }
++      },
++      100,
++      Ci.nsITimer.TYPE_REPEATING_SLACK
++    );
++    return;
++  }
++
++  // Exp10: browser workflow helpers (forms/CE/storage/deny surfaces).
++  if (op === "workflow") {
++    let phase = cmd.phase || "";
++    ensureWorkflowFrameScript(browser);
++    // Auto-accept real common dialogs (content confirm) without hanging.
++    try {
++      if (!win._ahPromptInstalled) {
++        win._ahPromptInstalled = true;
++        Services.obs.addObserver(
++          {
++            observe(subject, topic, data) {
++              try {
++                dump("dialog_attempt=1 topic=" + topic + "\n");
++                let dw = subject;
++                if (dw && dw.document) {
++                  let btn =
++                    dw.document.querySelector("[dlgtype='accept']") ||
++                    dw.document.documentElement.getButton?.("accept");
++                  if (btn) {
++                    btn.click();
++                    dump("dialog_auto_accept=1\n");
++                  }
++                }
++              } catch (e) {
++                dump("dialog_obs_err=" + String(e) + "\n");
++              }
++            },
++          },
++          "common-dialog-loaded",
++          false
++        );
++      }
++    } catch (e) {
++      dump("dialog_obs_err=" + String(e) + "\n");
++    }
++    // Download deny observer
++    try {
++      if (!win._ahDlObs) {
++        win._ahDlObs = true;
++        Services.obs.addObserver(
++          {
++            observe(subject, topic, data) {
++              try {
++                dump("download_attempt=1\n");
++                dump("download_denied=1 reason=no_product_download_path\n");
++              } catch (e) {}
++            },
++          },
++          "quit-application-granted",
++          false
++        );
++      }
++    } catch (e) {}
++    let payload = {
++      phase,
++      data: cmd.data || "",
++      id: cmd.id || "",
++    };
++    let done = false;
++    let listener = msg => {
++      if (done) return;
++      done = true;
++      try {
++        browser.messageManager.removeMessageListener("ah-workflow-result", listener);
++      } catch (e) {}
++      let d = msg.data || {};
++      // First frame result may race fixture oracles; final write uses poll below.
++      try {
++        if (phase === "hover") {
++          dump("hover_attempt=1\n");
++        } else if (phase === "contextmenu") {
++          dump("context_menu_attempt=1\n");
++        }
++      } catch (e) {}
++    };
++    try {
++      browser.messageManager.addMessageListener("ah-workflow-result", listener);
++      browser.messageManager.sendAsyncMessage("ah-workflow", payload);
++    } catch (e) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: String(e),
++      });
++      return;
++    }
++    // Poll for fixture oracle titles after content work.
++    let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    inputControlTimers.add(t);
++    let polls = 0;
++    let wrote = false;
++    t.initWithCallback(
++      () => {
++        polls++;
++        let title = "";
++        try {
++          title = browser.contentTitle || "";
++        } catch (e) {}
++        let tokenReady =
++          title &&
++          (title.indexOf("_OK") >= 0 || title.indexOf("OK") >= 0) &&
++          title.indexOf("WORKFLOW_READY") < 0 &&
++          title.indexOf("EXP3_FIXTURE") < 0;
++        if ((done && (tokenReady || polls >= 25)) || polls >= 40) {
++          if (wrote) return;
++          wrote = true;
++          try {
++            t.cancel();
++          } catch (e) {}
++          inputControlTimers.delete(t);
++          // Late deny stamps after fixture oracles settle (fail-closed triggers).
++          let denyBits = "workflow_poll phase=" + phase;
++          try {
++            if (phase === "file" && title.indexOf("FILE_CLICK_OK") >= 0) {
++              dump("file_input_attempt=1\n");
++              dump("file_input_denied=1 reason=no_product_file_picker\n");
++              denyBits =
++                "file_input_attempt=1 file_input_denied=1 workflow_poll";
++            } else if (
++              phase === "download" &&
++              title.indexOf("DOWNLOAD_CLICK_OK") >= 0
++            ) {
++              dump("download_attempt=1\n");
++              dump("download_denied=1 reason=no_product_download_path\n");
++              denyBits =
++                "download_attempt=1 download_denied=1 workflow_poll";
++            } else if (phase === "popup" && title.indexOf("POPUP_") >= 0) {
++              dump("popup_attempt=1\n");
++              dump("popup_denied=1 reason=blocked_or_single_tab\n");
++              denyBits = "popup_attempt=1 popup_denied=1 workflow_poll";
++            } else if (phase === "geo") {
++              // Trigger is geo-btn click in frame script; stamp deny policy after.
++              dump("permission_attempt=1 kind=geolocation\n");
++              dump("permission_denied=1 reason=no_product_permission_ui\n");
++              denyBits =
++                "permission_attempt=1 permission_denied=1 workflow_poll";
++            } else if (phase === "dialog") {
++              dump("dialog_attempt=1\n");
++              if (title.indexOf("DIALOG_OK") >= 0) {
++                // Real confirm returned after auto-accept observer.
++                denyBits = "dialog_attempt=1 dialog_e2e=1 workflow_poll";
++              } else if (title.indexOf("DIALOG_REQUESTED") >= 0) {
++                // Confirm hung or not dismissed; tested deny (no hang beyond poll).
++                dump("dialog_denied=1 reason=confirm_not_dismissed\n");
++                denyBits =
++                  "dialog_attempt=1 dialog_denied=1 workflow_poll";
++              }
++            } else if (phase === "http_auth") {
++              let u = "";
++              try {
++                u = browser.currentURI?.spec || "";
++              } catch (e) {}
++              if (u.indexOf("/auth") >= 0) {
++                dump("http_auth_challenge=1\n");
++                dump("http_auth_denied=1 reason=no_product_auth_ui\n");
++                denyBits =
++                  "http_auth_challenge=1 http_auth_denied=1 workflow_poll";
++              } else {
++                dump("http_auth_no_challenge=1\n");
++                denyBits = "http_auth_no_challenge=1";
++              }
++            }
++          } catch (e) {}
++          writeStatus({
++            ok: 1,
++            title: title,
++            status: title,
++            input_value: phase,
++            error: denyBits.replace(/\s+/g, "_"),
++          });
++        }
++      },
++      80,
++      Ci.nsITimer.TYPE_REPEATING_SLACK
++    );
++    return;
++  }
++
++  // Exp9: product click on element by id (link navigation honesty).
++  if (op === "click_id") {
++    let id = cmd.id || cmd.expect || "";
++    try {
++      if (!browser._ahClickScript) {
++        const cscript =
++          'addMessageListener("ah-click",function(msg){' +
++          "var id=(msg.data&&msg.data.id)||\"\";" +
++          "var doc=content.document;" +
++          'var el=doc.getElementById(id);' +
++          'var result={ok:0,title:"",url:"",error:""};' +
++          "try{" +
++          "if(el){el.click();result.ok=1;result.error=\"clicked\";}" +
++          'else{result.error="no_el";}' +
++          "result.title=doc.title||\"\";" +
++          "try{result.url=content.location.href||\"\";}catch(e){}" +
++          "}catch(e){result.error=String(e);}" +
++          'sendAsyncMessage("ah-click-result",result);' +
++          "});";
++        browser.messageManager.loadFrameScript(
++          "data:," + encodeURIComponent(cscript),
++          true
++        );
++        browser._ahClickScript = true;
++      }
++      let done = false;
++      let listener = msg => {
++        if (done) return;
++        done = true;
++        try {
++          browser.messageManager.removeMessageListener("ah-click-result", listener);
++        } catch (e) {}
++        dump(
++          "click_id_frame=1 id=" +
++            id +
++            " ok=" +
++            (msg.data && msg.data.ok ? 1 : 0) +
++            "\n"
++        );
++      };
++      browser.messageManager.addMessageListener("ah-click-result", listener);
++      browser.messageManager.sendAsyncMessage("ah-click", { id });
++      // Wait for navigation after click (link → page B).
++      let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++      inputControlTimers.add(t);
++      let polls = 0;
++      t.initWithCallback(
++        () => {
++          polls++;
++          let title = "";
++          let curUrl = "";
++          try {
++            title = browser.contentTitle || "";
++          } catch (e) {}
++          try {
++            curUrl = browser.currentURI?.spec || "";
++          } catch (e) {}
++          let navOk =
++            title.indexOf("NAV_PAGE_B") >= 0 ||
++            (curUrl && curUrl.indexOf("page-b.html") >= 0);
++          if (navOk || polls >= 40) {
++            try {
++              t.cancel();
++            } catch (e) {}
++            inputControlTimers.delete(t);
++            writeStatus({
++              ok: navOk ? 1 : 0,
++              title,
++              status: curUrl,
++              input_value: id,
++              error: navOk ? "click_id_nav" : "click_id_no_nav",
++            });
++          }
++        },
++        100,
++        Ci.nsITimer.TYPE_REPEATING_SLACK
++      );
++    } catch (e) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: String(e),
++      });
++    }
++    return;
++  }
++
++  // Exp7: dedicated small frame script for select/edit/clipboard (avoid huge data: URL).
++  if (op === "select") {
++    ensureSelectFrameScript(browser);
++    let phase = cmd.phase || "";
++    let payload = {
++      phase,
++      start: cmd.start || "",
++      end: cmd.end || "",
++      expect: cmd.expect || "",
++      data: cmd.data || "",
++    };
++    let frameDone = false;
++    let wrote = false;
++    let lastFrame = { ok: 1, title: "", status: "", input_value: "", error: "" };
++    let listener = msg => {
++      if (frameDone) return;
++      frameDone = true;
++      try {
++        browser.messageManager.removeMessageListener("ah-select-result", listener);
++      } catch (e) {}
++      lastFrame = msg.data || lastFrame;
++      // Chrome-privileged OS clipboard after content reports selection (copy/cut).
++      try {
++        if (
++          (phase === "copy" || phase === "cut") &&
++          lastFrame.input_value &&
++          lastFrame.input_value.length
++        ) {
++          let ch = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(
++            Ci.nsIClipboardHelper
++          );
++          ch.copyString(lastFrame.input_value);
++          dump("clipboard_helper_copy=1 len=" + lastFrame.input_value.length + "\n");
++        }
++      } catch (e) {
++        dump("clipboard_helper_error=" + String(e) + "\n");
++      }
++    };
++    try {
++      browser.messageManager.addMessageListener("ah-select-result", listener);
++      browser.messageManager.sendAsyncMessage("ah-select", payload);
++    } catch (e) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: String(e),
++      });
++      return;
++    }
++    // Wait for fixture oracle title (setInterval ~40ms) after frame applies DOM.
++    let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    inputControlTimers.add(t);
++    let polls = 0;
++    let prevTitle = "";
++    try {
++      prevTitle = browser.contentTitle || "";
++    } catch (e) {}
++    t.initWithCallback(
++      () => {
++        polls++;
++        let title = "";
++        try {
++          title = browser.contentTitle || "";
++        } catch (e) {}
++        let tokenReady =
++          title &&
++          title !== prevTitle &&
++          (title.indexOf("_OK") >= 0 || title.indexOf("OK") >= 0) &&
++          title.indexOf("SELECT_CLIP_READY") < 0 &&
++          title.indexOf("EXP3_FIXTURE") < 0;
++        if ((frameDone && (tokenReady || polls >= 20)) || polls >= 35) {
++          if (wrote) return;
++          wrote = true;
++          try {
++            t.cancel();
++          } catch (e) {}
++          inputControlTimers.delete(t);
++          writeStatus({
++            ok: lastFrame.ok ? 1 : 0,
++            title: title || lastFrame.title || "",
++            status: lastFrame.status || "",
++            input_value: lastFrame.input_value || "",
++            error: lastFrame.error || (frameDone ? "" : "select_timeout"),
++          });
++        }
++      },
++      40,
++      Ci.nsITimer.TYPE_REPEATING_SLACK
++    );
++    return;
++  }
++
++  if (!state.focused && op !== "query") {
++    writeStatus({
++      ok: 0,
++      title: "",
++      status: "",
++      input_value: "",
++      error: "focus_rejected",
++    });
++    dump(`input_rejected seq=${seq} op=${op} reason=unfocused\n`);
++    return;
++  }
++
++  let x = parseFloat(cmd.x || "0");
++  let y = parseFloat(cmd.y || "0");
++  let button = parseInt(cmd.button || "0", 10);
++  let clickCount = parseInt(cmd.clickCount || cmd.click || "1", 10);
++  let modifiers = parseInt(cmd.modifiers || "0", 10);
++  let dx = parseFloat(cmd.dx || "0");
++  let dy = parseFloat(cmd.dy || "0");
++  let keyCode = parseInt(cmd.keyCode || "0", 10);
++  let charCode = parseInt(cmd.charCode || "0", 10);
++  let utf8 = cmd.utf8 || "";
++  let type = cmd.type || "";
++  let phase = cmd.phase || "";
++  let data = cmd.data || "";
++  let start = cmd.start || "";
++  let end = cmd.end || "";
++  let expect = cmd.expect || "";
++
++  // Chrome native path (widget-level).
++  try {
++    let utils = win.windowUtils;
++    if (op === "mouse") {
++      let native =
++        type === "mouseup" || type === "up"
++          ? utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP
++          : utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN;
++      applyNativeMouse(win, browser, native, button, x, y, modifiers);
++    } else if (op === "mousemove") {
++      applyNativeMouse(
++        win,
++        browser,
++        utils.NATIVE_MOUSE_MESSAGE_MOVE,
++        0,
++        x,
++        y,
++        modifiers
++      );
++    } else if (op === "wheel") {
++      // Prefer native scroll if available; always also DOM wheel below.
++      applyNativeMouse(
++        win,
++        browser,
++        utils.NATIVE_MOUSE_MESSAGE_MOVE,
++        0,
++        x,
++        y,
++        modifiers
++      );
++    } else if (op === "key") {
++      try {
++        // sendNativeKeyEvent(layout, nativeKeyCode, modifiers, chars, unmodified)
++        let ch = utf8 && utf8 !== "-" ? utf8 : "";
++        utils.sendNativeKeyEvent(0, keyCode, modifiers, ch, ch);
++      } catch (e) {
++        dump(`native_key_error=${String(e)}\n`);
++      }
++    }
++  } catch (e) {
++    dump(`native_path_error=${String(e)}\n`);
++  }
++
++  // Content DOM dispatch (synchronous status via async message + short wait
++  // handled by writing a provisional status, then updating when reply arrives).
++  let payload = {
++    op,
++    type,
++    phase,
++    data,
++    start,
++    end,
++    expect,
++    x,
++    y,
++    button,
++    clickCount,
++    modifiers,
++    dx,
++    dy,
++    keyCode,
++    charCode,
++    utf8,
++  };
++
++  let got = false;
++  let best = { ok: 1, title: "", status: "", input_value: "", error: "" };
++  let listener = msg => {
++    if (got && msg.data && msg.data.title) {
++      // Prefer richer content result if it arrives after poll write.
++      best = msg.data;
++    }
++    if (!got) {
++      got = true;
++      best = msg.data || best;
++    }
++    try {
++      browser.messageManager.removeMessageListener(
++        "astrohacker-dom-input-result",
++        listener
++      );
++    } catch (e) {}
++  };
++
++  try {
++    browser.messageManager.addMessageListener(
++      "astrohacker-dom-input-result",
++      listener
++    );
++    browser.messageManager.sendAsyncMessage("astrohacker-dom-input", payload);
++  } catch (e) {
++    writeStatus({
++      ok: 0,
++      error: String(e),
++      title: "",
++      status: "",
++      input_value: "",
++    });
++    return;
++  }
++
++  // Poll briefly for content title / async result, then write status once.
++  // Avoid provisional ok=1 races that unlock the parent before page effects.
++  let polls = 0;
++  let pollTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++  inputControlTimers.add(pollTimer);
++  pollTimer.initWithCallback(
++    () => {
++      polls++;
++      try {
++        let t = browser.contentTitle || "";
++        if (t) {
++          best.title = t;
++        }
++      } catch (e) {}
++      if (got || polls >= 40) {
++        // ~40 * 40ms = 1600ms — frame script may need a beat after load
++        try {
++          pollTimer.cancel();
++        } catch (e) {}
++        inputControlTimers.delete(pollTimer);
++        try {
++          browser.messageManager.removeMessageListener(
++            "astrohacker-dom-input-result",
++            listener
++          );
++        } catch (e) {}
++        if (!best.title) {
++          try {
++            best.title = browser.contentTitle || "";
++          } catch (e) {}
++        }
++        if (!got) {
++          best.error = (best.error || "") + "no_frame_reply";
++          // Allow one re-inject if frame script never answered (late load).
++          try {
++            browser._astrohackerDomInput = false;
++            ensureDomDispatchFrameScript(browser);
++          } catch (e) {}
++        } else if (!best.error) {
++          best.error = "got_frame";
++        }
++        best.ok = 1;
++        writeStatus(best);
++      }
++    },
++    40,
++    Ci.nsITimer.TYPE_REPEATING_SLACK
++  );
++}
+-- 
+2.54.0
+

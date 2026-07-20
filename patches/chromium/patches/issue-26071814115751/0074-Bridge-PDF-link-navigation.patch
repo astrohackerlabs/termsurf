@@ -1,0 +1,100 @@
+From e092149edb9312a8f3c62854e0e8768e806c79aa Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 07:03:47 -0500
+Subject: [PATCH 074/122] Bridge PDF link navigation
+
+The PDF found a door in a frame,
+But no Chrome tabs answered its name.
+So TermSurf passed word to the top,
+And links learned their hop.
+---
+ chrome/browser/resources/pdf/browser_api.ts   |  3 ++
+ ...esponse_interceptor_url_loader_throttle.cc | 46 ++++++++++++++++++-
+ 2 files changed, 47 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/resources/pdf/browser_api.ts b/chrome/browser/resources/pdf/browser_api.ts
+index 71f9731c06..65456658f9 100644
+--- a/chrome/browser/resources/pdf/browser_api.ts
++++ b/chrome/browser/resources/pdf/browser_api.ts
+@@ -111,7 +111,10 @@ export class BrowserApi {
+     // |window.location|.
+     if (chrome.tabs && tabId !== chrome.tabs.TAB_ID_NONE) {
+       chrome.tabs.update(tabId, {url: url});
++      return;
+     }
++    window.parent.postMessage(
++        {type: 'termsurfNavigateInCurrentTab', url: url}, '*');
+   }
+ 
+   /**
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index cd734b4219..3de46f1a83 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -202,11 +202,48 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   LOG(INFO) << "[termsurf-pdf] oopif-template-body frame_tree_node_id="
+             << frame_tree_node_id_ << " internal_id=" << internal_id
+             << " original_url=" << response_url;
+-  const std::string payload =
++  std::string payload =
+       extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
+           response_url, response_head->mime_type, internal_id);
+   const std::string pdf_extension_url =
+       extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
++  std::string pdf_extension_origin = pdf_extension_url;
++  if (!pdf_extension_origin.empty() && pdf_extension_origin.back() == '/') {
++    pdf_extension_origin.pop_back();
++  }
++  const std::string termsurf_navigation_bridge =
++      R"(<script>
++(function() {
++  const allowedOrigin = ")" +
++      pdf_extension_origin +
++      R"(";
++  const allowedProtocols = new Set(['http:', 'https:', 'ftp:', 'file:', 'mailto:']);
++  window.addEventListener('message', function(event) {
++    const data = event.data || {};
++    if (event.origin !== allowedOrigin ||
++        data.type !== 'termsurfNavigateInCurrentTab' ||
++        typeof data.url !== 'string') {
++      return;
++    }
++    let url;
++    try {
++      url = new URL(data.url, window.location.href);
++    } catch (error) {
++      return;
++    }
++    if (!allowedProtocols.has(url.protocol)) {
++      return;
++    }
++    window.location.assign(url.href);
++  });
++})();
++</script>)";
++  const size_t body_end = payload.rfind("</body>");
++  if (body_end == std::string::npos) {
++    payload.append(termsurf_navigation_bridge);
++  } else {
++    payload.insert(body_end, termsurf_navigation_bridge);
++  }
+   LOG(INFO) << "[termsurf-pdf] wrapper-payload "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " internal_id=" << internal_id << " bytes=" << payload.size()
+@@ -221,7 +258,12 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+             << " has_internal_id="
+             << (payload.find(internal_id) != std::string::npos ? 1 : 0)
+             << " has_pdf_extension_url="
+-            << (payload.find(pdf_extension_url) != std::string::npos ? 1 : 0);
++            << (payload.find(pdf_extension_url) != std::string::npos ? 1 : 0)
++            << " has_termsurf_navigation_bridge="
++            << (payload.find("termsurfNavigateInCurrentTab") !=
++                        std::string::npos
++                    ? 1
++                    : 0);
+   LOG(INFO) << "[termsurf-pdf] interceptor-template-created "
+             << "frame_tree_node_id=" << frame_tree_node_id_
+             << " internal_id=" << internal_id;
+-- 
+2.50.1 (Apple Git-155)
+

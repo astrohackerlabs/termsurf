@@ -1,0 +1,70 @@
+From 203a9165f9f6dc05bd77c069a7a5b77aeef68eb6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 14:15:54 -0500
+Subject: [PATCH 38/90] Mark PDF wrapper responses
+
+A wrapper wore the wrong old tag,
+So downloads grabbed the browsing bag.
+Now claimed PDF streams get their sign,
+And attachments keep the download line.
+---
+ .../loader/navigation_url_loader_impl.cc      |  9 ++++++++
+ ...esponse_interceptor_url_loader_throttle.cc | 22 ++++++++++++++++---
+ 2 files changed, 28 insertions(+), 3 deletions(-)
+
+diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
+index 33d730f5c5..3f8f521044 100644
+--- a/content/browser/loader/navigation_url_loader_impl.cc
++++ b/content/browser/loader/navigation_url_loader_impl.cc
+@@ -1516,6 +1516,15 @@ void NavigationURLLoaderImpl::OnReceiveResponse(
+   // When a plugin intercepted the response, we don't want to download it.
+   bool is_download =
+       !head->intercepted_by_plugin && (must_download || !known_mime_type);
++  if (head->mime_type == "application/pdf" || head->intercepted_by_plugin) {
++    LOG(INFO) << "[issue-792-exp17] navigation-download-classification "
++              << "url=" << url_ << " mime_type=" << head->mime_type
++              << " intercepted_by_plugin="
++              << (head->intercepted_by_plugin ? 1 : 0)
++              << " must_download=" << (must_download ? 1 : 0)
++              << " known_mime_type=" << (known_mime_type ? 1 : 0)
++              << " is_download=" << (is_download ? 1 : 0);
++  }
+ 
+   CallOnReceivedResponse(std::move(head),
+                          std::move(url_loader_client_endpoints), is_download);
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 4b25c471a7..ad21ea5467 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -249,9 +249,25 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ 
+   bool embedded =
+       request_destination_ != network::mojom::RequestDestination::kDocument;
+-  AddPdfStreamContainer(extension_id, embedded, frame_tree_node_id_,
+-                        std::move(transferrable_loader), response_url,
+-                        internal_id);
++  LOG(INFO) << "[issue-792-exp17] wrapper-classification-before "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " mime_type=" << response_head->mime_type
++            << " intercepted_by_plugin="
++            << (response_head->intercepted_by_plugin ? 1 : 0)
++            << " request_destination="
++            << static_cast<int>(request_destination_);
++  if (AddPdfStreamContainer(extension_id, embedded, frame_tree_node_id_,
++                            std::move(transferrable_loader), response_url,
++                            internal_id)) {
++    response_head->intercepted_by_plugin = true;
++  }
++  LOG(INFO) << "[issue-792-exp17] wrapper-classification-after "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " mime_type=" << response_head->mime_type
++            << " intercepted_by_plugin="
++            << (response_head->intercepted_by_plugin ? 1 : 0)
++            << " request_destination="
++            << static_cast<int>(request_destination_);
+ 
+   GetUIThreadTaskRunner({})->PostTask(
+       FROM_HERE,
+-- 
+2.54.0
+

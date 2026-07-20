@@ -1,0 +1,26 @@
+From 5e661b001d8f087547c81fd685ff59570fcdd27a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:04:35 -0500
+Subject: [PATCH 096/122] issue-924: drop unnecessary String() in PDF bridge
+ traces
+
+---
+ chrome/browser/resources/pdf/controller.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/resources/pdf/controller.ts b/chrome/browser/resources/pdf/controller.ts
+index 3be55eeabb..6afdea30e5 100644
+--- a/chrome/browser/resources/pdf/controller.ts
++++ b/chrome/browser/resources/pdf/controller.ts
+@@ -29,7 +29,7 @@ function termsurfPdfPrintBridgeTraceEnabled(): boolean {
+ }
+ 
+ function termsurfPdfPrintBridgeActivationId(): string {
+-  return String((window as Window & {__termsurfPdfPrintBridgeActivationId?: string}).__termsurfPdfPrintBridgeActivationId || '');
++  return (window as Window & {__termsurfPdfPrintBridgeActivationId?: string}).__termsurfPdfPrintBridgeActivationId || '';
+ }
+ 
+ function shouldTraceTermSurfPdfMessage(type: string): boolean {
+-- 
+2.50.1 (Apple Git-155)
+

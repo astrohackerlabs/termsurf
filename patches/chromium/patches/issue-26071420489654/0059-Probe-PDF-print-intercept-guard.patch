@@ -1,0 +1,223 @@
+From db262e910099e529497241ea847a510c7f72607c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 14:33:58 -0500
+Subject: [PATCH 059/119] Probe PDF print intercept guard
+
+---
+ pdf/pdf_view_web_plugin.cc | 158 ++++++++++++++++++++++++++++++++-----
+ 1 file changed, 138 insertions(+), 20 deletions(-)
+
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 72e56c83ad..cb926d108f 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -163,31 +163,52 @@ constexpr char kTsPdfPrintBridgeTraceSwitch[] =
+ constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
+     "termsurf-pdf-print-bridge-trace-file";
+ 
++struct TermSurfPdfPrintInterceptState {
++  bool has_intercept_switch = false;
++  bool has_intercept_file_switch = false;
++  bool intercept_switch_file_empty = false;
++  bool env_intercept = false;
++  bool env_intercept_file_present = false;
++  std::optional<base::FilePath> intercept_path;
++};
++
++const char* BoolString(bool value) {
++  return value ? "1" : "0";
++}
++
+ bool Issue794InputTraceEnabled() {
+   static const bool enabled =
+       std::getenv("TERMSURF_PDF_INPUT_TRACE") != nullptr;
+   return enabled;
+ }
+ 
+-std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
++TermSurfPdfPrintInterceptState GetTermSurfPdfPrintInterceptState() {
++  TermSurfPdfPrintInterceptState state;
+   const base::CommandLine* command_line =
+       base::CommandLine::ForCurrentProcess();
+-  if (command_line->HasSwitch(kTsPdfPrintInterceptSwitch)) {
++  state.has_intercept_switch =
++      command_line->HasSwitch(kTsPdfPrintInterceptSwitch);
++  state.has_intercept_file_switch =
++      command_line->HasSwitch(kTsPdfPrintInterceptFileSwitch);
++  if (state.has_intercept_switch) {
+     base::FilePath path =
+         command_line->GetSwitchValuePath(kTsPdfPrintInterceptFileSwitch);
++    state.intercept_switch_file_empty = path.empty();
+     if (!path.empty()) {
+-      return path;
++      state.intercept_path = path;
++      return state;
+     }
+   }
+ 
+   const char* enabled = std::getenv("TERMSURF_PDF_PRINT_INTERCEPT");
+   const char* path = std::getenv("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
+-  if (!enabled || std::string_view(enabled) != "1" || !path ||
+-      std::string_view(path).empty()) {
+-    return std::nullopt;
++  state.env_intercept = enabled && std::string_view(enabled) == "1";
++  state.env_intercept_file_present = path && !std::string_view(path).empty();
++  if (state.env_intercept && state.env_intercept_file_present) {
++    state.intercept_path = base::FilePath::FromUTF8Unsafe(path);
+   }
+ 
+-  return base::FilePath::FromUTF8Unsafe(path);
++  return state;
+ }
+ 
+ std::optional<base::FilePath> GetTermSurfPdfPrintBridgeTracePath() {
+@@ -211,6 +232,85 @@ std::optional<base::FilePath> GetTermSurfPdfPrintBridgeTracePath() {
+   return base::FilePath::FromUTF8Unsafe(path);
+ }
+ 
++std::string TermSurfFileBasename(const base::FilePath& path) {
++  return path.BaseName().MaybeAsASCII();
++}
++
++bool TermSurfPdfPrintInterceptPathMatchesBridgeDir(
++    const TermSurfPdfPrintInterceptState& intercept_state,
++    const std::optional<base::FilePath>& bridge_trace_path) {
++  return intercept_state.intercept_path && bridge_trace_path &&
++         intercept_state.intercept_path->DirName() ==
++             bridge_trace_path->DirName();
++}
++
++bool TermSurfPdfPrintInterceptPathIsExpected(
++    const TermSurfPdfPrintInterceptState& intercept_state,
++    const std::optional<base::FilePath>& bridge_trace_path) {
++  return intercept_state.intercept_path &&
++         TermSurfFileBasename(*intercept_state.intercept_path) ==
++             "pdf-print.log" &&
++         TermSurfPdfPrintInterceptPathMatchesBridgeDir(intercept_state,
++                                                       bridge_trace_path);
++}
++
++void TraceTermSurfPdfPrintGuard(
++    const TermSurfPdfPrintInterceptState& intercept_state,
++    std::string_view event,
++    bool has_engine,
++    bool can_print,
++    const std::string& url) {
++  std::optional<base::FilePath> bridge_trace_path =
++      GetTermSurfPdfPrintBridgeTracePath();
++  if (!bridge_trace_path) {
++    return;
++  }
++
++  const std::string intercept_basename =
++      intercept_state.intercept_path
++          ? TermSurfFileBasename(*intercept_state.intercept_path)
++          : "";
++  const std::string bridge_basename = TermSurfFileBasename(*bridge_trace_path);
++  const bool dirs_match = TermSurfPdfPrintInterceptPathMatchesBridgeDir(
++      intercept_state, bridge_trace_path);
++  const bool expected_path = TermSurfPdfPrintInterceptPathIsExpected(
++      intercept_state, bridge_trace_path);
++  const std::string line =
++      base::StrCat({"pdf-print-guard pid=",
++                    base::NumberToString(base::GetCurrentProcId()),
++                    " source=pdf_view_web_plugin.cc event=",
++                    event,
++                    " has_intercept_switch=",
++                    BoolString(intercept_state.has_intercept_switch),
++                    " has_intercept_file_switch=",
++                    BoolString(intercept_state.has_intercept_file_switch),
++                    " intercept_switch_file_empty=",
++                    BoolString(intercept_state.intercept_switch_file_empty),
++                    " env_intercept=",
++                    BoolString(intercept_state.env_intercept),
++                    " env_intercept_file_present=",
++                    BoolString(intercept_state.env_intercept_file_present),
++                    " intercept_path_present=",
++                    BoolString(intercept_state.intercept_path.has_value()),
++                    " bridge_trace_path_present=1",
++                    " intercept_file_basename=",
++                    intercept_basename,
++                    " bridge_file_basename=",
++                    bridge_basename,
++                    " intercept_dir_matches_bridge_dir=",
++                    BoolString(dirs_match),
++                    " intercept_path_expected=",
++                    BoolString(expected_path),
++                    " has_engine=",
++                    BoolString(has_engine),
++                    " can_print=",
++                    BoolString(can_print),
++                    " url=",
++                    url,
++                    "\n"});
++  base::AppendToFile(*bridge_trace_path, line);
++}
++
+ bool ShouldTraceTermSurfPdfMessage(std::string_view type) {
+   return type == "print" || type == "rotateCounterclockwise" ||
+          type == "rotateClockwise" || type == "viewport";
+@@ -1462,19 +1562,40 @@ void PdfViewWebPlugin::Email(const std::string& to,
+ }
+ 
+ void PdfViewWebPlugin::Print() {
+-  if (std::optional<base::FilePath> intercept_path =
+-          GetTermSurfPdfPrintInterceptPath()) {
+-    const bool has_engine = !!engine_;
+-    const bool can_print =
+-        engine_ &&
+-        (engine_->HasPermission(DocumentPermission::kPrintLowQuality) ||
+-         engine_->HasPermission(DocumentPermission::kPrintHighQuality));
++  TermSurfPdfPrintInterceptState intercept_state =
++      GetTermSurfPdfPrintInterceptState();
++  std::optional<base::FilePath> bridge_trace_path =
++      GetTermSurfPdfPrintBridgeTracePath();
++  const bool has_engine = !!engine_;
++  const bool can_print =
++      engine_ &&
++      (engine_->HasPermission(DocumentPermission::kPrintLowQuality) ||
++       engine_->HasPermission(DocumentPermission::kPrintHighQuality));
++  TraceTermSurfPdfPrintGuard(intercept_state, "print-enter", has_engine,
++                             can_print, url_);
++
++  if (intercept_state.intercept_path) {
++    if (bridge_trace_path && !TermSurfPdfPrintInterceptPathIsExpected(
++                                 intercept_state, bridge_trace_path)) {
++      TraceTermSurfPdfPrintGuard(intercept_state, "intercept-path-mismatch",
++                                 has_engine, can_print, url_);
++      return;
++    }
+     const std::string line = base::StrCat(
+         {"pdf-print-intercept pid=",
+          base::NumberToString(base::GetCurrentProcId()),
+-         " layer=pdf-view-web-plugin", " has_engine=", has_engine ? "1" : "0",
+-         " can_print=", can_print ? "1" : "0", " url=", url_, "\n"});
+-    base::AppendToFile(*intercept_path, line);
++         " layer=pdf-view-web-plugin", " has_engine=", BoolString(has_engine),
++         " can_print=", BoolString(can_print), " url=", url_, "\n"});
++    if (!base::AppendToFile(*intercept_state.intercept_path, line)) {
++      TraceTermSurfPdfPrintGuard(intercept_state, "append-failed", has_engine,
++                                 can_print, url_);
++    }
++    return;
++  }
++
++  if (bridge_trace_path) {
++    TraceTermSurfPdfPrintGuard(intercept_state, "intercept-missing", has_engine,
++                               can_print, url_);
+     return;
+   }
+ 
+@@ -1482,9 +1603,6 @@ void PdfViewWebPlugin::Print() {
+     return;
+   }
+ 
+-  const bool can_print =
+-      engine_->HasPermission(DocumentPermission::kPrintLowQuality) ||
+-      engine_->HasPermission(DocumentPermission::kPrintHighQuality);
+   if (!can_print) {
+     return;
+   }
+-- 
+2.54.0
+

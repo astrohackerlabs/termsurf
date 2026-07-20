@@ -1,0 +1,544 @@
+From b7be7bd77fca1c2efabad78d430d81632a3b9b50 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 17:46:58 -0500
+Subject: [PATCH] Add native refresh action
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |   6 +
+ .../libtermsurf_chromium.cc                   |   9 +-
+ .../libtermsurf_chromium.h                    |   1 +
+ .../libtermsurf_chromium/refresh_test_main.cc | 256 ++++++++++++++++++
+ .../smoke-test/run-refresh-action-smoke.sh    |  76 ++++++
+ content/libtermsurf_chromium/test_main.cc     |   6 +-
+ .../ts_browser_main_parts.cc                  |   5 +
+ .../ts_browser_main_parts.h                   |   3 +-
+ .../libtermsurf_chromium/ts_tab_observer.cc   |   5 +-
+ .../libtermsurf_chromium/ts_tab_observer.h    |   2 +
+ 10 files changed, 362 insertions(+), 7 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/refresh_test_main.cc
+ create mode 100755 content/libtermsurf_chromium/smoke-test/run-refresh-action-smoke.sh
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 83e8acde58..8b9c47d736 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -158,3 +158,9 @@ executable("libtermsurf_chromium_test") {
+   sources = [ "test_main.cc" ]
+   deps = [ ":libtermsurf_chromium" ]
+ }
++
++executable("libtermsurf_chromium_refresh_test") {
++  testonly = true
++  sources = [ "refresh_test_main.cc" ]
++  deps = [ ":libtermsurf_chromium" ]
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 3b7b645ebf..0f62bff91c 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -101,7 +101,8 @@ void (*g_on_renderer_crashed)(ts_web_contents_t,
+                               void*) = nullptr;
+ void* g_on_renderer_crashed_data = nullptr;
+ 
+-void (*g_on_navigation_state)(ts_web_contents_t, bool, bool, void*) = nullptr;
++void (*g_on_navigation_state)(ts_web_contents_t, bool, bool, bool, void*) =
++    nullptr;
+ void* g_on_navigation_state_data = nullptr;
+ 
+ }  // namespace
+@@ -147,9 +148,10 @@ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress) {
+ 
+ void TsNotifyNavigationState(void* wc_handle,
+                              bool can_go_back,
+-                             bool can_go_forward) {
++                             bool can_go_forward,
++                             bool can_refresh) {
+   if (g_on_navigation_state) {
+-    g_on_navigation_state(wc_handle, can_go_back, can_go_forward,
++    g_on_navigation_state(wc_handle, can_go_back, can_go_forward, can_refresh,
+                           g_on_navigation_state_data);
+   }
+ }
+@@ -486,6 +488,7 @@ void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
+                bool can_go_forward,
++               bool can_refresh,
+                void* user_data),
+     void* user_data) {
+   g_on_navigation_state = cb;
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 2fa75db88d..a037fa5015 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -193,6 +193,7 @@ TS_EXPORT void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
+                bool can_go_forward,
++               bool can_refresh,
+                void* user_data),
+     void* user_data);
+ 
+diff --git a/content/libtermsurf_chromium/refresh_test_main.cc b/content/libtermsurf_chromium/refresh_test_main.cc
+new file mode 100644
+index 0000000000..c3c015ca59
+--- /dev/null
++++ b/content/libtermsurf_chromium/refresh_test_main.cc
+@@ -0,0 +1,256 @@
++// Copyright 2025 TermSurf
++// Refresh semantic navigation smoke for libtermsurf_chromium.
++
++#include "content/libtermsurf_chromium/libtermsurf_chromium.h"
++
++#include <stdlib.h>
++#include <unistd.h>
++
++#include <atomic>
++#include <chrono>
++#include <string>
++#include <thread>
++
++namespace {
++
++struct Tab {
++  ts_web_contents_t view = nullptr;
++  int tab_id = 0;
++  std::string url;
++  std::string title;
++  bool back = false;
++  bool forward = false;
++  bool refresh = false;
++  bool initial_disabled = false;
++  bool crashed = false;
++  bool crash_reloadable = false;
++  int loading_edges = 0;
++  int terminal_edges = 0;
++};
++
++enum class Step {
++  kInitial,
++  kReload500,
++  kCrash,
++  kCrashReload,
++  kCleanup,
++  kDone,
++};
++
++struct Smoke {
++  ts_browser_context_t context = nullptr;
++  Tab a;
++  Tab b;
++  std::string a_url;
++  std::string b_url;
++  Step step = Step::kInitial;
++  bool cleanup_scheduled = false;
++};
++
++Smoke* g_smoke = new Smoke;
++#define g (*g_smoke)
++std::atomic<bool> g_done(false);
++
++void WriteLine(int fd, const std::string& line) {
++  const std::string output = line + "\n";
++  const ssize_t ignored = write(fd, output.data(), output.size());
++  (void)ignored;
++}
++
++void Fail(const char* reason) {
++  WriteLine(STDERR_FILENO,
++            "REFRESH_ACTION_SMOKE_FAIL engine=chromium step=" +
++                std::to_string(static_cast<int>(g.step)) + " reason=" +
++                (reason ? reason : "") + " a_title=" + g.a.title +
++                " b_title=" + g.b.title);
++  g_done = true;
++  _Exit(1);
++}
++
++Tab* FindTab(ts_web_contents_t view) {
++  if (view == g.a.view) return &g.a;
++  if (view == g.b.view) return &g.b;
++  if (view && !g.a.view) {
++    g.a.view = view;
++    return &g.a;
++  }
++  if (view && !g.b.view) {
++    g.b.view = view;
++    return &g.b;
++  }
++  return nullptr;
++}
++
++bool Ready(const Tab& tab, const char* title) {
++  return tab.tab_id > 0 && tab.title == title && !tab.back && !tab.forward &&
++         tab.refresh;
++}
++
++bool PeerUnchanged() {
++  return Ready(g.b, "B reload=1 status=200") && !g.b.crashed &&
++         g.b.loading_edges == 1 && g.b.terminal_edges == 1;
++}
++
++void Advance();
++
++void CleanupAndFinish(void*) {
++  const ts_web_contents_t stale = g.a.view;
++  ts_destroy_web_contents(g.a.view);
++  g.a.view = nullptr;
++  if (ts_navigation_action(stale, "refresh")) {
++    Fail("closed_tab_accepted_refresh");
++  }
++  if (!PeerUnchanged()) {
++    Fail("closed_tab_action_mutated_peer");
++  }
++  ts_destroy_web_contents(g.b.view);
++  g.b.view = nullptr;
++  ts_destroy_browser_context(g.context);
++  g.context = nullptr;
++  g.step = Step::kDone;
++  WriteLine(STDOUT_FILENO,
++            "REFRESH_ACTION_SMOKE_PASS engine=chromium tabs=2 reload=1 capability=1 history_unchanged=1 request_correlation=1 disabled=1 isolation=1 failed_reload=1 crash_recovery=1 cleanup=1 future_actions_rejected=1");
++  g_done = true;
++  ts_quit();
++}
++
++void Advance() {
++  switch (g.step) {
++    case Step::kInitial:
++      if (Ready(g.a, "A reload=1 status=200") && PeerUnchanged() &&
++          g.a.initial_disabled && g.b.initial_disabled) {
++        if (ts_navigation_action(g.a.view, "future") ||
++            ts_navigation_action(nullptr, "refresh")) {
++          Fail("future_or_null_action_accepted");
++        }
++        g.step = Step::kReload500;
++        if (!ts_navigation_action(g.a.view, "refresh")) {
++          Fail("refresh_rejected");
++        }
++      }
++      break;
++    case Step::kReload500:
++      if (Ready(g.a, "A reload=2 status=500") &&
++          g.a.loading_edges == 2 && g.a.terminal_edges == 2 &&
++          PeerUnchanged()) {
++        g.step = Step::kCrash;
++        if (!ts_test_crash_current_page(g.a.view)) {
++          Fail("crash_hook_rejected");
++        }
++      }
++      break;
++    case Step::kCrash:
++      if (g.a.crashed && g.a.crash_reloadable && !g.a.back &&
++          !g.a.forward && g.a.refresh && PeerUnchanged()) {
++        g.step = Step::kCrashReload;
++        if (!ts_navigation_action(g.a.view, "refresh")) {
++          Fail("crash_refresh_rejected");
++        }
++      }
++      break;
++    case Step::kCrashReload:
++      if (Ready(g.a, "A reload=3 status=200") &&
++          g.a.loading_edges == 3 && g.a.terminal_edges == 3 &&
++          PeerUnchanged() && !g.cleanup_scheduled) {
++        g.cleanup_scheduled = true;
++        g.step = Step::kCleanup;
++        ts_post_task(CleanupAndFinish, nullptr);
++      }
++      break;
++    case Step::kCleanup:
++    case Step::kDone:
++      break;
++  }
++}
++
++void OnInitialized(void*) {
++  g.context = ts_create_incognito_browser_context();
++  g.a.view = ts_create_web_contents(g.context, g.a_url.c_str(), 640, 480, false);
++  g.b.view = ts_create_web_contents(g.context, g.b_url.c_str(), 640, 480, false);
++  if (!g.context || !g.a.view || !g.b.view || g.a.view == g.b.view) {
++    Fail("distinct_tabs_not_created");
++  }
++}
++
++void OnTabReady(ts_web_contents_t view, int tab_id, void*) {
++  Tab* tab = FindTab(view);
++  if (!tab) return;
++  tab->tab_id = tab_id;
++  tab->initial_disabled = !ts_navigation_action(view, "refresh");
++  Advance();
++}
++
++void OnUrlChanged(ts_web_contents_t view, const char* url, void*) {
++  Tab* tab = FindTab(view);
++  if (!tab) return;
++  tab->url = url ? url : "";
++  Advance();
++}
++
++void OnTitleChanged(ts_web_contents_t view, const char* title, void*) {
++  Tab* tab = FindTab(view);
++  if (!tab) return;
++  tab->title = title ? title : "";
++  Advance();
++}
++
++void OnLoadingState(ts_web_contents_t view,
++                    const char* state,
++                    int,
++                    void*) {
++  Tab* tab = FindTab(view);
++  if (!tab || !state) return;
++  if (std::string(state) == "loading") tab->loading_edges += 1;
++  if (std::string(state) == "done" || std::string(state) == "error") {
++    tab->terminal_edges += 1;
++  }
++  Advance();
++}
++
++void OnNavigationState(ts_web_contents_t view,
++                       bool back,
++                       bool forward,
++                       bool refresh,
++                       void*) {
++  Tab* tab = FindTab(view);
++  if (!tab) return;
++  tab->back = back;
++  tab->forward = forward;
++  tab->refresh = refresh;
++  Advance();
++}
++
++void OnRendererCrashed(ts_web_contents_t view,
++                       const char*,
++                       int,
++                       const char*,
++                       bool can_reload,
++                       void*) {
++  Tab* tab = FindTab(view);
++  if (!tab) return;
++  tab->crashed = true;
++  tab->crash_reloadable = can_reload;
++  Advance();
++}
++
++}  // namespace
++
++int main(int argc, const char** argv) {
++  const char* a_url = getenv("TERMSURF_CHROMIUM_REFRESH_A_URL");
++  const char* b_url = getenv("TERMSURF_CHROMIUM_REFRESH_B_URL");
++  if (!a_url || !b_url) return 64;
++  g.a_url = a_url;
++  g.b_url = b_url;
++  ts_set_on_initialized(OnInitialized, nullptr);
++  ts_set_on_tab_ready(OnTabReady, nullptr);
++  ts_set_on_url_changed(OnUrlChanged, nullptr);
++  ts_set_on_title_changed(OnTitleChanged, nullptr);
++  ts_set_on_loading_state(OnLoadingState, nullptr);
++  ts_set_on_navigation_state(OnNavigationState, nullptr);
++  ts_set_on_renderer_crashed(OnRendererCrashed, nullptr);
++  std::thread([] {
++    std::this_thread::sleep_for(std::chrono::seconds(45));
++    if (!g_done.load()) Fail("timeout");
++  }).detach();
++  return ts_content_main(argc, argv);
++}
+diff --git a/content/libtermsurf_chromium/smoke-test/run-refresh-action-smoke.sh b/content/libtermsurf_chromium/smoke-test/run-refresh-action-smoke.sh
+new file mode 100755
+index 0000000000..19e2d6d774
+--- /dev/null
++++ b/content/libtermsurf_chromium/smoke-test/run-refresh-action-smoke.sh
+@@ -0,0 +1,76 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++CHROMIUM_SRC="$(cd "$SCRIPT_DIR/../../.." && pwd)"
++CHROMIUM_ROOT="$(cd "$CHROMIUM_SRC/.." && pwd)"
++OUT_DIR="${CHROMIUM_OUT_DIR:-$CHROMIUM_SRC/out/Default}"
++TEST_BIN="$OUT_DIR/libtermsurf_chromium_refresh_test"
++EXPECTED="REFRESH_ACTION_SMOKE_PASS engine=chromium tabs=2 reload=1 capability=1 history_unchanged=1 request_correlation=1 disabled=1 isolation=1 failed_reload=1 crash_recovery=1 cleanup=1 future_actions_rejected=1"
++RUN_DIR="$(mktemp -d "${TMPDIR:-/tmp}/chromium-refresh-action.XXXXXX")"
++SERVER_PID=""
++
++cleanup() {
++  if [[ -n "$SERVER_PID" ]]; then
++    kill "$SERVER_PID" 2>/dev/null || true
++    wait "$SERVER_PID" 2>/dev/null || true
++  fi
++  rm -rf "$RUN_DIR"
++}
++trap cleanup EXIT
++
++PATH="$CHROMIUM_ROOT/depot_tools:$PATH" \
++  autoninja -C "$OUT_DIR" libtermsurf_chromium_refresh_test
++
++python3 - "$RUN_DIR/port" <<'PY' &
++import http.server
++import socketserver
++import sys
++
++port_file = sys.argv[1]
++counts = {"/a": 0, "/b": 0}
++
++class Handler(http.server.BaseHTTPRequestHandler):
++    protocol_version = "HTTP/1.1"
++    def do_GET(self):
++        path = self.path.split("?", 1)[0]
++        if path not in counts:
++            self.send_response(404); self.send_header("Content-Length", "0"); self.end_headers(); return
++        counts[path] += 1
++        count = counts[path]
++        status = 500 if path == "/a" and count == 2 else 200
++        label = "A" if path == "/a" else "B"
++        body = f"<!doctype html><meta charset=utf-8><title>{label} reload={count} status={status}</title>"
++        data = body.encode()
++        self.send_response(status)
++        self.send_header("Content-Type", "text/html; charset=utf-8")
++        self.send_header("Cache-Control", "no-store")
++        self.send_header("Content-Length", str(len(data)))
++        self.end_headers(); self.wfile.write(data)
++    def log_message(self, fmt, *args):
++        return
++
++class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
++    daemon_threads = True
++    allow_reuse_address = True
++
++server = Server(("127.0.0.1", 0), Handler)
++with open(port_file, "w", encoding="utf-8") as file:
++    file.write(str(server.server_address[1]))
++server.serve_forever()
++PY
++SERVER_PID=$!
++for _ in {1..100}; do [[ -s "$RUN_DIR/port" ]] && break; sleep 0.05; done
++[[ -s "$RUN_DIR/port" ]]
++PORT="$(<"$RUN_DIR/port")"
++export TERMSURF_CHROMIUM_REFRESH_A_URL="http://a.test:$PORT/a"
++export TERMSURF_CHROMIUM_REFRESH_B_URL="http://b.test:$PORT/b"
++
++"$TEST_BIN" \
++  --user-data-dir="$RUN_DIR/profile" \
++  --host-resolver-rules="MAP *.test 127.0.0.1" \
++  --no-sandbox --disable-gpu --disable-software-rasterizer \
++  --disable-extensions --disable-background-networking --disable-component-update \
++  | tee "$RUN_DIR/smoke.log"
++
++[[ "$(grep -Fxc "$EXPECTED" "$RUN_DIR/smoke.log" || true)" -eq 1 ]]
+diff --git a/content/libtermsurf_chromium/test_main.cc b/content/libtermsurf_chromium/test_main.cc
+index 53852f3837..29590d5169 100644
+--- a/content/libtermsurf_chromium/test_main.cc
++++ b/content/libtermsurf_chromium/test_main.cc
+@@ -16,6 +16,7 @@ namespace {
+ struct NavState {
+   bool back = false;
+   bool forward = false;
++  bool refresh = false;
+   bool seen = false;
+   int updates = 0;
+ };
+@@ -190,6 +191,7 @@ void OnTabReady(ts_web_contents_t wc, int tab_id, void*) {
+ void OnNavigationState(ts_web_contents_t wc,
+                        bool can_go_back,
+                        bool can_go_forward,
++                       bool can_refresh,
+                        void*) {
+   Tab* tab = TabFor(wc);
+   if (!tab) {
+@@ -198,6 +200,7 @@ void OnNavigationState(ts_web_contents_t wc,
+   tab->wc = wc;
+   tab->nav.back = can_go_back;
+   tab->nav.forward = can_go_forward;
++  tab->nav.refresh = can_refresh;
+   tab->nav.seen = true;
+   tab->nav.updates += 1;
+   if (!can_go_back && !can_go_forward && tab->url.empty() &&
+@@ -281,8 +284,7 @@ void Advance() {
+             g.a.nav.updates != before_state_updates) {
+           Fail("disabled Back mutated page or callback state");
+         }
+-        if (ts_navigation_action(g.a.wc, "refresh") ||
+-            ts_navigation_action(g.a.wc, "unknown") ||
++        if (ts_navigation_action(g.a.wc, "unknown") ||
+             ts_navigation_action(nullptr, "back") ||
+             ts_navigation_action(g.b.wc, "forward")) {
+           Fail("refresh, unknown, or missing-tab action was accepted");
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 5348aa11c1..059ce1d7e6 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -1304,6 +1304,11 @@ bool TsBrowserMainParts::NavigationAction(void* wc_handle,
+       return false;
+     }
+     controller.GoForward();
++  } else if (action == "refresh") {
++    if (!tab->tab_observer->has_committed_document()) {
++      return false;
++    }
++    controller.Reload(content::ReloadType::NORMAL, false);
+   } else {
+     return false;
+   }
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index e4df73f0bb..fa2a861662 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -50,7 +50,8 @@ void TsNotifyUrlChanged(void* wc_handle, const char* url);
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+ void TsNotifyNavigationState(void* wc_handle,
+                              bool can_go_back,
+-                             bool can_go_forward);
++                             bool can_go_forward,
++                             bool can_refresh);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index 66029bcbc7..924874bbb3 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -104,12 +104,14 @@ void TsTabObserver::NotifyNavigationState() {
+ #if BUILDFLAG(IS_MAC)
+   bool can_go_back = false;
+   bool can_go_forward = false;
++  bool can_refresh = false;
+   if (!renderer_crashed_ && web_contents()) {
+     can_go_back = web_contents()->GetController().CanGoBack();
+     can_go_forward = web_contents()->GetController().CanGoForward();
+   }
++  can_refresh = inspected_tab_id_ <= 0 && has_committed_document_;
+   TsNotifyNavigationState(reinterpret_cast<void*>(handle_), can_go_back,
+-                          can_go_forward);
++                          can_go_forward, can_refresh);
+ #endif
+ }
+ 
+@@ -122,6 +124,7 @@ void TsTabObserver::DidFinishNavigation(NavigationHandle* navigation_handle) {
+   }
+ 
+   renderer_crashed_ = false;
++  has_committed_document_ = true;
+ 
+ #if BUILDFLAG(IS_MAC)
+   if (last_ca_context_id_) {
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.h b/content/libtermsurf_chromium/ts_tab_observer.h
+index c4710d7845..9e0a6054a1 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.h
++++ b/content/libtermsurf_chromium/ts_tab_observer.h
+@@ -41,6 +41,7 @@ class TsTabObserver : public WebContentsObserver {
+   void SetInspectedTabId(int id);
+   void NotifyNavigationState();
+   bool renderer_crashed() const { return renderer_crashed_; }
++  bool has_committed_document() const { return has_committed_document_; }
+ 
+   // The opaque handle passed to C callbacks to identify the tab.
+   void SetHandle(void* handle) {
+@@ -84,6 +85,7 @@ class TsTabObserver : public WebContentsObserver {
+   int inspected_tab_id_ = 0;
+   uintptr_t handle_ = 0;
+   bool renderer_crashed_ = false;
++  bool has_committed_document_ = false;
+ 
+ #if BUILDFLAG(IS_MAC)
+   CALayerParamsCallback ca_layer_params_callback_;
+-- 
+2.54.0
+

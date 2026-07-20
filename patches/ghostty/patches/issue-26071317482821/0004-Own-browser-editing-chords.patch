@@ -1,0 +1,225 @@
+From bf63a2355cd9f2c7643e99a6014ae38910d10d77 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 00:46:20 -0500
+Subject: [PATCH] Own browser editing chords
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Five chords knock upon the pane,
+the live tab answers each refrain.
+Bindings, menus, shells stand still—
+the browser gets the keyboard will.
+---
+ include/ghostty.h                             |  1 +
+ .../Surface View/SurfaceView_AppKit.swift     | 45 ++++++++++++++
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 62 +++++++++++++++++++
+ src/apprt/termsurf.zig                        | 13 ++++
+ src/main_c.zig                                |  4 ++
+ 5 files changed, 125 insertions(+)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index b39601ecf..07a5a3812 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1076,6 +1076,7 @@ GHOSTTY_API void termsurf_hello_config_changed(const char*, const char*);
+ GHOSTTY_API void termsurf_color_scheme_changed(int);
+ GHOSTTY_API void termsurf_overlay_presented_pixels(const char*, uint64_t, uint64_t);
+ GHOSTTY_API void termsurf_overlay_presented_screen_rect(const char*, double, double, double, double, double);
++GHOSTTY_API int64_t termsurf_browser_tab_id_for_pane(const char*);
+ GHOSTTY_API int termsurf_forward_key_event(const char*, const char*, int64_t, const char*, uint64_t);
+ GHOSTTY_API int termsurf_forward_text_input(const char*, const char*, const char*, int64_t, int64_t, int64_t, int64_t);
+ GHOSTTY_API int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 39bc29ed3..e6873684a 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -2392,6 +2392,24 @@ extension Ghostty {
+         return false
+       }
+ 
++      if isTermSurfBrowserEditingKeyEquivalent(event) {
++        let paneID = id.uuidString
++        let tabID = paneID.withCString { termsurf_browser_tab_id_for_pane($0) }
++        let windowsKeyCode = termSurfWindowsKeyCode(for: event)
++        let modifiers = termSurfModifiers(event.modifierFlags)
++        let forwarded = forwardTermSurfKeyDown(event)
++        termSurfLogGeometry(
++          event:
++            forwarded
++            ? "perform_key_equivalent_editing_forwarded"
++            : "perform_key_equivalent_editing_rejected",
++          browserTabID: String(tabID),
++          note:
++            "pane_id=\(paneID) tab_id=\(tabID) virtual_key_code=\(event.keyCode) windows_key_code=\(windowsKeyCode) modifiers=\(modifiers) binding=false menu=false current_url_copy=false terminal_fallback=false suppressed=\(!forwarded)"
++        )
++        return true
++      }
++
+       if isTermSurfBrowserNavigationKeyEquivalent(event) {
+         if forwardTermSurfKeyDown(event) {
+           termSurfLogGeometry(
+@@ -2651,6 +2669,24 @@ extension Ghostty {
+       !browserOwnsClick && appActive && windowKey
+     }
+ 
++    static func termSurfIsBrowserEditingKeyEquivalent(
++      keyCode: UInt16,
++      modifiers: UInt64,
++      focused: Bool,
++      browsing: Bool,
++      hasOverlay: Bool
++    ) -> Bool {
++      guard focused, browsing, hasOverlay else { return false }
++      switch keyCode {
++      case 0x00, 0x08, 0x07, 0x09:
++        return modifiers == 8
++      case 0x06:
++        return modifiers == 8 || modifiers == 9
++      default:
++        return false
++      }
++    }
++
+     static func termSurfMouseButtonModifier(buttonNumber: Int) -> UInt64 {
+       switch buttonNumber {
+       case 0: return 64
+@@ -2929,6 +2965,15 @@ extension Ghostty {
+       }
+     }
+ 
++    private func isTermSurfBrowserEditingKeyEquivalent(_ event: NSEvent) -> Bool {
++      Self.termSurfIsBrowserEditingKeyEquivalent(
++        keyCode: event.keyCode,
++        modifiers: termSurfModifiers(event.modifierFlags),
++        focused: focused,
++        browsing: termsurfBrowserBrowsing,
++        hasOverlay: termSurfScriptHasActiveOverlay)
++    }
++
+     private func forwardTermSurfKeyEvent(
+       _ event: NSEvent,
+       type: String,
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 71b01cbcd..ca1be7460 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -127,6 +127,68 @@ struct SurfaceViewAppKitTests {
+         #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 3) == 0)
+     }
+ 
++    @Test(arguments: [
++        (UInt16(0x00), UInt64(8)),
++        (UInt16(0x08), UInt64(8)),
++        (UInt16(0x07), UInt64(8)),
++        (UInt16(0x09), UInt64(8)),
++        (UInt16(0x06), UInt64(8)),
++        (UInt16(0x06), UInt64(9)),
++    ])
++    func browserEditingChordsAreExact(keyCode: UInt16, modifiers: UInt64) {
++        #expect(
++            Ghostty.SurfaceView.termSurfIsBrowserEditingKeyEquivalent(
++                keyCode: keyCode,
++                modifiers: modifiers,
++                focused: true,
++                browsing: true,
++                hasOverlay: true
++            )
++        )
++    }
++
++    @Test(arguments: [
++        (UInt16(0x00), UInt64(0)),
++        (UInt16(0x00), UInt64(9)),
++        (UInt16(0x08), UInt64(1)),
++        (UInt16(0x08), UInt64(10)),
++        (UInt16(0x07), UInt64(12)),
++        (UInt16(0x09), UInt64(8 | 64)),
++        (UInt16(0x01), UInt64(8)),
++    ])
++    func nonEditingChordsRemainOutsideBrowserInterceptor(
++        keyCode: UInt16,
++        modifiers: UInt64
++    ) {
++        #expect(
++            Ghostty.SurfaceView.termSurfIsBrowserEditingKeyEquivalent(
++                keyCode: keyCode,
++                modifiers: modifiers,
++                focused: true,
++                browsing: true,
++                hasOverlay: true
++            ) == false
++        )
++    }
++
++    @Test func browserEditingChordsRequireFocusedLiveOverlay() {
++        for state in [
++            (false, true, true),
++            (true, false, true),
++            (true, true, false),
++        ] {
++            #expect(
++                Ghostty.SurfaceView.termSurfIsBrowserEditingKeyEquivalent(
++                    keyCode: 0x08,
++                    modifiers: 8,
++                    focused: state.0,
++                    browsing: state.1,
++                    hasOverlay: state.2
++                ) == false
++            )
++        }
++    }
++
+     @Test func geckoExternalGridUsesTopOriginForInputAndBottomOriginForAppKit() {
+         let topOrigin = Ghostty.SurfaceView.termSurfGridFrame(
+             col: 1,
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index af8da8fbc..6f73b8ace 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -3015,6 +3015,13 @@ pub fn forwardKeyEvent(
+     return true;
+ }
+ 
++pub fn browserTabIdForPane(pane_id: []const u8) i64 {
++    const pane_index = findPane(pane_id) orelse return 0;
++    const pane = &panes[pane_index];
++    if (!pane.browsing or pane.tab_id <= 0) return 0;
++    return pane.tab_id;
++}
++
+ pub fn forwardTextInput(
+     pane_id: []const u8,
+     input_type: []const u8,
+@@ -6744,7 +6751,13 @@ test "termsurf text input is exhaustive and tab owned" {
+     panes[0].tab_id = 41;
+     panes[1].tab_id = 73;
+ 
++    try testing.expectEqual(@as(i64, 41), browserTabIdForPane("pane-a"));
++    try testing.expectEqual(@as(i64, 73), browserTabIdForPane("pane-b"));
++    try testing.expectEqual(@as(i64, 0), browserTabIdForPane("missing"));
++
+     try testing.expect(!forwardKeyEvent("pane-a", "insert", 65, "", 0));
++    try testing.expect(!forwardKeyEvent("pane-a", "select-all", 65, "", 8));
++    try testing.expect(!forwardKeyEvent("pane-a", "copy", 67, "", 8));
+     try testing.expect(!forwardKeyEvent("pane-a", "down", 65, "a", 0));
+     try testing.expect(forwardKeyEvent("pane-a", "down", 65, "", 0));
+     const key = try readTestMessage(browser[1], testing.allocator);
+diff --git a/src/main_c.zig b/src/main_c.zig
+index f7b60a28e..d85b0c3e3 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -203,6 +203,10 @@ pub export fn termsurf_overlay_presented_screen_rect(
+     );
+ }
+ 
++pub export fn termsurf_browser_tab_id_for_pane(pane_id: [*:0]const u8) i64 {
++    return termsurf.browserTabIdForPane(std.mem.span(pane_id));
++}
++
+ pub export fn termsurf_forward_key_event(
+     pane_id: [*:0]const u8,
+     event_type: [*:0]const u8,
+-- 
+2.54.0
+

@@ -1,0 +1,156 @@
+From 09ebb0b75d2e67152d00e6848da958d90e18620b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 15:44:31 -0500
+Subject: [PATCH 1/2] Default JetBrainsMono font, size 12, product keybinds
+
+Astrohacker stock face and split/tab bindings so operators
+need not copy a personal config for everyday pane work.
+---
+ src/config/Config.zig | 117 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 114 insertions(+), 3 deletions(-)
+
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 812881bab..8b31d1818 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -260,9 +260,8 @@ language: ?[:0]const u8 = null,
+ /// text-specific scaling factors, which are often managed by your desktop
+ /// environment (e.g. the GNOME display scale and large text settings).
+ @"font-size": f32 = switch (builtin.os.tag) {
+-    // On macOS we default a little bigger since this tends to look better. This
+-    // is purely subjective but this is easy to modify.
+-    .macos => 13,
++    // Astrohacker Terminal: 12pt on all platforms (was 13 on macOS upstream).
++    .macos => 12,
+     else => 12,
+ },
+ 
+@@ -3947,6 +3946,10 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
+     // Add our default keybindings
+     try result.keybind.init(alloc);
+ 
++    // Astrohacker Terminal: stock monospace + Nerd Font icons.
++    // Empty font-family falls back to the system default; set product face here.
++    try result.@"font-family".parseCLI(alloc, "JetBrainsMono Nerd Font");
++
+     // Add our default command palette entries
+     try result.@"command-palette-entry".init(alloc);
+ 
+@@ -7166,6 +7169,114 @@ pub const Keybinds = struct {
+                 .{ .key = .{ .physical = .arrow_right }, .mods = .{ .alt = true } },
+                 .{ .esc = "f" },
+             );
++
++            // --- Astrohacker Terminal product keybinds (macOS) ---
++            // Last put wins: these replace earlier defaults on the same trigger
++            // (e.g. cmd+k was clear_screen; cmd+j was scroll_to_selection).
++            // Splits (cmd = super)
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'j' }, .mods = .{ .super = true } },
++                .{ .new_split = .down },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'k' }, .mods = .{ .super = true } },
++                .{ .new_split = .up },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .super = true } },
++                .{ .new_split = .right },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .super = true } },
++                .{ .new_split = .left },
++            );
++            // Navigate splits (pane focus)
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .right },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .left },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'k' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .up },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'j' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .down },
++                .{ .performable = true },
++            );
++            // Resize splits
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_left }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .left, 80 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_right }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .right, 80 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_up }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .up, 40 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_down }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .down, 40 } },
++                .{ .performable = true },
++            );
++            // Move tab left/right
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_left }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .move_tab = -1 },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_right }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .move_tab = 1 },
++                .{ .performable = true },
++            );
++            // Switch tab focus
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .previous_tab = {} },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .next_tab = {} },
++                .{ .performable = true },
++            );
++            // Zoom current split (toggle)
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'z' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .toggle_split_zoom = {} },
++                .{ .performable = true },
++            );
+         }
+     }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

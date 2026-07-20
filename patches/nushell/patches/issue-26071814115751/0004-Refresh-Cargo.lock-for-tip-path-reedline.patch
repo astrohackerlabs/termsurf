@@ -1,0 +1,25 @@
+From 7c2654d3fe952e3b2b5a47686a5ae95174f0a2e1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 11:50:12 -0500
+Subject: [PATCH 4/4] Refresh Cargo.lock for tip + path reedline
+
+---
+ Cargo.lock | 5 -----
+ 1 file changed, 5 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index c93e72494..d3b4eb0e6 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -11280,8 +11280,3 @@ checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+ dependencies = [
+  "zune-core",
+ ]
+-
+-[[patch.unused]]
+-name = "reedline"
+-version = "0.49.0"
+-source = "git+https://github.com/nushell/reedline?branch=main#f776f5079e49d075c071660ae0f9b040b3ff909b"
+-- 
+2.50.1 (Apple Git-155)
+

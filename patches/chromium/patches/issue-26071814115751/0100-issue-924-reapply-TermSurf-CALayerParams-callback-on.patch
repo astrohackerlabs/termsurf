@@ -1,0 +1,697 @@
+From 8c6ce5400d23643d24ceb0ef65e98b802ca9cb12 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:18:15 -0500
+Subject: [PATCH 100/122] issue-924: reapply TermSurf CALayerParams callback on
+ clean 150 Mac view
+
+---
+ .../render_widget_host_view_mac.h             |  17 +-
+ .../render_widget_host_view_mac.mm            | 203 ++++++------------
+ 2 files changed, 71 insertions(+), 149 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index a7d0ea1822..b3cc4757f8 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -35,7 +35,6 @@
+ #include "ui/base/mojom/attributed_string.mojom-forward.h"
+ #include "ui/display/display_list.h"
+ #include "ui/events/gesture_detection/filtered_gesture_provider.h"
+-#include "ui/gfx/ca_layer_params.h"
+ 
+ namespace remote_cocoa {
+ namespace mojom {
+@@ -121,11 +120,6 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+     return ns_view_;
+   }
+ 
+-  // CALayerParams change callback for out-of-process embedders (TermSurf).
+-  using CALayerParamsCallback =
+-      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
+-  void SetCALayerParamsCallback(CALayerParamsCallback callback);
+-
+   // |delegate| is used to separate out the logic from the NSResponder delegate.
+   // |delegate| is retained by this class.
+   // |delegate| should be set at most once.
+@@ -331,6 +325,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // needs access to them and can't be made a friend.
+ 
+   // Delegated frame management and compositor interface.
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  CALayerParamsCallback ca_layer_params_callback_;
++
+   std::unique_ptr<BrowserCompositorMac> browser_compositor_;
+   BrowserCompositorMac* BrowserCompositor() const {
+     return browser_compositor_.get();
+@@ -460,6 +457,11 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   void SetCurrentDeviceScaleFactor(float device_scale_factor) override;
+   bool ShouldUseDefaultDeadlineOnResize() const override;
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++
+   // AcceleratedWidgetMacNSView implementation.
+   void AcceleratedWidgetCALayerParamsUpdated(
+       gfx::CALayerParams params) override;
+@@ -749,9 +751,6 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // details.
+   base::OneShotTimer update_windows_timer_;
+ 
+-  // CALayerParams change callback for out-of-process embedders (TermSurf).
+-  CALayerParamsCallback ca_layer_params_callback_;
+-
+   // Factory used to safely scope delayed calls to ShutdownHost().
+   base::WeakPtrFactory<RenderWidgetHostViewMac> weak_factory_;
+ };
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 321a74a522..dc320e2454 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -6,7 +6,6 @@
+ 
+ #import <Carbon/Carbon.h>
+ 
+-#include <algorithm>
+ #include <limits>
+ #include <memory>
+ #include <optional>
+@@ -89,9 +88,9 @@
+ #include "ui/gfx/native_ui_types.h"
+ #include "ui/menus/cocoa/text_services_context_menu.h"
+ 
+-using blink::WebGestureEvent;
+ using blink::WebInputEvent;
+ using blink::WebMouseEvent;
++using blink::WebGestureEvent;
+ using blink::WebTouchEvent;
+ 
+ namespace content {
+@@ -303,9 +302,8 @@
+   // destroying the associated bridge), and close the receiver (to allow it
+   // to be re-bound). Note that |in_process_ns_view_bridge_| remains valid.
+   remote_ns_view_client_receiver_.reset();
+-  if (remote_ns_view_) {
++  if (remote_ns_view_)
+     remote_ns_view_->Destroy();
+-  }
+   remote_ns_view_.reset();
+ 
+   // Enable accessibility focus overriding for remote NSViews.
+@@ -374,9 +372,8 @@
+ 
+   // Popup windows will specify an invalid |parent_ns_view_id|, because popups
+   // have their own NSWindows (of which they are the content NSView).
+-  if (parent_ns_view_id != remote_cocoa::kInvalidNSViewId) {
++  if (parent_ns_view_id != remote_cocoa::kInvalidNSViewId)
+     remote_ns_view_->SetParentWebContentsNSView(parent_ns_view_id);
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::SetParentUiLayer(ui::Layer* parent_ui_layer) {
+@@ -392,9 +389,8 @@
+     // https://crbug.com/1222976#c49.
+     ns_view_->DisableDisplay();
+   }
+-  if (browser_compositor_) {
++  if (browser_compositor_)
+     browser_compositor_->SetParentUiLayer(parent_ui_layer);
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::SetParentAccessibilityElement(
+@@ -404,9 +400,8 @@
+ }
+ 
+ RenderWidgetHostViewCocoa* RenderWidgetHostViewMac::GetInProcessNSView() const {
+-  if (in_process_ns_view_bridge_) {
++  if (in_process_ns_view_bridge_)
+     return in_process_ns_view_bridge_->GetNSView();
+-  }
+   return nullptr;
+ }
+ 
+@@ -416,9 +411,8 @@
+ }
+ 
+ ui::TextInputType RenderWidgetHostViewMac::GetTextInputType() {
+-  if (!GetActiveWidget()) {
++  if (!GetActiveWidget())
+     return ui::TEXT_INPUT_TYPE_NONE;
+-  }
+   return text_input_manager_->GetTextInputState()->type;
+ }
+ 
+@@ -456,11 +450,9 @@
+     const gfx::Rect& anchor_rect) {
+   DCHECK_EQ(widget_type_, WidgetType::kPopup);
+ 
+-  auto* parent_mac_view =
++  popup_parent_host_view_ =
+       static_cast<RenderWidgetHostViewMac*>(parent_host_view);
+ 
+-  popup_parent_host_view_ = parent_mac_view;
+-
+   RenderWidgetHostViewMac* old_child =
+       popup_parent_host_view_->popup_child_host_view_;
+   if (old_child) {
+@@ -482,25 +474,7 @@
+ 
+   // This path is used by the time/date picker.
+   ns_view_->InitAsPopup(pos, popup_parent_host_view_->ns_view_id_);
+-  if (Issue779TraceEnabled()) {
+-    Issue779TraceAnnounce();
+-    LOG(INFO)
+-        << "[issue-779-trace] RenderWidgetHostViewMac::InitAsPopup.after"
+-        << " path=date-page-popup"
+-        << " popup_view=" << static_cast<void*>(this)
+-        << " popup_widget=" << static_cast<void*>(host())
+-        << " parent_host_view=" << static_cast<void*>(parent_host_view)
+-        << " popup_parent_after=" << static_cast<void*>(popup_parent_host_view_)
+-        << " parent_popup_child_after="
+-        << static_cast<void*>(popup_parent_host_view_->popup_child_host_view_)
+-        << " pos=" << pos.ToString()
+-        << " anchor_rect=" << anchor_rect.ToString()
+-        << " window_frame_in_screen=" << window_frame_in_screen_dip_.ToString()
+-        << " view_bounds_in_window=" << view_bounds_in_window_dip_.ToString()
+-        << " computed_view_bounds=" << GetViewBounds().ToString()
+-        << " " << Issue779PagePopupWindowsSummary();
+-  }
+-    ShowWithVisibility(PageVisibilityState::kVisible);
++  ShowWithVisibility(PageVisibilityState::kVisible);
+ }
+ 
+ RenderWidgetHostViewBase*
+@@ -512,9 +486,8 @@
+ 
+ RenderWidgetHostDelegate*
+ RenderWidgetHostViewMac::GetFocusedRenderWidgetHostDelegate() {
+-  if (auto* focused_widget = GetFocusedWidget()) {
++  if (auto* focused_widget = GetFocusedWidget())
+     return focused_widget->delegate();
+-  }
+   return host()->delegate();
+ }
+ 
+@@ -525,9 +498,8 @@
+ }
+ 
+ RenderWidgetHostImpl* RenderWidgetHostViewMac::GetWidgetForIme() {
+-  if (in_keyboard_event_) {
++  if (in_keyboard_event_)
+     return GetWidgetForKeyboardEvent();
+-  }
+   return GetActiveWidget();
+ }
+ 
+@@ -657,9 +629,8 @@
+ void RenderWidgetHostViewMac::Focus() {
+   // Ignore redundant calls, as they can cause unending loops of focus-setting.
+   // crbug.com/998123, crbug.com/804184.
+-  if (is_first_responder_ || is_getting_focus_) {
++  if (is_first_responder_ || is_getting_focus_)
+     return;
+-  }
+ 
+   base::AutoReset<bool> is_getting_focus_bit(&is_getting_focus_, true);
+   ns_view_->MakeFirstResponder();
+@@ -756,17 +727,15 @@
+     TextInputManager* text_input_manager,
+     RenderWidgetHostViewBase* updated_view,
+     bool did_update_state) {
+-  if (!did_update_state) {
++  if (!did_update_state)
+     return;
+-  }
+ 
+   const ui::mojom::TextInputState* state =
+       text_input_manager->GetTextInputState();
+-  if (state) {
++  if (state)
+     ns_view_->SetTextInputState(state->type, state->flags);
+-  } else {
++  else
+     ns_view_->SetTextInputState(ui::TEXT_INPUT_TYPE_NONE, 0);
+-  }
+ 
+   // |updated_view| is the last view to change its TextInputState which can be
+   // used to start/stop monitoring composition info when it has a focused
+@@ -777,9 +746,8 @@
+   // We might end up here when |updated_view| has had active TextInputState and
+   // then got destroyed. In that case, |updated_view->GetRenderWidgetHost()|
+   // returns nullptr.
+-  if (!widget_host) {
++  if (!widget_host)
+     return;
+-  }
+ 
+   // Set the monitor state based on the text input focus state.
+   const bool has_focus = HasFocus();
+@@ -816,9 +784,8 @@
+     bool character_bounds_changed) {
+   const TextInputManager::CompositionRangeInfo* info =
+       GetCompositionRangeInfo();
+-  if (!info) {
++  if (!info)
+     return;
+-  }
+   // The RangeChanged message is only sent with valid values. The current
+   // caret position (start == end) will be sent if there is no IME range.
+   ns_view_->SetCompositionRangeInfo(info->range);
+@@ -831,20 +798,17 @@
+ 
+   // The rest of the code is to support the Mac Zoom feature tracking the
+   // text caret; we can skip it if that feature is not currently enabled.
+-  if (!UAZoomEnabled()) {
++  if (!UAZoomEnabled())
+     return;
+-  }
+ 
+   RenderWidgetHostViewBase* focused_view = GetFocusedViewForTextSelection();
+-  if (!focused_view) {
++  if (!focused_view)
+     return;
+-  }
+ 
+   const TextInputManager::SelectionRegion* region =
+       GetTextInputManager()->GetSelectionRegion(focused_view);
+-  if (!region) {
++  if (!region)
+     return;
+-  }
+ 
+   // Create a rectangle for the edge of the selection focus, which will be
+   // the same as the caret position if the selection is collapsed. That's
+@@ -866,9 +830,8 @@
+   DCHECK_EQ(GetTextInputManager(), text_input_manager);
+ 
+   const TextInputManager::TextSelection* selection = GetTextSelection();
+-  if (!selection) {
++  if (!selection)
+     return;
+-  }
+ 
+   ns_view_->SetTextSelection(selection->text(), selection->offset(),
+                              selection->range());
+@@ -919,9 +882,8 @@
+   ns_view_ = nullptr;
+   in_process_ns_view_bridge_.reset();
+   remote_ns_view_client_receiver_.reset();
+-  if (remote_ns_view_) {
++  if (remote_ns_view_)
+     remote_ns_view_->Destroy();
+-  }
+   remote_ns_view_.reset();
+ 
+   // Delete the delegated frame state, which will reach back into
+@@ -932,9 +894,8 @@
+   // we release host().
+   NotifyObserversAboutShutdown();
+ 
+-  if (text_input_manager_) {
++  if (text_input_manager_)
+     text_input_manager_->RemoveObserver(this);
+-  }
+ 
+   mouse_wheel_phase_handler_.IgnorePendingWheelEndEvent();
+ 
+@@ -946,9 +907,8 @@
+ 
+ void RenderWidgetHostViewMac::UpdateTooltipUnderCursor(
+     const std::u16string& tooltip_text) {
+-  if (GetCursorManager()->IsViewUnderCursor(this)) {
++  if (GetCursorManager()->IsViewUnderCursor(this))
+     UpdateTooltip(tooltip_text);
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::UpdateTooltip(
+@@ -1235,10 +1195,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     const gfx::Range& range,
+     size_t* line_break_point) {
+   DCHECK(line_break_point);
+-  if (range.start() >= bounds.size() || range.is_reversed() ||
+-      range.is_empty()) {
++  if (range.start() >= bounds.size() || range.is_reversed() || range.is_empty())
+     return false;
+-  }
+ 
+   // We can't check line breaking completely from only rectangle array. Thus we
+   // assume the line breaking as the next character's y offset is larger than
+@@ -1273,9 +1231,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+   const TextInputManager::CompositionRangeInfo* composition_info =
+       GetCompositionRangeInfo();
+-  if (!composition_info) {
++  if (!composition_info)
+     return gfx::Rect();
+-  }
+ 
+   DCHECK(actual_range);
+   DCHECK(!composition_info->character_bounds.empty());
+@@ -1314,19 +1271,15 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     const TextInputManager::CompositionRangeInfo* composition_info) {
+   if (!composition_info)
+     return gfx::Range::InvalidRange();
+-  }
+ 
+-  if (composition_info->range.is_empty()) {
++  if (composition_info->range.is_empty())
+     return gfx::Range::InvalidRange();
+-  }
+ 
+-  if (composition_info->range.is_reversed()) {
++  if (composition_info->range.is_reversed())
+     return gfx::Range::InvalidRange();
+-  }
+ 
+-  if (request_range.start() < composition_info->range.start()) {
++  if (request_range.start() < composition_info->range.start())
+     return gfx::Range::InvalidRange();
+-  }
+ 
+   // Heuristic: truncate the request range within the composition range.
+   uint32_t truncated_request_start =
+@@ -1366,9 +1319,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   if (selection->range().is_empty() &&
+       requested_range.start() == selection->range().end()) {
+     DCHECK(GetFocusedWidget());
+-    if (actual_range) {
++    if (actual_range)
+       *actual_range = requested_range;
+-    }
+ 
+     // Check selection bounds first (currently populated only for EditContext)
+     const std::optional<gfx::Rect> text_selection_bound =
+@@ -1376,7 +1328,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     if (text_selection_bound) {
+       *rect = text_selection_bound.value();
+       TRACE_EVENT1(
+-          "ime", "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
++          "ime",
++          "RenderWidgetHostViewMac::GetCachedFirstRectForCharacterRange",
+           "GetTextSelectionBounds", rect->ToString());
+       return GetCachedFirstRectResult::kFound;
+     }
+@@ -1557,9 +1510,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   ns_view_->SetCursorLocked(false);
+   ns_view_->SetCursorLockedUnacceleratedMovement(false);
+ 
+-  if (host()) {
++  if (host())
+     host()->LostPointerLock();
+-  }
+ }
+ 
+ bool RenderWidgetHostViewMac::GetIsPointerLockedUnadjustedMovementForTesting() {
+@@ -1579,9 +1531,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   std::optional<std::vector<uint32_t>> uint_dom_codes;
+   if (dom_codes) {
+     uint_dom_codes.emplace();
+-    for (const auto& dom_code : *dom_codes) {
++    for (const auto& dom_code : *dom_codes)
+       uint_dom_codes->push_back(static_cast<uint32_t>(dom_code));
+-    }
+   }
+   is_keyboard_locked_ = true;
+   ns_view_->LockKeyboard(uint_dom_codes);
+@@ -1589,9 +1540,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ }
+ 
+ void RenderWidgetHostViewMac::UnlockKeyboard() {
+-  if (!is_keyboard_locked_) {
++  if (!is_keyboard_locked_)
+     return;
+-  }
+ 
+   is_keyboard_locked_ = false;
+   ns_view_->UnlockKeyboard();
+@@ -1690,9 +1640,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   // Event routing requires a valid frame sink (that is, that we be connected to
+   // a ui::Compositor), which is not guaranteed to be the case.
+   // https://crbug.com/844095
+-  if (!browser_compositor_->GetRootFrameSinkId().is_valid()) {
++  if (!browser_compositor_->GetRootFrameSinkId().is_valid())
+     return false;
+-  }
+ 
+   return host()->delegate() && host()->delegate()->GetInputEventRouter();
+ }
+@@ -1713,9 +1662,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     const ui::LatencyInfo& latency_info) {
+   ui::FilteredGestureProvider::TouchHandlingResult result =
+       gesture_provider_.OnTouchEvent(MotionEventWeb(event));
+-  if (!result.succeeded) {
++  if (!result.succeeded)
+     return;
+-  }
+ 
+   if (ShouldRouteEvents()) {
+     WebTouchEvent touch_event(event);
+@@ -1751,9 +1699,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ viz::SurfaceId RenderWidgetHostViewMac::GetCurrentSurfaceId() const {
+   // |browser_compositor_| could be null if this method is called during its
+   // destruction.
+-  if (!browser_compositor_) {
++  if (!browser_compositor_)
+     return viz::SurfaceId();
+-  }
+   return browser_compositor_->GetDelegatedFrameHost()->GetCurrentSurfaceId();
+ }
+ 
+@@ -1767,19 +1714,16 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   if (host()) {
+     UpdateActiveState(active);
+     if (active) {
+-      if (HasFocus()) {
++      if (HasFocus())
+         host()->GotFocus();
+-      }
+     } else {
+       host()->LostFocus();
+     }
+   }
+-  if (HasFocus()) {
++  if (HasFocus())
+     SetTextInputActive(active);
+-  }
+-  if (!active) {
++  if (!active)
+     UnlockPointer();
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::ShowDefinitionForSelection() {
+@@ -1813,9 +1757,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ }
+ 
+ void RenderWidgetHostViewMac::SetBackgroundLayerColor(SkColor color) {
+-  if (color == background_layer_color_) {
++  if (color == background_layer_color_)
+     return;
+-  }
+   background_layer_color_ = color;
+   ns_view_->SetBackgroundColor(color);
+ }
+@@ -1831,11 +1774,10 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+ void RenderWidgetHostViewMac::OverrideDisplayFeatureForEmulation(
+     const DisplayFeature* display_feature) {
+-  if (display_feature) {
++  if (display_feature)
+     display_feature_ = *display_feature;
+-  } else {
++  else
+     display_feature_ = std::nullopt;
+-  }
+   host()->SynchronizeVisualProperties();
+ }
+ 
+@@ -1928,9 +1870,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ }
+ 
+ void RenderWidgetHostViewMac::OnFirstResponderChanged(bool is_first_responder) {
+-  if (is_first_responder_ == is_first_responder) {
++  if (is_first_responder_ == is_first_responder)
+     return;
+-  }
+   is_first_responder_ = is_first_responder;
+   accessibility_focus_overrider_.SetViewIsFirstResponder(is_first_responder_);
+ 
+@@ -1971,14 +1912,12 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ }
+ 
+ void RenderWidgetHostViewMac::OnWindowIsKeyChanged(bool is_key) {
+-  if (is_window_key_ == is_key) {
++  if (is_window_key_ == is_key)
+     return;
+-  }
+   is_window_key_ = is_key;
+   accessibility_focus_overrider_.SetWindowIsKey(is_window_key_);
+-  if (is_first_responder_) {
++  if (is_first_responder_)
+     SetActive(is_key);
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::OnBoundsInWindowChanged(
+@@ -1996,23 +1935,20 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     view_bounds_in_window_dip_.set_size(view_bounds_in_window_dip.size());
+   }
+ 
+-  if (view_size_changed) {
++  if (view_size_changed)
+     UpdateScreenInfo();
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::OnWindowFrameInScreenChanged(
+     const gfx::Rect& window_frame_in_screen_dip) {
+-  if (window_frame_in_screen_dip_ == window_frame_in_screen_dip) {
++  if (window_frame_in_screen_dip_ == window_frame_in_screen_dip)
+     return;
+-  }
+ 
+   window_frame_in_screen_dip_ = window_frame_in_screen_dip;
+-  if (host()->delegate()) {
++  if (host()->delegate())
+     host()->delegate()->SendScreenRects();
+-  } else {
++  else
+     host()->SendScreenRects();
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::OnScreenInfosChanged(
+@@ -2083,9 +2019,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   blink::WebTouchEvent web_event = const_web_event;
+   ui::FilteredGestureProvider::TouchHandlingResult result =
+       gesture_provider_.OnTouchEvent(MotionEventWeb(web_event));
+-  if (!result.succeeded) {
++  if (!result.succeeded)
+     return;
+-  }
+ 
+   ui::LatencyInfo latency_info;
+   latency_info.AddLatencyNumber(ui::INPUT_EVENT_LATENCY_UI_COMPONENT);
+@@ -2120,13 +2055,11 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+ void RenderWidgetHostViewMac::ForwardMouseEvent(
+     const blink::WebMouseEvent& web_event) {
+-  if (host()) {
++  if (host())
+     host()->ForwardMouseEvent(web_event);
+-  }
+ 
+-  if (web_event.GetType() == WebInputEvent::Type::kMouseLeave) {
++  if (web_event.GetType() == WebInputEvent::Type::kMouseLeave)
+     SetTooltipText(std::u16string());
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::ForwardWheelEvent(
+@@ -2210,15 +2143,13 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     const gfx::Range& range) {
+   content::RenderWidgetHostViewBase* focused_view =
+       GetFocusedViewForTextSelection();
+-  if (!focused_view) {
++  if (!focused_view)
+     return;
+-  }
+ 
+   RenderWidgetHostImpl* widget_host =
+       RenderWidgetHostImpl::From(focused_view->GetRenderWidgetHost());
+-  if (!widget_host) {
++  if (!widget_host)
+     return;
+-  }
+ 
+   int32_t target_widget_process_id =
+       widget_host->GetProcess()->GetDeprecatedID();
+@@ -2233,9 +2164,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ void RenderWidgetHostViewMac::LookUpDictionaryOverlayAtPoint(
+     const gfx::PointF& root_point_in_dips) {
+   if (!host() || !host()->delegate() ||
+-      !host()->delegate()->GetInputEventRouter()) {
++      !host()->delegate()->GetInputEventRouter())
+     return;
+-  }
+ 
+   // With zoom-for-dsf, RenderWidgetHost coordinate system is physical points,
+   // which means we have to scale the point by device scale factor.
+@@ -2254,14 +2184,12 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+   RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+       static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
+-  if (!widget_host) {
++  if (!widget_host)
+     return;
+-  }
+ 
+   // For popups, do not support QuickLook.
+-  if (popup_parent_host_view_) {
++  if (popup_parent_host_view_)
+     return;
+-  }
+ 
+   int32_t target_widget_process_id =
+       widget_host->GetProcess()->GetDeprecatedID();
+@@ -2279,9 +2207,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+   *index = UINT32_MAX;
+ 
+   if (!host() || !host()->delegate() ||
+-      !host()->delegate()->GetInputEventRouter()) {
++      !host()->delegate()->GetInputEventRouter())
+     return true;
+-  }
+ 
+   gfx::PointF transformed_point;
+   auto* view = host()
+@@ -2295,9 +2222,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+   RenderWidgetHostImpl* widget_host = RenderWidgetHostImpl::From(
+       static_cast<RenderWidgetHostViewBase*>(view)->GetRenderWidgetHost());
+-  if (!widget_host) {
++  if (!widget_host)
+     return true;
+-  }
+ 
+   *index = TextInputClientMac::GetInstance()->SyncGetCharacterIndexAtPoint(
+       widget_host, gfx::ToFlooredPoint(transformed_point));
+@@ -2394,9 +2320,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ 
+ void RenderWidgetHostViewMac::CopyToFindPboard() {
+   WebContents* web_contents = GetWebContents();
+-  if (web_contents) {
++  if (web_contents)
+     web_contents->CopyToFindPboard();
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::CenterSelection() {
+@@ -2607,9 +2532,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+     if (auto* selection = GetTextSelection()) {
+       const std::u16string& selected_text = selection->selected_text();
+       NSString* ns_selected_text = base::SysUTF16ToNSString(selected_text);
+-      if ([ns_selected_text length] == 0) {
++      if ([ns_selected_text length] == 0)
+         return;
+-      }
+       scoped_refptr<ui::UniquePasteboard> pasteboard = new ui::UniquePasteboard;
+       if ([pasteboard->get() writeObjects:@[ ns_selected_text ]]) {
+         NSPerformService(@"Look Up in Dictionary", pasteboard->get());
+@@ -2639,9 +2563,8 @@ void CombineTextNodesAndMakeCallback(SpeechCallback callback,
+ void RenderWidgetHostViewMac::SetTooltipText(
+     const std::u16string& tooltip_text) {
+   ns_view_->SetTooltipText(tooltip_text);
+-  if (tooltip_observer_for_testing_) {
++  if (tooltip_observer_for_testing_)
+     tooltip_observer_for_testing_->OnTooltipTextUpdated(tooltip_text);
+-  }
+ }
+ 
+ void RenderWidgetHostViewMac::UpdateWindowsNow() {
+-- 
+2.50.1 (Apple Git-155)
+

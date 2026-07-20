@@ -1,0 +1,314 @@
+From 79f6b04703ea537507599c7ba9116ac97e3ce2ca Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 13:43:30 -0500
+Subject: [PATCH] Add split-border-corner-radius config (auto|0|N)
+
+Configurable all-corner pane radius: auto matches the window
+_cornerRadius (Exp 1 default), 0 forces square stroke/clip, and a
+positive fixed radius pins continuous rounding on every corner.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 20 ++++
+ .../Ghostty/Surface View/SurfaceView.swift    | 62 +++++++++----
+ src/config/Config.zig                         | 93 +++++++++++++++++++
+ src/config/c_get.zig                          | 27 ++++++
+ 4 files changed, 184 insertions(+), 18 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index a3ea6f3bf..ad2b62b95 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -639,6 +639,26 @@ extension Ghostty {
+             return value
+         }
+ 
++        /// Corner radius for multi-pane split borders.
++        ///
++        /// - `nil` = `auto` (match window `_cornerRadius` / product fallback)
++        /// - `0` = square corners
++        /// - `>0` = fixed continuous radius in points
++        ///
++        /// Zig uses cval sentinel `-1` for auto.
++        var splitBorderCornerRadius: Double? {
++            guard let config = self.config else { return nil }
++            var value: Double = -1
++            let key = "split-border-corner-radius"
++            guard ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8))) else {
++                return nil
++            }
++            if value < 0 {
++                return nil
++            }
++            return value
++        }
++
+         var unfocusedSplitSaturation: Double {
+             guard let config = self.config else { return 1.0 }
+             var value: Double = 1.0
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index eb36cdc21..30137542d 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -100,8 +100,6 @@ extension Ghostty {
+ 
+         /// System window corner radius via private `_cornerRadius` (same source as
+         /// TerminalViewContainer.glass), with product fallback.
+-        /// Used for **all four** corners of each split pane (including internal
+-        /// T-junctions), so every pane border is a rounded card.
+         private var resolvedWindowCornerRadius: CGFloat {
+ #if canImport(AppKit)
+             if let window = surfaceView.window,
+@@ -114,14 +112,28 @@ extension Ghostty {
+             return Self.splitBorderCornerRadiusFallback
+         }
+ 
++        /// Effective split-border corner radius from config:
++        /// - auto (`nil`): window `_cornerRadius` or product fallback
++        /// - `0`: square
++        /// - `>0`: fixed points
++        /// Used for **all four** corners of each split pane (including internal
++        /// T-junctions).
++        private var effectiveSplitBorderCornerRadius: CGFloat {
++            if let fixed = ghostty.config.splitBorderCornerRadius {
++                return CGFloat(fixed)
++            }
++            return resolvedWindowCornerRadius
++        }
++
+         /// Outer stroke radius for every corner of this pane.
+-        private func outerBorderRadius(windowRadius: CGFloat) -> CGFloat {
+-            windowRadius
++        private func outerBorderRadius(effectiveRadius: CGFloat) -> CGFloat {
++            effectiveRadius
+         }
+ 
+         /// Inner content/dim clip: max(0, R - borderWidth) for concentric stroke.
+-        private func innerBorderRadius(windowRadius: CGFloat, borderWidth: CGFloat) -> CGFloat {
+-            max(0, windowRadius - borderWidth)
++        /// When R is 0, returns 0 (square clip / no rounding).
++        private func innerBorderRadius(effectiveRadius: CGFloat, borderWidth: CGFloat) -> CGFloat {
++            max(0, effectiveRadius - borderWidth)
+         }
+ 
+         var body: some View {
+@@ -185,7 +197,7 @@ extension Ghostty {
+                     RoundedRectangle(
+                         cornerRadius: isSplit
+                             ? innerBorderRadius(
+-                                windowRadius: resolvedWindowCornerRadius,
++                                effectiveRadius: effectiveSplitBorderCornerRadius,
+                                 borderWidth: CGFloat(ghostty.config.splitBorderWidth))
+                             : 0,
+                         style: .continuous
+@@ -299,12 +311,19 @@ extension Ghostty {
+                     let overlayOpacity = ghostty.config.unfocusedSplitOpacity
+                     if overlayOpacity > 0 {
+                         let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
+-                        let windowR = resolvedWindowCornerRadius
+-                        let innerR = innerBorderRadius(windowRadius: windowR, borderWidth: borderWidth)
+-                        RoundedRectangle(cornerRadius: innerR, style: .continuous)
+-                            .fill(ghostty.config.unfocusedSplitFill)
+-                            .allowsHitTesting(false)
+-                            .opacity(overlayOpacity)
++                        let effectiveR = effectiveSplitBorderCornerRadius
++                        let innerR = innerBorderRadius(effectiveRadius: effectiveR, borderWidth: borderWidth)
++                        Group {
++                            if innerR > 0 {
++                                RoundedRectangle(cornerRadius: innerR, style: .continuous)
++                                    .fill(ghostty.config.unfocusedSplitFill)
++                            } else {
++                                Rectangle()
++                                    .fill(ghostty.config.unfocusedSplitFill)
++                            }
++                        }
++                        .allowsHitTesting(false)
++                        .opacity(overlayOpacity)
+                     }
+                 }
+ 
+@@ -316,7 +335,7 @@ extension Ghostty {
+                     let borderColor = isFocused ? focusedColor : unfocusedColor
+                     let colorKey = isFocused ? "focused-split-border-color" : "unfocused-split-border-color"
+                     let borderDrawn = borderWidth > 0 && borderColor != nil
+-                    let windowR = resolvedWindowCornerRadius
++                    let effectiveR = effectiveSplitBorderCornerRadius
+                     let _: Void = traceSplitBorderConfig(
+                         isFocused: isFocused,
+                         borderWidth: borderWidth,
+@@ -331,10 +350,17 @@ extension Ghostty {
+                             borderWidth: borderWidth,
+                             colorKey: colorKey
+                         )
+-                        let outerR = outerBorderRadius(windowRadius: windowR)
+-                        RoundedRectangle(cornerRadius: outerR, style: .continuous)
+-                            .strokeBorder(color, lineWidth: CGFloat(borderWidth))
+-                            .allowsHitTesting(false)
++                        let outerR = outerBorderRadius(effectiveRadius: effectiveR)
++                        Group {
++                            if outerR > 0 {
++                                RoundedRectangle(cornerRadius: outerR, style: .continuous)
++                                    .strokeBorder(color, lineWidth: CGFloat(borderWidth))
++                            } else {
++                                Rectangle()
++                                    .strokeBorder(color, lineWidth: CGFloat(borderWidth))
++                            }
++                        }
++                        .allowsHitTesting(false)
+                     }
+                 }
+ 
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 158fdd527..b630b5eb3 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1112,6 +1112,17 @@ palette: Palette = .{},
+ /// windows show borders without config. Set to 0 to disable borders.
+ @"split-border-width": f64 = 2,
+ 
++/// Corner radius of multi-pane split borders, in points.
++///
++/// - `auto` (default): match the macOS window corner radius when available
++///   (private `_cornerRadius`), otherwise a modest product fallback (10).
++/// - `0`: square corners (no rounding).
++/// - positive number: fixed continuous radius on all four corners of each pane.
++///
++/// Independent of `split-border-width`: width `0` still disables border chrome;
++/// radius `0` keeps a square border when width is positive.
++@"split-border-corner-radius": SplitBorderCornerRadius = .auto,
++
+ /// The color saturation of unfocused split panes. 1.0 is full color, 0.0 is
+ /// full grayscale. Only applies when in a split layout.
+ @"unfocused-split-saturation": f64 = 1.0,
+@@ -4768,6 +4779,14 @@ pub fn finalize(self: *Config) !void {
+     // Clamp our split border width
+     self.@"split-border-width" = @min(10.0, @max(0, self.@"split-border-width"));
+ 
++    // Clamp fixed split border corner radius (auto is unchanged)
++    switch (self.@"split-border-corner-radius") {
++        .auto => {},
++        .fixed => |v| self.@"split-border-corner-radius" = .{
++            .fixed = @min(40.0, @max(0, v)),
++        },
++    }
++
+     // Clamp our split saturation
+     self.@"unfocused-split-saturation" = @min(1.0, @max(0, self.@"unfocused-split-saturation"));
+ 
+@@ -9819,6 +9838,80 @@ pub const AutoUpdate = enum {
+     download,
+ };
+ 
++/// See split-border-corner-radius
++pub const SplitBorderCornerRadius = union(enum) {
++    /// Match macOS window `_cornerRadius` (or product fallback) on all corners.
++    auto,
++    /// Fixed continuous radius in points. `0` means square (no rounding).
++    fixed: f64,
++
++    pub fn parseCLI(self: *SplitBorderCornerRadius, input: ?[]const u8) !void {
++        const input_ = input orelse {
++            self.* = .auto;
++            return;
++        };
++
++        if (std.mem.eql(u8, input_, "auto")) {
++            self.* = .auto;
++            return;
++        }
++
++        const value = std.fmt.parseFloat(f64, input_) catch return error.InvalidValue;
++        if (!std.math.isFinite(value) or value < 0) return error.InvalidValue;
++        self.* = .{ .fixed = value };
++    }
++
++    /// C bridge: negative sentinel means auto; non-negative is fixed points.
++    pub fn cval(self: SplitBorderCornerRadius) f64 {
++        return switch (self) {
++            .auto => -1,
++            .fixed => |v| v,
++        };
++    }
++
++    pub fn formatEntry(
++        self: SplitBorderCornerRadius,
++        formatter: anytype,
++    ) !void {
++        switch (self) {
++            .auto => try formatter.formatEntry([]const u8, "auto"),
++            .fixed => |v| try formatter.formatEntry(f64, v),
++        }
++    }
++
++    test "parse SplitBorderCornerRadius" {
++        const testing = std.testing;
++        var v: SplitBorderCornerRadius = undefined;
++
++        try v.parseCLI(null);
++        try testing.expectEqual(SplitBorderCornerRadius.auto, v);
++
++        try v.parseCLI("auto");
++        try testing.expectEqual(SplitBorderCornerRadius.auto, v);
++
++        try v.parseCLI("0");
++        try testing.expectEqual(@as(f64, 0), v.fixed);
++
++        try v.parseCLI("12");
++        try testing.expectEqual(@as(f64, 12), v.fixed);
++
++        try v.parseCLI("6.5");
++        try testing.expectEqual(@as(f64, 6.5), v.fixed);
++
++        try testing.expectError(error.InvalidValue, v.parseCLI(""));
++        try testing.expectError(error.InvalidValue, v.parseCLI("aaaa"));
++        try testing.expectError(error.InvalidValue, v.parseCLI("-1"));
++        try testing.expectError(error.InvalidValue, v.parseCLI("inf"));
++    }
++
++    test "cval SplitBorderCornerRadius" {
++        const testing = std.testing;
++        try testing.expectEqual(@as(f64, -1), (SplitBorderCornerRadius{ .auto = {} }).cval());
++        try testing.expectEqual(@as(f64, 0), (SplitBorderCornerRadius{ .fixed = 0 }).cval());
++        try testing.expectEqual(@as(f64, 12), (SplitBorderCornerRadius{ .fixed = 12 }).cval());
++    }
++};
++
+ /// See background-blur
+ pub const BackgroundBlur = union(enum) {
+     false,
+diff --git a/src/config/c_get.zig b/src/config/c_get.zig
+index 2b7dd1005..4a0a847aa 100644
+--- a/src/config/c_get.zig
++++ b/src/config/c_get.zig
+@@ -266,3 +266,30 @@ test "c_get: split-preserve-zoom" {
+     try testing.expect(get(&c, .@"split-preserve-zoom", @ptrCast(&bits)));
+     try testing.expectEqual(@as(c_uint, 1), bits);
+ }
++
++test "c_get: split-border-corner-radius" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var c = try Config.default(alloc);
++    defer c.deinit();
++
++    {
++        // Default is auto → sentinel -1
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, -1), cval);
++    }
++    {
++        c.@"split-border-corner-radius" = .{ .fixed = 0 };
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, 0), cval);
++    }
++    {
++        c.@"split-border-corner-radius" = .{ .fixed = 12 };
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, 12), cval);
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,157 @@
+From 04bf8fbd4dbbdcad1186ea3476a7b6da040be342 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 12:54:06 -0500
+Subject: [PATCH 3/3] Fix user-script sandbox exclusion for EagerLinking TBD rm
+
+Xcode xcconfig treats // as a line comment, so the exclusion name
+"Work around rdar://109484516" was truncated to "Work around rdar:" and
+never matched the shell phase. The sandboxed script then failed with
+file-write-unlink on EagerLinkingTBDs/*.tbd.
+
+Rename the phase and exclusion to "Work around rdar 109484516" (no
+URL form) so ENABLE_USER_SCRIPT_SANDBOXING exclusions apply for
+WebKitLegacy, JavaScriptCore, and WebKit.
+---
+ Source/JavaScriptCore/Configurations/Base.xcconfig          | 2 +-
+ .../JavaScriptCore/JavaScriptCore.xcodeproj/project.pbxproj | 6 +++---
+ Source/WebKit/Configurations/Base.xcconfig                  | 2 +-
+ Source/WebKit/WebKit.xcodeproj/project.pbxproj              | 6 +++---
+ Source/WebKitLegacy/WebKitLegacy.xcodeproj/project.pbxproj  | 6 +++---
+ Source/WebKitLegacy/mac/Configurations/Base.xcconfig        | 2 +-
+ 6 files changed, 12 insertions(+), 12 deletions(-)
+
+diff --git a/Source/JavaScriptCore/Configurations/Base.xcconfig b/Source/JavaScriptCore/Configurations/Base.xcconfig
+index 6cdd6e5aa7..59ac864212 100644
+--- a/Source/JavaScriptCore/Configurations/Base.xcconfig
++++ b/Source/JavaScriptCore/Configurations/Base.xcconfig
+@@ -25,7 +25,7 @@
+ 
+ ALWAYS_SEARCH_USER_PATHS = NO;
+ ENABLE_USER_SCRIPT_SANDBOXING = YES;
+-EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate <wtf/Platform.h> args" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check .xcfilelists" "Copy jsc into JavaScriptCore.framework" "Audit SPI use" "Create Versions/Current/Helpers symlink" "Work around rdar://109484516";
++EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate <wtf/Platform.h> args" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check .xcfilelists" "Copy jsc into JavaScriptCore.framework" "Audit SPI use" "Create Versions/Current/Helpers symlink" "Work around rdar 109484516";
+ 
+ CLANG_CXX_LANGUAGE_STANDARD = c++2b;
+ CLANG_CXX_LIBRARY = libc++;
+diff --git a/Source/JavaScriptCore/JavaScriptCore.xcodeproj/project.pbxproj b/Source/JavaScriptCore/JavaScriptCore.xcodeproj/project.pbxproj
+index ed171db394..dc6427d111 100644
+--- a/Source/JavaScriptCore/JavaScriptCore.xcodeproj/project.pbxproj
++++ b/Source/JavaScriptCore/JavaScriptCore.xcodeproj/project.pbxproj
+@@ -13262,7 +13262,7 @@
+ 				53609F9021DFFA9C008FA60A /* Check .xcfilelists */,
+ 				6577FFC6276AC8D20011AEC8 /* Create Symlink to Cryptex Path */,
+ 				DD9C4CC52A05D4FB00D52E2E /* Fix up SDKROOT path in TAPI filelists (install only) */,
+-				DDA8F1542A15BEEA00BE8D11 /* Work around rdar://109484516 */,
++				DDA8F1542A15BEEA00BE8D11 /* Work around rdar 109484516 */,
+ 			);
+ 			buildRules = (
+ 				DDE7487C2F7B35DC008013AB /* PBXBuildRule */,
+@@ -13703,7 +13703,7 @@
+ 			shellPath = /bin/sh;
+ 			shellScript = "for ((i=0; i<${SCRIPT_INPUT_FILE_COUNT}; i++)); do\n    eval input=\"\\${SCRIPT_INPUT_FILE_$i}\"\n    eval output=\"\\${SCRIPT_OUTPUT_FILE_$i}\"\n    sed -e \"s;<SDKROOT>;${SDKROOT};\" \"${input}\" > \"${output}\"\ndone\n";
+ 		};
+-		DDA8F1542A15BEEA00BE8D11 /* Work around rdar://109484516 */ = {
++		DDA8F1542A15BEEA00BE8D11 /* Work around rdar 109484516 */ = {
+ 			isa = PBXShellScriptBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+@@ -13712,7 +13712,7 @@
+ 			);
+ 			inputPaths = (
+ 			);
+-			name = "Work around rdar://109484516";
++			name = "Work around rdar 109484516";
+ 			outputFileListPaths = (
+ 			);
+ 			outputPaths = (
+diff --git a/Source/WebKit/Configurations/Base.xcconfig b/Source/WebKit/Configurations/Base.xcconfig
+index 5532899f30..f7308c9dc5 100644
+--- a/Source/WebKit/Configurations/Base.xcconfig
++++ b/Source/WebKit/Configurations/Base.xcconfig
+@@ -28,7 +28,7 @@ ENABLE_DAEMON_SYMLINKS[sdk=embedded*] = NO
+ 
+ ALWAYS_SEARCH_USER_PATHS = NO;
+ ENABLE_USER_SCRIPT_SANDBOXING = YES;
+-EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate Swift platform args" "Generate Swift TBA availability macros" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check For Framework Include Consistency" "Check .xcfilelists" "Migrate WebCore and WebKitLegacy Headers" "Copy Custom WebContent Resources to Framework Private Headers" "Copy Profiling Data" "Process WebContent entitlements" "Process Network entitlements" "Process GPU entitlements" "Process Model entitlements" "Process webpushd Entitlements" "Process adattributiond Entitlements" "Process entitlements" "Audit SPI use" "Update Info.plist for RunningBoard management" "Create symlinks to XPC services and dylibs" "Work around rdar://109484516";
++EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate Swift platform args" "Generate Swift TBA availability macros" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check For Framework Include Consistency" "Check .xcfilelists" "Migrate WebCore and WebKitLegacy Headers" "Copy Custom WebContent Resources to Framework Private Headers" "Copy Profiling Data" "Process WebContent entitlements" "Process Network entitlements" "Process GPU entitlements" "Process Model entitlements" "Process webpushd Entitlements" "Process adattributiond Entitlements" "Process entitlements" "Audit SPI use" "Update Info.plist for RunningBoard management" "Create symlinks to XPC services and dylibs" "Work around rdar 109484516";
+ 
+ CLANG_CXX_LANGUAGE_STANDARD = c++2b;
+ CLANG_CXX_LIBRARY = libc++;
+diff --git a/Source/WebKit/WebKit.xcodeproj/project.pbxproj b/Source/WebKit/WebKit.xcodeproj/project.pbxproj
+index 31913f99db..76ac08f73b 100644
+--- a/Source/WebKit/WebKit.xcodeproj/project.pbxproj
++++ b/Source/WebKit/WebKit.xcodeproj/project.pbxproj
+@@ -20163,7 +20163,7 @@
+ 				0FB94836239F31B700926A8F /* Copy Testing Headers */,
+ 				6577FFB92769C1460011AEC8 /* Create Symlink to Cryptex Path */,
+ 				EBE4D2AD28A2F3BD00C0FAE7 /* Copy Signpost Plists */,
+-				DD00C28D2A37908400CBB4D9 /* Work around rdar://109484516 */,
++				DD00C28D2A37908400CBB4D9 /* Work around rdar 109484516 */,
+ 				DD4BDE9F2CAB1275001A3339 /* Create legacy Swift overlay symlink */,
+ 				07275C652D00E284002315A5 /* Install SwiftUI Cross Import Overlay */,
+ 			);
+@@ -21373,7 +21373,7 @@
+ 			shellPath = /bin/sh;
+ 			shellScript = "Scripts/generate-derived-sources.sh\n";
+ 		};
+-		DD00C28D2A37908400CBB4D9 /* Work around rdar://109484516 */ = {
++		DD00C28D2A37908400CBB4D9 /* Work around rdar 109484516 */ = {
+ 			isa = PBXShellScriptBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+@@ -21382,7 +21382,7 @@
+ 			);
+ 			inputPaths = (
+ 			);
+-			name = "Work around rdar://109484516";
++			name = "Work around rdar 109484516";
+ 			outputFileListPaths = (
+ 			);
+ 			outputPaths = (
+diff --git a/Source/WebKitLegacy/WebKitLegacy.xcodeproj/project.pbxproj b/Source/WebKitLegacy/WebKitLegacy.xcodeproj/project.pbxproj
+index fe930477b5..5990024e0c 100644
+--- a/Source/WebKitLegacy/WebKitLegacy.xcodeproj/project.pbxproj
++++ b/Source/WebKitLegacy/WebKitLegacy.xcodeproj/project.pbxproj
+@@ -3149,7 +3149,7 @@
+ 				532424B1254905FE00A6975B /* Check For Inappropriate Files In Framework */,
+ 				537CF83A22EFBFB100C6EBB3 /* Check .xcfilelists */,
+ 				650473452789431C00AF78A2 /* Create Symlink to Cryptex Path */,
+-				DD00C28C2A37905800CBB4D9 /* Work around rdar://109484516 */,
++				DD00C28C2A37905800CBB4D9 /* Work around rdar 109484516 */,
+ 			);
+ 			buildRules = (
+ 				DDE748862F7B43BF008013AB /* PBXBuildRule */,
+@@ -3404,7 +3404,7 @@
+ 			shellPath = /bin/sh;
+ 			shellScript = "${SRCROOT}/mac/Scripts/generate-preferences.sh\n";
+ 		};
+-		DD00C28C2A37905800CBB4D9 /* Work around rdar://109484516 */ = {
++		DD00C28C2A37905800CBB4D9 /* Work around rdar 109484516 */ = {
+ 			isa = PBXShellScriptBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
+@@ -3413,7 +3413,7 @@
+ 			);
+ 			inputPaths = (
+ 			);
+-			name = "Work around rdar://109484516";
++			name = "Work around rdar 109484516";
+ 			outputFileListPaths = (
+ 			);
+ 			outputPaths = (
+diff --git a/Source/WebKitLegacy/mac/Configurations/Base.xcconfig b/Source/WebKitLegacy/mac/Configurations/Base.xcconfig
+index 2e0e3e86c2..ec5462effb 100644
+--- a/Source/WebKitLegacy/mac/Configurations/Base.xcconfig
++++ b/Source/WebKitLegacy/mac/Configurations/Base.xcconfig
+@@ -28,7 +28,7 @@ AD_HOC_CODE_SIGNING_ALLOWED = YES;
+ 
+ ALWAYS_SEARCH_USER_PATHS = NO;
+ ENABLE_USER_SCRIPT_SANDBOXING = YES;
+-EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate <wtf/Platform.h> args" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check .xcfilelists" "Migrate WebCore Headers and Generate Export List" "Generate Preferences" "Audit SPI use" "Work around rdar://109484516";
++EXCLUDED_USER_SCRIPT_SANDBOXING_PHASE_NAMES = $(inherited) "Generate Unified Sources" "Generate Derived Sources" "Generate <wtf/Platform.h> args" "Check For Inappropriate Files In Framework" "Check For Inappropriate Macros in External Headers" "Check .xcfilelists" "Migrate WebCore Headers and Generate Export List" "Generate Preferences" "Audit SPI use" "Work around rdar 109484516";
+ 
+ CLANG_CXX_LANGUAGE_STANDARD = c++2b;
+ CLANG_CXX_LIBRARY = libc++;
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,508 @@
+From 88d350bedaf577b6acef678ec8d5becc92edad5b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 22:29:23 -0500
+Subject: [PATCH] Bug Astrohacker 932: pane-aligned external window geometry
+ for Gecko (Exp10)
+
+Report terminal pane screen DIP without CALayerHost; Resize.screen_*;
+window-move timer follow; top-left DIP conversion using screens[0].
+---
+ include/ghostty.h                             |   1 +
+ .../App/macOS/AppDelegate+TermSurf.swift      |  47 ++++
+ .../Surface View/SurfaceView_AppKit.swift     |  98 ++++++++
+ src/apprt/termsurf.zig                        | 213 +++++++++++++++++-
+ src/main_c.zig                                |  18 ++
+ 5 files changed, 367 insertions(+), 10 deletions(-)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 8e6038573..a81c72b2b 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1075,6 +1075,7 @@ GHOSTTY_API void termsurf_ipc_stop(void);
+ GHOSTTY_API void termsurf_hello_config_changed(const char*, const char*);
+ GHOSTTY_API void termsurf_color_scheme_changed(int);
+ GHOSTTY_API void termsurf_overlay_presented_pixels(const char*, uint64_t, uint64_t);
++GHOSTTY_API void termsurf_overlay_presented_screen_rect(const char*, double, double, double, double, double);
+ GHOSTTY_API int termsurf_forward_key_event(const char*, const char*, int64_t, const char*, uint64_t);
+ GHOSTTY_API int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
+ GHOSTTY_API int termsurf_forward_mouse_move(const char*, double, double, uint64_t);
+diff --git a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+index 020f4ae58..eef712771 100644
+--- a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
++++ b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+@@ -368,6 +368,53 @@ func termsurf_set_title(
+   }
+ }
+ 
++/// Convert AppKit bottom-left global rect to top-left DIP using menu-bar display maxY.
++func termsurfAppKitBottomLeftToTopLeftDIP(
++  originX: CGFloat,
++  originY: CGFloat,
++  height: CGFloat,
++  mainMaxY: CGFloat
++) -> (x: CGFloat, y: CGFloat) {
++  (originX, mainMaxY - (originY + height))
++}
++
++@_cdecl("termsurf_present_external_window_geometry")
++func termsurf_present_external_window_geometry(
++  _ paneIDPointer: UnsafePointer<CChar>?,
++  _ col: UInt64,
++  _ row: UInt64,
++  _ width: UInt64,
++  _ height: UInt64
++) {
++  guard let paneIDPointer else {
++    termsurfLogOverlay("TermSurf external geometry rejected: missing pane id")
++    return
++  }
++  let paneID = String(cString: paneIDPointer)
++  termsurfLogOverlay(
++    "TermSurf external geometry request pane_id=\(paneID) grid=\(width)x\(height)+\(col)+\(row)"
++  )
++  DispatchQueue.main.async {
++    guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
++      termsurfLogOverlay("TermSurf external geometry rejected: missing app delegate")
++      return
++    }
++    guard let uuid = UUID(uuidString: paneID) else {
++      termsurfLogOverlay("TermSurf external geometry rejected: invalid pane id \(paneID)")
++      return
++    }
++    guard let target = appDelegate.findSurface(forUUID: uuid) else {
++      termsurfLogOverlay("TermSurf external geometry rejected: no surface for pane id \(paneID)")
++      return
++    }
++    target.reportTermSurfExternalWindowGeometry(
++      col: col,
++      row: row,
++      width: width,
++      height: height)
++  }
++}
++
+ @_cdecl("termsurf_present_overlay")
+ // swiftlint:disable:next function_parameter_count
+ func termsurf_present_overlay(
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 8b084b8f7..010fad7e6 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -569,6 +569,104 @@ extension Ghostty {
+     }
+ 
+     // swiftlint:disable:next function_parameter_count
++    /// Last external-window geometry grid (Gecko); re-reported on window move/resize/timer.
++    private var termsurfExternalGeometryGrid: (col: UInt64, row: UInt64, width: UInt64, height: UInt64)?
++    private var termsurfExternalGeometryObservers: [NSObjectProtocol] = []
++    private var termsurfExternalGeometryTimer: Timer?
++
++    /// Report pane screen DIP (top-left) for process-chrome engines (Gecko) without CALayerHost.
++    func reportTermSurfExternalWindowGeometry(
++      col: UInt64,
++      row: UInt64,
++      width: UInt64,
++      height: UInt64
++    ) {
++      dispatchPrecondition(condition: .onQueue(.main))
++      termsurfExternalGeometryGrid = (col, row, width, height)
++      installTermSurfExternalGeometryObserversIfNeeded()
++      startTermSurfExternalGeometryTimerIfNeeded()
++      reportTermSurfExternalWindowGeometryNow()
++    }
++
++    private func installTermSurfExternalGeometryObserversIfNeeded() {
++      guard termsurfExternalGeometryObservers.isEmpty, let window else { return }
++      let center = NotificationCenter.default
++      let reReport: (Foundation.Notification) -> Void = { [weak self] _ in
++        DispatchQueue.main.async { self?.reportTermSurfExternalWindowGeometryNow() }
++      }
++      termsurfExternalGeometryObservers = [
++        center.addObserver(
++          forName: NSWindow.didMoveNotification, object: window, queue: .main, using: reReport),
++        center.addObserver(
++          forName: NSWindow.didResizeNotification, object: window, queue: .main, using: reReport),
++      ]
++    }
++
++    private func startTermSurfExternalGeometryTimerIfNeeded() {
++      guard termsurfExternalGeometryTimer == nil else { return }
++      // Poll screen rect so process-chrome windows follow Ghostboard moves even if
++      // NSWindow.didMove is not delivered for System Events position changes.
++      let timer = Timer(timeInterval: 0.4, repeats: true) { [weak self] _ in
++        self?.reportTermSurfExternalWindowGeometryNow()
++      }
++      RunLoop.main.add(timer, forMode: .common)
++      termsurfExternalGeometryTimer = timer
++    }
++
++    private func reportTermSurfExternalWindowGeometryNow() {
++      dispatchPrecondition(condition: .onQueue(.main))
++      guard let grid = termsurfExternalGeometryGrid else { return }
++      let col = grid.col
++      let row = grid.row
++      let width = grid.width
++      let height = grid.height
++      let gridLabel = "\(width)x\(height)+\(col)+\(row)"
++      guard let window else {
++        AppDelegate.logger.warning("TermSurf external geometry rejected: no window grid=\(gridLabel)")
++        return
++      }
++      guard NSScreen.screens.count > 0 else {
++        AppDelegate.logger.warning("TermSurf external geometry rejected: no screens")
++        return
++      }
++      let cellWidth = cellSize.width > 0 ? cellSize.width : 10
++      let cellHeight = cellSize.height > 0 ? cellSize.height : 20
++      let backingScale = window.backingScaleFactor
++      let paddingLeft = surfaceSize.map { CGFloat($0.padding_left_px) / backingScale } ?? 0
++      let paddingTop = surfaceSize.map { CGFloat($0.padding_top_px) / backingScale } ?? 0
++      let viewFrame = CGRect(
++        x: paddingLeft + CGFloat(col) * cellWidth,
++        y: paddingTop + CGFloat(row) * cellHeight,
++        width: CGFloat(width) * cellWidth,
++        height: CGFloat(height) * cellHeight)
++      guard viewFrame.width > 0, viewFrame.height > 0 else {
++        AppDelegate.logger.warning("TermSurf external geometry rejected: empty frame grid=\(gridLabel)")
++        return
++      }
++      let windowRect = convert(viewFrame, to: nil)
++      let screenBottomLeft = window.convertToScreen(windowRect)
++      // Menu-bar display is screens[0]; global AppKit flip reference (not NSScreen.main).
++      let mainMaxY = NSScreen.screens[0].frame.maxY
++      let topLeft = termsurfAppKitBottomLeftToTopLeftDIP(
++        originX: screenBottomLeft.origin.x,
++        originY: screenBottomLeft.origin.y,
++        height: screenBottomLeft.size.height,
++        mainMaxY: mainMaxY)
++      let paneID = id.uuidString
++      paneID.withCString { cPaneID in
++        termsurf_overlay_presented_screen_rect(
++          cPaneID,
++          Double(topLeft.x),
++          Double(topLeft.y),
++          Double(screenBottomLeft.size.width),
++          Double(screenBottomLeft.size.height),
++          Double(backingScale))
++      }
++      AppDelegate.logger.info(
++        "TermSurf external geometry reported pane_id=\(paneID, privacy: .public) screen=\(topLeft.x),\(topLeft.y),\(screenBottomLeft.size.width),\(screenBottomLeft.size.height) scale=\(backingScale)"
++      )
++    }
++
+     func presentTermSurfOverlay(
+       contextID: UInt64,
+       col: UInt64,
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 918855b6d..8690ff214 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -121,6 +121,41 @@ const termsurf_present_overlay = if (builtin.is_test) testTermsurfPresentOverlay
+     pixel_height: u64,
+ ) callconv(.c) void, .{ .name = "termsurf_present_overlay" });
+ 
++const termsurf_present_external_window_geometry = if (builtin.is_test) testTermsurfPresentExternalWindowGeometry else @extern(*const fn (
++    pane_id: [*:0]const u8,
++    col: u64,
++    row: u64,
++    width: u64,
++    height: u64,
++) callconv(.c) void, .{ .name = "termsurf_present_external_window_geometry" });
++
++fn testTermsurfPresentExternalWindowGeometry(
++    pane_id: [*:0]const u8,
++    col: u64,
++    row: u64,
++    width: u64,
++    height: u64,
++) callconv(.c) void {
++    _ = pane_id;
++    _ = col;
++    _ = row;
++    _ = width;
++    _ = height;
++}
++
++/// Convert AppKit bottom-left global rect to top-left DIP using main display maxY.
++pub fn appKitBottomLeftToTopLeftDIP(
++    origin_x: f64,
++    origin_y: f64,
++    height: f64,
++    main_max_y: f64,
++) struct { x: f64, y: f64 } {
++    return .{
++        .x = origin_x,
++        .y = main_max_y - (origin_y + height),
++    };
++}
++
+ const termsurf_present_iosurface_overlay = if (builtin.is_test) testTermsurfPresentIOSurfaceOverlay else @extern(*const fn (
+     pane_id: [*:0]const u8,
+     surface: ?*anyopaque,
+@@ -268,6 +303,12 @@ const PaneState = struct {
+     appkit_pixel_height: u64 = 0,
+     last_resize_pixel_width: u64 = 0,
+     last_resize_pixel_height: u64 = 0,
++    has_screen_rect: bool = false,
++    screen_x: f64 = 0,
++    screen_y: f64 = 0,
++    screen_width: f64 = 0,
++    screen_height: f64 = 0,
++    screen_scale: f64 = 0,
+     cursor_type: i64 = 0,
+     tui_fd: std.posix.fd_t = -1,
+ 
+@@ -632,6 +673,12 @@ const ResizeSnapshot = struct {
+     tab_id: i64 = 0,
+     pixel_width: u64 = 0,
+     pixel_height: u64 = 0,
++    has_screen_rect: bool = false,
++    screen_x: f64 = 0,
++    screen_y: f64 = 0,
++    screen_width: f64 = 0,
++    screen_height: f64 = 0,
++    screen_scale: f64 = 0,
+ 
+     fn paneId(self: *const ResizeSnapshot) []const u8 {
+         return self.pane_id[0..self.pane_id_len];
+@@ -1893,8 +1940,20 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+             .{ pane_id, profile, browser, pane_count },
+         );
+         geometryTracePane("set_overlay_update", &panes[pane_index], "updated-existing-pane");
++        const is_gecko = std.mem.eql(u8, browser, "gecko");
++        const gecko_pane_id = if (is_gecko and panes[pane_index].tab_id != 0) panes[pane_index].paneId() else "";
++        var gecko_pane_buf: [max_pane_id_len]u8 = undefined;
++        var gecko_pane_len: usize = 0;
++        if (gecko_pane_id.len > 0) {
++            @memcpy(gecko_pane_buf[0..gecko_pane_id.len], gecko_pane_id);
++            gecko_pane_len = gecko_pane_id.len;
++        }
+         state_mutex.unlock();
+-        if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
++        if (is_gecko and gecko_pane_len > 0) {
++            requestExternalWindowGeometry(gecko_pane_buf[0..gecko_pane_len]);
++        } else if (overlay_snapshot) |snapshot| {
++            presentOverlay(&snapshot);
++        }
+         return;
+     }
+ 
+@@ -2467,6 +2526,12 @@ fn snapshotResize(pane: *const PaneState) ?ResizeSnapshot {
+         .tab_id = pane.tab_id,
+         .pixel_width = pane.width * fallback_cell_width,
+         .pixel_height = pane.height * fallback_cell_height,
++        .has_screen_rect = pane.has_screen_rect,
++        .screen_x = pane.screen_x,
++        .screen_y = pane.screen_y,
++        .screen_width = pane.screen_width,
++        .screen_height = pane.screen_height,
++        .screen_scale = pane.screen_scale,
+     };
+     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+     return snapshot;
+@@ -2478,11 +2543,19 @@ fn sendResize(snapshot: *const ResizeSnapshot) !void {
+     resize.tab_id = snapshot.tab_id;
+     resize.pixel_width = snapshot.pixel_width;
+     resize.pixel_height = snapshot.pixel_height;
+-    resize.screen_x = 0.0;
+-    resize.screen_y = 0.0;
+-    resize.screen_width = 0.0;
+-    resize.screen_height = 0.0;
+-    resize.screen_scale = 0.0;
++    if (snapshot.has_screen_rect) {
++        resize.screen_x = snapshot.screen_x;
++        resize.screen_y = snapshot.screen_y;
++        resize.screen_width = snapshot.screen_width;
++        resize.screen_height = snapshot.screen_height;
++        resize.screen_scale = snapshot.screen_scale;
++    } else {
++        resize.screen_x = 0.0;
++        resize.screen_y = 0.0;
++        resize.screen_width = 0.0;
++        resize.screen_height = 0.0;
++        resize.screen_scale = 0.0;
++    }
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -2491,10 +2564,27 @@ fn sendResize(snapshot: *const ResizeSnapshot) !void {
+ 
+     try sendProtobuf(snapshot.browser_fd, &wrapper);
+     markResizeSent(snapshot);
+-    log.info(
+-        "Resize: pane_id={s} tab_id={} pixel={}x{}",
+-        .{ snapshot.paneId(), snapshot.tab_id, snapshot.pixel_width, snapshot.pixel_height },
+-    );
++    if (snapshot.has_screen_rect) {
++        log.info(
++            "Resize: pane_id={s} tab_id={} pixel={}x{} screen={d},{d},{d},{d} scale={d}",
++            .{
++                snapshot.paneId(),
++                snapshot.tab_id,
++                snapshot.pixel_width,
++                snapshot.pixel_height,
++                snapshot.screen_x,
++                snapshot.screen_y,
++                snapshot.screen_width,
++                snapshot.screen_height,
++                snapshot.screen_scale,
++            },
++        );
++    } else {
++        log.info(
++            "Resize: pane_id={s} tab_id={} pixel={}x{}",
++            .{ snapshot.paneId(), snapshot.tab_id, snapshot.pixel_width, snapshot.pixel_height },
++        );
++    }
+     if (geometryTraceEnabled()) {
+         log.info(
+             "TermSurf geometry layer=zig event=resize scenario={s} identity=window_id:unknown:appkit-only surface_id:unknown:appkit-only selected_tab_id:unknown:appkit-only pane_id:{s} browser_tab_id:{} browser_pixel={}x{} visible=true note=sent-browser-resize",
+@@ -3217,6 +3307,96 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+         sendBrowserReady(&snapshot) catch |err| {
+             log.warn("BrowserReady send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+         };
++        // Gecko: request AppKit pane screen rect (no CALayerHost) then Resize.
++        if (std.mem.eql(u8, snapshot.browserName(), "gecko")) {
++            requestExternalWindowGeometry(snapshot.paneId());
++        }
++    }
++}
++
++fn requestExternalWindowGeometry(pane_id: []const u8) void {
++    state_mutex.lock();
++    const pane_index = findPane(pane_id) orelse {
++        state_mutex.unlock();
++        return;
++    };
++    var pane_id_z_buf: [max_pane_id_len + 1]u8 = undefined;
++    const pane_id_z = std.fmt.bufPrintZ(&pane_id_z_buf, "{s}", .{pane_id}) catch {
++        state_mutex.unlock();
++        return;
++    };
++    const col = panes[pane_index].col;
++    const row = panes[pane_index].row;
++    const width = panes[pane_index].width;
++    const height = panes[pane_index].height;
++    state_mutex.unlock();
++    log.info(
++        "external_geometry_request pane_id={s} grid={}x{}+{}+{}",
++        .{ pane_id, width, height, col, row },
++    );
++    termsurf_present_external_window_geometry(pane_id_z.ptr, col, row, width, height);
++}
++
++/// Re-request external geometry for all live gecko panes (window-move follow).
++fn refreshAllGeckoExternalGeometry() void {
++    var ids: [max_panes][max_pane_id_len]u8 = undefined;
++    var lens: [max_panes]usize = undefined;
++    var n: usize = 0;
++    state_mutex.lock();
++    for (&panes) |*pane| {
++        if (!pane.in_use) continue;
++        if (!std.mem.eql(u8, pane.browserName(), "gecko")) continue;
++        if (pane.tab_id == 0) continue;
++        const id = pane.paneId();
++        @memcpy(ids[n][0..id.len], id);
++        lens[n] = id.len;
++        n += 1;
++    }
++    state_mutex.unlock();
++    var i: usize = 0;
++    while (i < n) : (i += 1) {
++        requestExternalWindowGeometry(ids[i][0..lens[i]]);
++    }
++}
++
++pub fn overlayPresentedScreenRect(
++    pane_id: []const u8,
++    screen_x: f64,
++    screen_y: f64,
++    screen_width: f64,
++    screen_height: f64,
++    screen_scale: f64,
++) void {
++    var resize_snapshot: ?ResizeSnapshot = null;
++    state_mutex.lock();
++    if (findPane(pane_id)) |pane_index| {
++        const scale = if (screen_scale > 0) screen_scale else 1.0;
++        const changed = !panes[pane_index].has_screen_rect or
++            @abs(panes[pane_index].screen_x - screen_x) > 0.5 or
++            @abs(panes[pane_index].screen_y - screen_y) > 0.5 or
++            @abs(panes[pane_index].screen_width - screen_width) > 0.5 or
++            @abs(panes[pane_index].screen_height - screen_height) > 0.5;
++        panes[pane_index].has_screen_rect = true;
++        panes[pane_index].screen_x = screen_x;
++        panes[pane_index].screen_y = screen_y;
++        panes[pane_index].screen_width = screen_width;
++        panes[pane_index].screen_height = screen_height;
++        panes[pane_index].screen_scale = scale;
++        if (changed) {
++            log.info(
++                "external_geometry_callback pane_id={s} screen={d},{d},{d},{d} scale={d}",
++                .{ pane_id, screen_x, screen_y, screen_width, screen_height, scale },
++            );
++            if (panes[pane_index].tab_id != 0) {
++                resize_snapshot = snapshotResize(&panes[pane_index]);
++            }
++        }
++    }
++    state_mutex.unlock();
++    if (resize_snapshot) |snapshot| {
++        sendResize(&snapshot) catch |err| {
++            log.warn("Resize after external geometry failed pane_id={s} err={}", .{ pane_id, err });
++        };
+     }
+ }
+ 
+@@ -6315,6 +6495,19 @@ test "browser resolution named gecko" {
+     _ = c.unsetenv(gecko_path_env);
+ }
+ 
++test "appkit bottom left to top left dip conversion" {
++    const testing = std.testing;
++    // Main display: maxY=900, rect bottom-left y=100 height=200 → top-left y=600
++    const a = appKitBottomLeftToTopLeftDIP(10, 100, 200, 900);
++    try testing.expectEqual(@as(f64, 10), a.x);
++    try testing.expectEqual(@as(f64, 600), a.y);
++    // Secondary display above main (origin.y=900): rect at y=1000 h=100, mainMaxY=900
++    // Global top-left Y = 900 - (1000+100) = -200
++    const b = appKitBottomLeftToTopLeftDIP(50, 1000, 100, 900);
++    try testing.expectEqual(@as(f64, 50), b.x);
++    try testing.expectEqual(@as(f64, -200), b.y);
++}
++
+ test "Surfari runtime framework path follows executable directory" {
+     const testing = std.testing;
+     try testing.expect(shouldSupplySurfariRuntimeFrameworkPath("webkit", null));
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 8cc800af9..9ee583353 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -185,6 +185,24 @@ pub export fn termsurf_overlay_presented_pixels(
+     termsurf.overlayPresentedPixels(std.mem.span(pane_id), pixel_width, pixel_height);
+ }
+ 
++pub export fn termsurf_overlay_presented_screen_rect(
++    pane_id: [*:0]const u8,
++    screen_x: f64,
++    screen_y: f64,
++    screen_width: f64,
++    screen_height: f64,
++    screen_scale: f64,
++) void {
++    termsurf.overlayPresentedScreenRect(
++        std.mem.span(pane_id),
++        screen_x,
++        screen_y,
++        screen_width,
++        screen_height,
++        screen_scale,
++    );
++}
++
+ pub export fn termsurf_forward_key_event(
+     pane_id: [*:0]const u8,
+     event_type: [*:0]const u8,
+-- 
+2.54.0
+

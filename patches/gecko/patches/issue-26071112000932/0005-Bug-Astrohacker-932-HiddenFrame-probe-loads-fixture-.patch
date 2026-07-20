@@ -1,0 +1,244 @@
+From f63a7b3c6b595e8c38895ef4ef8780384a12a1e8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 20:33:48 -0500
+Subject: [PATCH 5/6] Bug Astrohacker 932: HiddenFrame probe loads fixture with
+ title markers
+
+Use HeadlessShell-style HiddenFrame + remote browser, keep progress
+listeners alive, and report final_uri/title for Exp4 verification.
+---
+ .../AstrohackerWindowlessProbe.sys.mjs        | 146 ++++++++++++------
+ 1 file changed, 103 insertions(+), 43 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+index 04fa4c366994..b671ab9d1bbb 100644
+--- a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+@@ -9,6 +9,9 @@
+ 
+ import { HiddenFrame } from "resource://gre/modules/HiddenFrame.sys.mjs";
+ 
++// Keep progress listeners alive until they fire (HeadlessShell pattern).
++const progressListeners = new Set();
++
+ export class CommandLineHandler {
+   static classID = Components.ID("{a932e004-0932-4004-8000-000000000004}");
+   static contractID = "@astrohacker.org/windowless-probe-clh;1";
+@@ -55,13 +58,22 @@ function delay(ms) {
+   });
+ }
+ 
++function resolveURI(url) {
++  let parsed = URL.parse(url);
++  if (parsed?.URI) {
++    return parsed.URI;
++  }
++  return Services.io.newURI(url);
++}
++
+ function loadContentWindow(browser, url) {
+-  let uri = Services.io.newURI(url);
++  let uri = resolveURI(url);
+   const principal = Services.scriptSecurityManager.getSystemPrincipal();
+   return new Promise((resolve, reject) => {
+     let loadURIOptions = { triggeringPrincipal: principal };
+     browser.loadURI(uri, loadURIOptions);
+     let { webProgress } = browser;
++    let settled = false;
+     let progressListener = {
+       onLocationChange(progress, _request, location, flags) {
+         if (!progress.isTopLevel) {
+@@ -76,25 +88,75 @@ function loadContentWindow(browser, url) {
+         ) {
+           return;
+         }
++        if (settled) {
++          return;
++        }
++        settled = true;
+         dump("STATE_STOP\n");
+         dump("load_complete=1\n");
+         dump(`location=${location.spec}\n`);
+-        webProgress.removeProgressListener(progressListener);
++        progressListeners.delete(progressListener);
++        try {
++          webProgress.removeProgressListener(progressListener);
++        } catch (e) {}
+         resolve(location.spec);
+       },
++      onStateChange(progress, _request, stateFlags, _status) {
++        if (!progress.isTopLevel) {
++          return;
++        }
++        const nsIWebProgressListener = Ci.nsIWebProgressListener;
++        if (
++          !(stateFlags & nsIWebProgressListener.STATE_STOP) ||
++          !(stateFlags & nsIWebProgressListener.STATE_IS_NETWORK) ||
++          !(stateFlags & nsIWebProgressListener.STATE_IS_WINDOW)
++        ) {
++          return;
++        }
++        if (
++          progress.browsingContext.currentWindowGlobal
++            ?.isUncommittedInitialDocument
++        ) {
++          return;
++        }
++        let loc = "";
++        try {
++          loc = browser.currentURI?.spec || "";
++        } catch (e) {}
++        if (!loc || loc === "about:blank") {
++          return;
++        }
++        if (settled) {
++          return;
++        }
++        settled = true;
++        dump("STATE_STOP\n");
++        dump("load_complete=1\n");
++        dump(`location=${loc}\n`);
++        progressListeners.delete(progressListener);
++        try {
++          webProgress.removeProgressListener(progressListener);
++        } catch (e) {}
++        resolve(loc);
++      },
+       QueryInterface: ChromeUtils.generateQI([
+         "nsIWebProgressListener",
+         "nsISupportsWeakReference",
+       ]),
+     };
++    progressListeners.add(progressListener);
+     webProgress.addProgressListener(
+       progressListener,
+-      Ci.nsIWebProgress.NOTIFY_LOCATION
++      Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_WINDOW
+     );
+-    // safety timeout
+     let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+     timer.initWithCallback(
+       () => {
++        if (settled) {
++          return;
++        }
++        settled = true;
++        progressListeners.delete(progressListener);
+         try {
+           webProgress.removeProgressListener(progressListener);
+         } catch (e) {}
+@@ -117,7 +179,9 @@ async function runProbe(urlStr) {
+   browser.setAttribute("remote", "true");
+   browser.setAttribute("type", "content");
+   browser.style.width = "800px";
++  browser.style.minWidth = "800px";
+   browser.style.height = "600px";
++  browser.style.minHeight = "600px";
+   browser.setAttribute("maychangeremoteness", "true");
+   browser.setAttribute("nodefaultsrc", "true");
+   doc.documentElement.appendChild(browser);
+@@ -131,66 +195,62 @@ async function runProbe(urlStr) {
+     if (String(e).includes("timeout")) {
+       dump("timeout=1\n");
+     }
+-    frame.destroy();
++    try {
++      frame.destroy();
++    } catch (e2) {}
+     dump("windowless_load_ok=0\n");
+     return;
+   }
+ 
+-  await delay(200);
+-  dump(`final_uri=${finalUri}\n`);
+-
++  // Allow remote title to settle; browser.contentTitle works cross-process.
+   let title = "";
+-  let body = "";
+-  try {
+-    let actor =
+-      browser.browsingContext.currentWindowGlobal.getActor("Screenshot");
+-    // Fallback: use browser contentTitle if available
+-    title = browser.contentTitle || "";
+-  } catch (e) {
+-    title = browser.contentTitle || "";
++  for (let i = 0; i < 20; i++) {
++    await delay(100);
++    try {
++      title = browser.contentTitle || "";
++    } catch (e) {}
++    if (title.includes("EXP3_FIXTURE_OK")) {
++      break;
++    }
+   }
+-  try {
+-    // SpecialPowers-less: use document title from browsingContext
+-    title = browser.browsingContext.currentWindowGlobal?.documentTitle || title;
+-  } catch (e) {}
+-  dump(`title=${title}\n`);
+ 
+-  // Fetch body via contentPrincipal script if needed
+-  try {
+-    let win = browser.browsingContext.currentWindowGlobal;
+-    if (win) {
+-      // Not always available cross-process; title is enough for fixture.
+-    }
+-  } catch (e) {}
++  if (!finalUri || finalUri === "about:blank") {
++    try {
++      finalUri = browser.currentURI?.spec || finalUri;
++    } catch (e) {}
++  }
++
++  dump(`final_uri=${finalUri}\n`);
++  dump(`title=${title}\n`);
+ 
+-  if (title.includes("EXP3_FIXTURE_OK")) {
++  let marker = title.includes("EXP3_FIXTURE_OK");
++  if (marker) {
+     dump("EXP3_FIXTURE_OK\n");
+     dump("fixture_marker=1\n");
+   } else {
+-    // also accept URI match for file fixture with empty title race
+     dump("fixture_marker=0\n");
+   }
+ 
+   try {
+     browser.remove();
+   } catch (e) {}
+-  frame.destroy();
++  try {
++    frame.destroy();
++  } catch (e) {}
+   dump("teardown_ok=1\n");
+ 
+-  if (
+-    (finalUri && finalUri.includes("fixture.html")) ||
+-    (finalUri && finalUri.startsWith("data:text/html"))
+-  ) {
+-    if (title.includes("EXP3_FIXTURE_OK") || finalUri.includes("EXP3_FIXTURE_OK")) {
+-      dump("EXP3_FIXTURE_OK\n");
+-      dump("fixture_marker=1\n");
+-      dump("windowless_load_ok=1\n");
+-      return;
+-    }
+-  }
+-  if (title.includes("EXP3_FIXTURE_OK")) {
++  let uriOk =
++    finalUri &&
++    finalUri !== "about:blank" &&
++    (finalUri.includes("fixture.html") ||
++      finalUri.startsWith("data:text/html") ||
++      finalUri === urlStr);
++
++  if (uriOk && marker) {
+     dump("windowless_load_ok=1\n");
+   } else {
++    dump(`diag_uri_ok=${uriOk ? 1 : 0}\n`);
++    dump(`diag_marker=${marker ? 1 : 0}\n`);
+     dump("windowless_load_ok=0\n");
+   }
+ }
+-- 
+2.54.0
+

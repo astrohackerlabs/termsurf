@@ -1,0 +1,375 @@
+From 329ff25c1ac8fb05bc16c9fc8e9bcc618d3db1b6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 11:22:01 -0500
+Subject: [PATCH 54/90] Wire PDF resourcesPrivate strings
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |   3 +
+ .../ts_extensions_browser_client.cc           |  36 ++++++-
+ .../extensions/ts_pdf_resource_bundle.cc      |  27 ++++-
+ .../extensions/ts_resources_private_api.cc    | 102 ++++++++++++++++++
+ .../extensions/ts_resources_private_api.h     |  31 ++++++
+ .../libtermsurf_chromium/ts_browser_client.cc |  17 +++
+ .../libtermsurf_chromium/ts_browser_client.h  |   1 +
+ 7 files changed, 213 insertions(+), 4 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_resources_private_api.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 4aa16e4947..33e85d2060 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -33,6 +33,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_pdf_component_extension.h",
+     "extensions/ts_pdf_resource_bundle.cc",
+     "extensions/ts_pdf_resource_bundle.h",
++    "extensions/ts_resources_private_api.cc",
++    "extensions/ts_resources_private_api.h",
+     "libtermsurf_chromium.cc",
+     "libtermsurf_chromium.h",
+     "ts_browser_client.cc",
+@@ -75,6 +77,7 @@ shared_library("libtermsurf_chromium") {
+   }
+ 
+   deps = [
++    "//chrome/browser:resources",
+     "//chrome/browser/resources/pdf:resources",
+     "//chrome/common:resources",
+     "//chrome/common/extensions",
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 5babef1c76..f0c513d283 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -16,6 +16,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
++#include "content/libtermsurf_chromium/extensions/ts_resources_private_api.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -29,8 +30,10 @@
+ #include "extensions/browser/api/extensions_api_client.h"
+ #include "extensions/browser/api/runtime/runtime_api_delegate.h"
+ #include "extensions/browser/event_router.h"
++#include "extensions/browser/extension_function_registry.h"
+ #include "extensions/browser/extension_host_delegate.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
++#include "extensions/browser/extensions_browser_api_provider.h"
+ #include "extensions/browser/extensions_browser_interface_binders.h"
+ #include "extensions/browser/media_capture_util.h"
+ #include "extensions/browser/safe_browsing_delegate.h"
+@@ -47,6 +50,22 @@
+ namespace content {
+ namespace {
+ 
++class TsPdfExtensionsBrowserAPIProvider
++    : public extensions::ExtensionsBrowserAPIProvider {
++ public:
++  TsPdfExtensionsBrowserAPIProvider() = default;
++  TsPdfExtensionsBrowserAPIProvider(const TsPdfExtensionsBrowserAPIProvider&) =
++      delete;
++  TsPdfExtensionsBrowserAPIProvider& operator=(
++      const TsPdfExtensionsBrowserAPIProvider&) = delete;
++  ~TsPdfExtensionsBrowserAPIProvider() override = default;
++
++  void RegisterExtensionFunctions(
++      ExtensionFunctionRegistry* registry) override {
++    registry->RegisterFunction<TsResourcesPrivateGetStringsFunction>();
++  }
++};
++
+ class TsKioskDelegate : public extensions::KioskDelegate {
+  public:
+   bool IsAutoLaunchedKioskApp(
+@@ -168,6 +187,18 @@ class TsExtensionWebContentsObserver
+ 
+ WEB_CONTENTS_USER_DATA_KEY_IMPL(TsExtensionWebContentsObserver);
+ 
++class TsExtensionsAPIClient : public extensions::ExtensionsAPIClient {
++ public:
++  TsExtensionsAPIClient() = default;
++  TsExtensionsAPIClient(const TsExtensionsAPIClient&) = delete;
++  TsExtensionsAPIClient& operator=(const TsExtensionsAPIClient&) = delete;
++  ~TsExtensionsAPIClient() override = default;
++
++  void AttachWebContentsHelpers(WebContents* web_contents) const override {
++    TsExtensionWebContentsObserver::CreateForWebContents(web_contents);
++  }
++};
++
+ }  // namespace
+ 
+ TsExtensionsBrowserClient::TsExtensionsBrowserClient()
+@@ -178,13 +209,16 @@ TsExtensionsBrowserClient::TsExtensionsBrowserClient()
+           std::make_unique<extensions::SafeBrowsingDelegate>()) {
+   AddAPIProvider(
+       std::make_unique<extensions::CoreExtensionsBrowserAPIProvider>());
++  AddAPIProvider(std::make_unique<TsPdfExtensionsBrowserAPIProvider>());
+   extensions::SetCurrentChannel(version_info::Channel::UNKNOWN);
+ }
+ 
+ TsExtensionsBrowserClient::~TsExtensionsBrowserClient() = default;
+ 
+ void TsExtensionsBrowserClient::Init() {
+-  api_client_ = std::make_unique<extensions::ExtensionsAPIClient>();
++  api_client_ = std::make_unique<TsExtensionsAPIClient>();
++  ExtensionFunctionRegistry::GetInstance()
++      .RegisterFunction<TsResourcesPrivateGetStringsFunction>();
+   component_extension_resource_manager_->SelfTestPdfResource();
+ }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index 20c32a42eb..28e7e86b85 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -14,6 +14,7 @@
+ #include "base/path_service.h"
+ #include "base/strings/string_util.h"
+ #include "chrome/grit/common_resources.h"
++#include "chrome/grit/generated_resources.h"
+ #include "chrome/grit/pdf_resources.h"
+ #include "components/grit/components_resources.h"
+ #include "components/strings/grit/components_strings.h"
+@@ -109,9 +110,9 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+ 
+   std::u16string portrait_string;
+   if (components_strings_found) {
+-    portrait_string = ui::ResourceBundle::GetSharedInstance()
+-                          .GetLocalizedString(
+-                              IDS_PDF_PROPERTIES_PAGE_SIZE_PORTRAIT);
++    portrait_string =
++        ui::ResourceBundle::GetSharedInstance().GetLocalizedString(
++            IDS_PDF_PROPERTIES_PAGE_SIZE_PORTRAIT);
+   }
+   LOG(INFO) << "[issue-792-exp28] components-strings-pak path="
+             << components_strings_pak_path.AsUTF8Unsafe()
+@@ -119,6 +120,26 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+             << " loaded=" << !portrait_string.empty()
+             << " portrait_bytes=" << portrait_string.size();
+ 
++  base::FilePath chrome_strings_pak_path =
++      assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
++          "generated_resources_en-US.pak");
++  const bool chrome_strings_found = base::PathExists(chrome_strings_pak_path);
++  if (chrome_strings_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        chrome_strings_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::u16string zoom_in_string;
++  if (chrome_strings_found) {
++    zoom_in_string = ui::ResourceBundle::GetSharedInstance().GetLocalizedString(
++        IDS_PDF_TOOLTIP_ZOOM_IN);
++  }
++  LOG(INFO) << "[issue-792-exp8] chrome-generated-strings-pak path="
++            << chrome_strings_pak_path.AsUTF8Unsafe()
++            << " found=" << chrome_strings_found
++            << " loaded=" << !zoom_in_string.empty()
++            << " zoom_in_bytes=" << zoom_in_string.size();
++
+   base::FilePath common_pak_path =
+       assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
+           "common_resources.pak");
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+new file mode 100644
+index 0000000000..45f5cada20
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -0,0 +1,102 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_resources_private_api.h"
++
++#include <optional>
++#include <utility>
++
++#include "base/values.h"
++#include "chrome/common/extensions/api/resources_private.h"
++#include "chrome/grit/generated_resources.h"
++#include "components/strings/grit/components_strings.h"
++#include "components/zoom/page_zoom_constants.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "ui/base/l10n/l10n_util.h"
++#include "ui/base/webui/web_ui_util.h"
++
++namespace content {
++namespace {
++
++namespace resources_private = extensions::api::resources_private;
++namespace get_strings = resources_private::GetStrings;
++
++base::DictValue GetPdfStringsForTermSurf() {
++  base::DictValue dict;
++
++  static constexpr webui::LocalizedString kPdfResources[] = {
++      {"errorDialogTitle", IDS_PDF_ERROR_DIALOG_TITLE},
++      {"labelPageNumber", IDS_PDF_LABEL_PAGE_NUMBER},
++      {"moreActions", IDS_DOWNLOAD_MORE_ACTIONS},
++      {"pageLoadFailed", IDS_PDF_PAGE_LOAD_FAILED},
++      {"pageLoading", IDS_PDF_PAGE_LOADING},
++      {"pageReload", IDS_PDF_PAGE_RELOAD_BUTTON},
++      {"tooltipDownload", IDS_PDF_TOOLTIP_DOWNLOAD},
++      {"tooltipFitToPage", IDS_PDF_TOOLTIP_FIT_PAGE},
++      {"tooltipFitToWidth", IDS_PDF_TOOLTIP_FIT_WIDTH},
++      {"tooltipPrint", IDS_PDF_TOOLTIP_PRINT},
++      {"tooltipRotateCCW", IDS_PDF_TOOLTIP_ROTATE_CCW},
++      {"tooltipZoomIn", IDS_PDF_TOOLTIP_ZOOM_IN},
++      {"tooltipZoomOut", IDS_PDF_TOOLTIP_ZOOM_OUT},
++      {"twoUpViewEnable", IDS_PDF_TWO_UP_VIEW_ENABLE},
++      {"zoomTextInputAriaLabel", IDS_PDF_ZOOM_TEXT_INPUT_ARIA_LABEL},
++  };
++
++  for (const auto& resource : kPdfResources) {
++    dict.Set(resource.name, l10n_util::GetStringUTF16(resource.id));
++  }
++
++  // This is the load-bearing value for PDF toolbar zoom. Chrome normally
++  // returns it through chrome/browser/pdf/pdf_extension_util.cc, but linking
++  // that target pulls the full Chrome PDF browser stack and duplicates
++  // PdfViewerStreamManager in TermSurf's smaller embedder.
++  dict.Set("presetZoomFactors", zoom::GetPresetZoomFactorsAsJSON());
++
++  // Keep the PDF viewer's feature flags explicit and conservative. These match
++  // the embedder-owned surfaces TermSurf currently supports.
++  dict.Set("pdfGetSaveDataInBlocks", false);
++  dict.Set("pdfGlicSummarizeEnabled", false);
++  dict.Set("pdfInk2Enabled", false);
++  dict.Set("pdfSaveToDrive", false);
++  dict.Set("pdfSearchifySaveEnabled", false);
++  dict.Set("pdfTextAnnotationsEnabled", false);
++  dict.Set("pdfUseShowSaveFilePicker", false);
++  dict.Set("printingEnabled", false);
++
++  return dict;
++}
++
++}  // namespace
++
++TsResourcesPrivateGetStringsFunction::TsResourcesPrivateGetStringsFunction() =
++    default;
++
++TsResourcesPrivateGetStringsFunction::~TsResourcesPrivateGetStringsFunction() =
++    default;
++
++ExtensionFunction::ResponseAction TsResourcesPrivateGetStringsFunction::Run() {
++  std::optional<get_strings::Params> params =
++      get_strings::Params::Create(args());
++  if (!params) {
++    return RespondNow(Error("Invalid resourcesPrivate.getStrings arguments."));
++  }
++
++  base::DictValue dict;
++  switch (params->component) {
++    case resources_private::Component::kPdf:
++      dict = GetPdfStringsForTermSurf();
++      break;
++    case resources_private::Component::kIdentity:
++    case resources_private::Component::kNone:
++      break;
++  }
++
++  webui::SetLoadTimeDataDefaults(
++      extensions::ExtensionsBrowserClient::Get()->GetApplicationLocale(),
++      &dict);
++
++  return RespondNow(WithArguments(std::move(dict)));
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.h b/content/libtermsurf_chromium/extensions/ts_resources_private_api.h
+new file mode 100644
+index 0000000000..797b26ccda
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.h
+@@ -0,0 +1,31 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_RESOURCES_PRIVATE_API_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_RESOURCES_PRIVATE_API_H_
++
++#include "extensions/browser/extension_function.h"
++
++namespace content {
++
++class TsResourcesPrivateGetStringsFunction : public ExtensionFunction {
++ public:
++  DECLARE_EXTENSION_FUNCTION("resourcesPrivate.getStrings",
++                             RESOURCESPRIVATE_GETSTRINGS)
++
++  TsResourcesPrivateGetStringsFunction();
++  TsResourcesPrivateGetStringsFunction(
++      const TsResourcesPrivateGetStringsFunction&) = delete;
++  TsResourcesPrivateGetStringsFunction& operator=(
++      const TsResourcesPrivateGetStringsFunction&) = delete;
++
++ protected:
++  ~TsResourcesPrivateGetStringsFunction() override;
++
++  ExtensionFunction::ResponseAction Run() override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_RESOURCES_PRIVATE_API_H_
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index b626f8d4c2..5c51e4826e 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -41,6 +41,7 @@
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+ #include "extensions/common/manifest.h"
++#include "extensions/common/mojom/frame.mojom.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+@@ -276,6 +277,16 @@ void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+   ShellContentBrowserClient::
+       RegisterAssociatedInterfaceBindersForRenderFrameHost(render_frame_host,
+                                                            associated_registry);
++  associated_registry.RemoveInterface(extensions::mojom::LocalFrameHost::Name_);
++  associated_registry.AddInterface<extensions::mojom::LocalFrameHost>(
++      base::BindRepeating(
++          [](RenderFrameHost* render_frame_host,
++             mojo::PendingAssociatedReceiver<extensions::mojom::LocalFrameHost>
++                 receiver) {
++            extensions::ExtensionWebContentsObserver::BindLocalFrameHost(
++                std::move(receiver), render_frame_host);
++          },
++          &render_frame_host));
+   associated_registry.AddInterface<pdf::mojom::PdfHost>(base::BindRepeating(
+       [](RenderFrameHost* render_frame_host,
+          mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
+@@ -289,6 +300,12 @@ void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
+       &render_frame_host));
+ }
+ 
++void TsBrowserClient::OnWebContentsCreated(WebContents* web_contents) {
++  ShellContentBrowserClient::OnWebContentsCreated(web_contents);
++  extensions::ExtensionsBrowserClient::Get()
++      ->CreateExtensionWebContentsObserver(web_contents);
++}
++
+ void TsBrowserClient::OverrideWebPreferences(
+     WebContents* web_contents,
+     SiteInstance& main_frame_site,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index cf10aa85a3..ef11a9dc0b 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -61,6 +61,7 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void RegisterAssociatedInterfaceBindersForRenderFrameHost(
+       RenderFrameHost& render_frame_host,
+       blink::AssociatedInterfaceRegistry& associated_registry) override;
++  void OnWebContentsCreated(WebContents* web_contents) override;
+   void OverrideWebPreferences(WebContents* web_contents,
+                               SiteInstance& main_frame_site,
+                               blink::web_pref::WebPreferences* prefs) override;
+-- 
+2.54.0
+

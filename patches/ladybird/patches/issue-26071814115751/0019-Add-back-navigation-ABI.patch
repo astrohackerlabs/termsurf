@@ -1,0 +1,167 @@
+From 503ccaca3f794f43b5d866b0d8a47f412d394bd0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 08:56:11 -0500
+Subject: [PATCH 19/22] Add back navigation ABI
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A Ladybird remembers one road in its stack,
+It checks native truth before flying Back.
+Crashes dim the arrow; futures stay away,
+And Started—not wishful thinking—rules the day.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 95 +++++++++++++++++++
+ 1 file changed, 95 insertions(+)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 26725e7b79..20095d7f43 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -26,6 +26,7 @@
+ #include <LibWebView/Application.h>
+ #include <LibWebView/ConsoleOutput.h>
+ #include <LibWebView/HeadlessWebView.h>
++#include <LibWebView/Menu.h>
+ #include <LibWebView/Options.h>
+ #include <LibWebView/Utilities.h>
+ #include <limits.h>
+@@ -35,6 +36,19 @@
+ 
+ namespace {
+ 
++StringView history_traversal_status_name(WebView::HistoryTraversalStatus status)
++{
++    switch (status) {
++    case WebView::HistoryTraversalStatus::Started:
++        return "started"sv;
++    case WebView::HistoryTraversalStatus::NoEntry:
++        return "no-entry"sv;
++    case WebView::HistoryTraversalStatus::Canceled:
++        return "canceled"sv;
++    }
++    VERIFY_NOT_REACHED();
++}
++
+ class TermSurfLadybirdApplication final : public WebView::Application {
+     WEB_VIEW_APPLICATION(TermSurfLadybirdApplication)
+ 
+@@ -266,6 +280,10 @@ typedef struct TsLadybirdRendererCrash {
+     bool can_reload;
+ } TsLadybirdRendererCrash;
+ 
++typedef struct TsLadybirdNavigationState {
++    bool can_go_back;
++} TsLadybirdNavigationState;
++
+ extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
+ extern "C" void ts_ladybird_runtime_destroy(TsLadybirdRuntime*);
+ extern "C" bool ts_ladybird_runtime_pump(TsLadybirdRuntime*);
+@@ -280,6 +298,9 @@ extern "C" bool ts_ladybird_view_mouse_event(TsLadybirdView*, char const*, char
+ extern "C" bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
+ extern "C" bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
+ extern "C" bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
++extern "C" bool ts_ladybird_view_run_javascript_for_testing(TsLadybirdView*, char const*);
++extern "C" bool ts_ladybird_view_navigation_action(TsLadybirdView*, char const*);
++extern "C" bool ts_ladybird_view_navigation_state(TsLadybirdView const*, TsLadybirdNavigationState*);
+ extern "C" bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
+ extern "C" bool ts_ladybird_view_take_console_message(TsLadybirdView*, TsLadybirdConsoleMessage*);
+ extern "C" bool ts_ladybird_view_take_cursor_changed(TsLadybirdView*, int*);
+@@ -729,6 +750,9 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_event(TsLadybirdView*, char
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_run_javascript_for_testing(TsLadybirdView*, char const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_action(TsLadybirdView*, char const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_state(TsLadybirdView const*, TsLadybirdNavigationState*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+@@ -1132,6 +1156,72 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView* view, c
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_run_javascript_for_testing(TsLadybirdView* view, char const* script)
++{
++    if (!validate_view(view))
++        return false;
++    if (!script) {
++        set_runtime_error(view->runtime, "script is null");
++        return false;
++    }
++
++    auto script_view = StringView { script, strlen(script) };
++    auto script_string = String::from_utf8(script_view);
++    if (script_string.is_error()) {
++        set_runtime_error(view->runtime, "script is not valid UTF-8");
++        return false;
++    }
++    view->view->run_javascript(script_string.release_value());
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_action(TsLadybirdView* view, char const* action)
++{
++    if (!validate_view(view))
++        return false;
++    if (!action) {
++        set_runtime_error(view->runtime, "navigation action is null");
++        return false;
++    }
++    if (strcmp(action, "back")) {
++        set_runtime_error(view->runtime, "navigation action is unsupported");
++        return false;
++    }
++    if (view->did_crash) {
++        set_runtime_error(view->runtime, "back navigation is unavailable after renderer crash");
++        return false;
++    }
++    if (!view->view->navigate_back_action().enabled()) {
++        set_runtime_error(view->runtime, "back navigation is unavailable");
++        return false;
++    }
++
++    auto outcome = view->view->traverse_the_history_by_delta(-1);
++    outln("PROBE: TermSurf Ladybird ABI navigation_action action=back status={} replace_process={} top_level={} waiting={} url={}",
++        history_traversal_status_name(outcome.status), outcome.will_replace_web_content_process, outcome.will_change_top_level_entry, outcome.waiting_for_cancelation_check, view->view->url().to_byte_string());
++    if (outcome.status != WebView::HistoryTraversalStatus::Started) {
++        set_runtime_error(view->runtime, ByteString::formatted("back navigation did not start: {}", history_traversal_status_name(outcome.status)));
++        return false;
++    }
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_state(TsLadybirdView const* view, TsLadybirdNavigationState* out_state)
++{
++    if (!out_state) {
++        set_runtime_error(view ? view->runtime : nullptr, "navigation state output is null");
++        return false;
++    }
++    memset(out_state, 0, sizeof(*out_state));
++    if (!validate_view(const_cast<TsLadybirdView*>(view)))
++        return false;
++    if (view->did_crash)
++        return true;
++
++    out_state->can_go_back = view->view->navigate_back_action().enabled();
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_title_changed(TsLadybirdView* view, char* out_title, size_t out_title_len)
+ {
+     if (!validate_view(view))
+@@ -1299,6 +1389,11 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView co
+ {
+     if (!view)
+         return "";
++    if (view->view) {
++        auto* mutable_view = const_cast<TsLadybirdView*>(view);
++        mutable_view->last_url = view->view->url().to_byte_string();
++        return mutable_view->last_url.characters();
++    }
+     return view->last_url.characters();
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

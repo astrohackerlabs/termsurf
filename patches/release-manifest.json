@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "archive_digest": "sha256 of ordered '<patch-sha256>  <repo-relative-path>\\n' rows",
+  "forks": [
+    {
+      "name": "ghostty",
+      "checkout": "forks/ghostty",
+      "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
+      "branch": "issue-26072011262273-exp4-half-dock-padding",
+      "expected_head": "87ca338679438debc7a0a4c60173a5cd5f897ae5",
+      "expected_tree": "e4266784dbfce565109999462cf0b38b159aef95",
+      "patch_directories": [
+        "patches/ghostty/patches/issue-26071814115751",
+        "patches/ghostty/patches/issue-26071818128343",
+        "patches/ghostty/patches/issue-26071819414418",
+        "patches/ghostty/patches/issue-26071821572313",
+        "patches/ghostty/patches/issue-26071913243342",
+        "patches/ghostty/patches/issue-26071914254256",
+        "patches/ghostty/patches/issue-26072011262273"
+      ],
+      "patch_count": 32,
+      "archive_sha256": "2014fb95ba806adfd0d1479996e4e91eca22eca4bf0d800929ff9ca6ec58e2c1",
+      "allowed_untracked": []
+    },
+    {
+      "name": "nushell",
+      "checkout": "forks/nushell",
+      "base": "72b01f3e11a02c1a0abd6284cf97f6f37d96677f",
+      "branch": "issue-26071814115751-nushell",
+      "expected_head": "7c2654d3fe952e3b2b5a47686a5ae95174f0a2e1",
+      "expected_tree": "b90d455983a99948c2b442f19f96cc1f74bcf0f2",
+      "patch_directories": [
+        "patches/nushell/patches/issue-26071814115751"
+      ],
+      "patch_count": 4,
+      "archive_sha256": "922c4dd881dfd7b42b2f5ed3b893d6414db0d2143207081c0d3ac5cdcb19001e",
+      "allowed_untracked": []
+    },
+    {
+      "name": "reedline",
+      "checkout": "forks/reedline",
+      "base": "f776f5079e49d075c071660ae0f9b040b3ff909b",
+      "branch": "issue-26071814115751-reedline",
+      "expected_head": "f776f5079e49d075c071660ae0f9b040b3ff909b",
+      "expected_tree": "76093e9dd271aaa3627d27c53a6b9d881c22c88b",
+      "patch_directories": [],
+      "patch_count": 0,
+      "archive_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "allowed_untracked": []
+    },
+    {
+      "name": "chromium",
+      "checkout": "forks/chromium/src",
+      "base": "f405107495a07cb1bfcf687d4af8d91117098db6",
+      "branch": "150.0.7871.114-issue-26071814115751",
+      "expected_head": "476c8df1c2de6d65fdf8990d02b31c002d81a10b",
+      "expected_tree": "ad70b28349aac8c2b8083e61127c4f05953c8b50",
+      "patch_directories": [
+        "patches/chromium/patches/issue-26071814115751"
+      ],
+      "patch_count": 122,
+      "archive_sha256": "59ff364e27546dd3692381585b797b8f6dccc5bc274c2999fd169a84924a2997",
+      "allowed_untracked": [
+        "third_party/google_toolbox_for_mac/src/",
+        "third_party/ink_stroke_modeler/src/",
+        "third_party/libphonenumber/dist/"
+      ],
+      "nested_checkouts": [
+        {
+          "path": "third_party/google_toolbox_for_mac/src",
+          "expected_head": "42b12f10cd8342f5cb41a1e3e3a2f13fd9943b0d",
+          "expected_tree": "f736af6aa811d740ba798c2affbd865db1747039"
+        },
+        {
+          "path": "third_party/ink_stroke_modeler/src",
+          "expected_head": "da42d439389c90ec7574f0381ec53e7f5be0c2eb",
+          "expected_tree": "6a848bac1d3fb20e01b1449991b83fd4fe3d2521"
+        },
+        {
+          "path": "third_party/libphonenumber/dist",
+          "expected_head": "9d46308f313f2bf8dbce1dfd4f364633ca869ca7",
+          "expected_tree": "9c413a95028c747cfbcc75b976c75a9a00b3efc8"
+        }
+      ]
+    },
+    {
+      "name": "webkit",
+      "checkout": "forks/webkit/src",
+      "base": "e0ee95bcafc0c470dfce6db7cfd8ce708c6e9e5e",
+      "branch": "webkit-e0ee95bc-issue-26071814115751",
+      "expected_head": "6d219d5057124a5c432e9cd331c6b1fcd4ff5a78",
+      "expected_tree": "b3957cdcb5dda6a99e3547e19608a10419d19a62",
+      "patch_directories": [
+        "patches/webkit/patches/issue-26071814115751"
+      ],
+      "patch_count": 2,
+      "archive_sha256": "87edc26d71c61fd5595c2fbe56a6850a2d4906516f2d125c68cdc0817c89b8c4",
+      "allowed_untracked": []
+    },
+    {
+      "name": "ladybird",
+      "checkout": "forks/ladybird",
+      "base": "5baf8116efdeafc74f883e5c2bf9f12d9d80c608",
+      "branch": "5baf8116-issue-26071814115751",
+      "expected_head": "63ced9b469a213c161b6b1b9c74d9e9d024b7552",
+      "expected_tree": "4470e021f2df4eace2dce992c99f4913ae23e7f5",
+      "patch_directories": [
+        "patches/ladybird/patches/issue-26071814115751"
+      ],
+      "patch_count": 22,
+      "archive_sha256": "c981e048efbec1140a515369a399100e792d2c45227b2cb8d53f843e8b8ad9e2",
+      "allowed_untracked": []
+    }
+  ]
+}

@@ -1,0 +1,592 @@
+diff --git a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+index eef712771..a09f5edec 100644
+--- a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
++++ b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+@@ -553,6 +553,52 @@ func termsurf_present_iosurface_overlay(
+   }
+ }
+ 
++/// Exp4: present one Gecko multi-tile layer into the pane SurfaceView (CALayer + contentsRect).
++@_cdecl("termsurf_present_gecko_tile")
++// swiftlint:disable:next function_parameter_count
++func termsurf_present_gecko_tile(
++  _ paneIDPointer: UnsafePointer<CChar>?,
++  _ surfacePointer: UnsafeMutableRawPointer?,
++  _ layerID: UInt64,
++  _ generation: UInt64,
++  _ posX: Int32,
++  _ posY: Int32,
++  _ dispX: Int32,
++  _ dispY: Int32,
++  _ dispW: Int32,
++  _ dispH: Int32,
++  _ paneWPhys: Int32,
++  _ paneHPhys: Int32,
++  _ scale: Double
++) {
++  guard let paneIDPointer, let surfacePointer else { return }
++  let surface = Unmanaged<IOSurfaceRef>.fromOpaque(surfacePointer).takeUnretainedValue()
++  _ = Unmanaged.passUnretained(surface).retain()
++  let paneID = String(cString: paneIDPointer)
++  DispatchQueue.main.async {
++    guard let appDelegate = NSApplication.shared.delegate as? AppDelegate,
++          let uuid = UUID(uuidString: paneID),
++          let target = appDelegate.findSurface(forUUID: uuid)
++    else {
++      Unmanaged.passUnretained(surface).release()
++      return
++    }
++    target.presentGeckoMultiTile(
++      surface: surface,
++      layerID: layerID,
++      generation: generation,
++      posX: posX,
++      posY: posY,
++      dispX: dispX,
++      dispY: dispY,
++      dispW: dispW,
++      dispH: dispH,
++      paneWPhys: paneWPhys,
++      paneHPhys: paneHPhys,
++      scale: scale)
++  }
++}
++
+ @_cdecl("termsurf_open_split")
+ func termsurf_open_split(
+   _ paneIDPointer: UnsafePointer<CChar>?,
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 010fad7e6..d97ab87cb 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -260,6 +260,11 @@ extension Ghostty {
+     private var termsurfPressedBrowserKeys: Set<UInt16> = []
+     private var termsurfCursorType: Int64 = 0
+     private var termsurfMouseOverOverlay: Bool = false
++    /// Exp4: Gecko multi-tile layers keyed by compositor layer_id.
++    private var geckoMultiTileRoot: CALayer?
++    private var geckoMultiTileLayers: [UInt64: CALayer] = [:]
++    private var geckoMultiTileSurfaces: [UInt64: IOSurfaceRef] = [:]
++    private var geckoMultiTileGenerations: [UInt64: UInt64] = [:]
+ 
+     func termSurfGeometryIdentity(browserTabID: String = "unknown:appkit") -> String {
+       let windowID = window.map { String($0.windowNumber) } ?? "unknown:no-window"
+@@ -852,6 +857,104 @@ extension Ghostty {
+       return true
+     }
+ 
++    /// Exp4: composite one Gecko tile into the pane with position + display_rect crop.
++    // swiftlint:disable:next function_parameter_count
++    func presentGeckoMultiTile(
++      surface: IOSurfaceRef,
++      layerID: UInt64,
++      generation: UInt64,
++      posX: Int32,
++      posY: Int32,
++      dispX: Int32,
++      dispY: Int32,
++      dispW: Int32,
++      dispH: Int32,
++      paneWPhys: Int32,
++      paneHPhys: Int32,
++      scale: Double
++    ) {
++      dispatchPrecondition(condition: .onQueue(.main))
++      wantsLayer = true
++      guard let surfaceLayer = layer else {
++        Unmanaged.passUnretained(surface).release()
++        return
++      }
++      let sc = scale > 0 ? scale : (window?.backingScaleFactor ?? 2.0)
++      let paneW = paneWPhys > 0 ? CGFloat(paneWPhys) / sc : bounds.width
++      let paneH = paneHPhys > 0 ? CGFloat(paneHPhys) / sc : bounds.height
++
++      CATransaction.begin()
++      CATransaction.setDisableActions(true)
++      defer { CATransaction.commit() }
++
++      let root =
++        geckoMultiTileRoot
++        ?? {
++          let layer = CALayer()
++          layer.name = "GeckoMultiTileRoot"
++          layer.isGeometryFlipped = true
++          layer.anchorPoint = .zero
++          layer.masksToBounds = true
++          surfaceLayer.addSublayer(layer)
++          geckoMultiTileRoot = layer
++          return layer
++        }()
++      root.frame = CGRect(x: 0, y: 0, width: max(paneW, bounds.width), height: max(paneH, bounds.height))
++      root.masksToBounds = true
++
++      if let prev = geckoMultiTileSurfaces[layerID], prev !== surface {
++        Unmanaged.passUnretained(prev).release()
++      }
++      if let existingGen = geckoMultiTileGenerations[layerID], generation < existingGen {
++        Unmanaged.passUnretained(surface).release()
++        return
++      }
++      geckoMultiTileSurfaces[layerID] = surface
++      geckoMultiTileGenerations[layerID] = generation
++
++      let tileLayer =
++        geckoMultiTileLayers[layerID]
++        ?? {
++          let layer = CALayer()
++          layer.name = "GeckoTile-\(layerID)"
++          layer.anchorPoint = .zero
++          layer.contentsGravity = .resize
++          root.addSublayer(layer)
++          geckoMultiTileLayers[layerID] = layer
++          return layer
++        }()
++
++      let surfW = CGFloat(IOSurfaceGetWidth(surface))
++      let surfH = CGFloat(IOSurfaceGetHeight(surface))
++      let dw = dispW > 0 ? CGFloat(dispW) : surfW
++      let dh = dispH > 0 ? CGFloat(dispH) : surfH
++      let dx = CGFloat(dispX)
++      let dy = CGFloat(dispY)
++      // World origin = position + display origin (Gecko native-layer model), DIP.
++      let x = (CGFloat(posX) + dx) / sc
++      let y = (CGFloat(posY) + dy) / sc
++      let w = dw / sc
++      let h = dh / sc
++      // Geometry flipped root: y grows down from top in our flipped layer.
++      tileLayer.frame = CGRect(x: x, y: y, width: max(w, 0.5), height: max(h, 0.5))
++      tileLayer.contents = surface
++      tileLayer.contentsScale = sc
++      if surfW > 0, surfH > 0, dw > 0, dh > 0 {
++        let nx = dx / surfW
++        let ny = dy / surfH
++        let nw = dw / surfW
++        let nh = dh / surfH
++        // CALayer contentsRect is bottom-left; Gecko display is top-left.
++        let caY = 1.0 - ny - nh
++        tileLayer.contentsRect = CGRect(x: nx, y: caY, width: nw, height: nh)
++      } else {
++        tileLayer.contentsRect = CGRect(x: 0, y: 0, width: 1, height: 1)
++      }
++      fputs(
++        "Gecko multi-tile present layer_id=\(layerID) gen=\(generation) frame=\(NSStringFromRect(tileLayer.frame)) contentsRect=\(NSStringFromRect(tileLayer.contentsRect)) pane=\(Int(paneW))x\(Int(paneH))\n",
++        stderr)
++    }
++
+     // swiftlint:disable:next function_parameter_count
+     func presentTermSurfIOSurfaceOverlay(
+       surface: IOSurfaceRef,
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 8690ff214..13eb1586c 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -9,6 +9,7 @@ const c = @cImport({
+     @cInclude("unistd.h");
+     @cInclude("termsurf.pb-c.h");
+     @cInclude("termsurf_render_channel.h");
++    @cInclude("termsurf_gecko_tiles.h");
+ });
+ 
+ const log = std.log.scoped(.termsurf);
+@@ -169,6 +170,40 @@ const termsurf_present_iosurface_overlay = if (builtin.is_test) testTermsurfPres
+     generation: u64,
+ ) callconv(.c) void, .{ .name = "termsurf_present_iosurface_overlay" });
+ 
++const termsurf_present_gecko_tile = if (builtin.is_test) testTermsurfPresentGeckoTile else @extern(*const fn (
++    pane_id: [*:0]const u8,
++    surface: ?*anyopaque,
++    layer_id: u64,
++    generation: u64,
++    pos_x: i32,
++    pos_y: i32,
++    disp_x: i32,
++    disp_y: i32,
++    disp_w: i32,
++    disp_h: i32,
++    pane_w_phys: i32,
++    pane_h_phys: i32,
++    scale: f64,
++) callconv(.c) void, .{ .name = "termsurf_present_gecko_tile" });
++
++fn testTermsurfPresentGeckoTile(
++    pane_id: [*:0]const u8,
++    surface: ?*anyopaque,
++    layer_id: u64,
++    generation: u64,
++    pos_x: i32,
++    pos_y: i32,
++    disp_x: i32,
++    disp_y: i32,
++    disp_w: i32,
++    disp_h: i32,
++    pane_w_phys: i32,
++    pane_h_phys: i32,
++    scale: f64,
++) callconv(.c) void {
++    _ = .{ pane_id, surface, layer_id, generation, pos_x, pos_y, disp_x, disp_y, disp_w, disp_h, pane_w_phys, pane_h_phys, scale };
++}
++
+ const termsurf_clear_overlay = if (builtin.is_test) testTermsurfClearOverlay else @extern(*const fn (
+     pane_id: [*:0]const u8,
+ ) callconv(.c) void, .{ .name = "termsurf_clear_overlay" });
+@@ -4478,6 +4513,207 @@ fn removeTabLookupForPane(profile: []const u8, browser: []const u8, tab_id: i64,
+     }
+ }
+ 
++const GeckoTileHostCtx = struct {
++    host: ?*c.tsgt_host_t = null,
++    profile: [max_profile_len]u8 = undefined,
++    profile_len: usize = 0,
++    browser: [max_browser_len]u8 = undefined,
++    browser_len: usize = 0,
++    pane_id: [max_pane_id_len]u8 = undefined,
++    pane_id_len: usize = 0,
++    stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
++};
++
++// Thread owns GeckoTileHostCtx; no global registry needed for Exp4 v1.
++
++/// C present callback: log tiles + bridge to SurfaceView multi-tile present.
++export fn termsurfGeckoTilePresent(
++    ctx: ?*anyopaque,
++    tiles: ?*const c.tsgt_tile_t,
++    count: c_int,
++    pane_w_phys: c_int,
++    pane_h_phys: c_int,
++    scale: f64,
++) callconv(.c) void {
++    const host_ctx: *GeckoTileHostCtx = @ptrCast(@alignCast(ctx orelse return));
++    if (count <= 0) return;
++    log.info(
++        "gecko_tiles_present=1 count={} pane_phys={}x{} scale={d:.1} profile={s} browser={s}",
++        .{
++            count,
++            pane_w_phys,
++            pane_h_phys,
++            scale,
++            host_ctx.profile[0..host_ctx.profile_len],
++            host_ctx.browser[0..host_ctx.browser_len],
++        },
++    );
++    // Resolve pane_id for this gecko server and present via SurfaceView bridge.
++    state_mutex.lock();
++    var pane_z_buf: [max_pane_id_len + 1]u8 = undefined;
++    var have_pane = false;
++    if (host_ctx.pane_id_len > 0) {
++        @memcpy(pane_z_buf[0..host_ctx.pane_id_len], host_ctx.pane_id[0..host_ctx.pane_id_len]);
++        pane_z_buf[host_ctx.pane_id_len] = 0;
++        have_pane = true;
++    } else {
++        // Find first in-use pane for this profile/browser
++        for (&panes) |*pane| {
++            if (!pane.in_use) continue;
++            if (std.mem.eql(u8, pane.profileName(), host_ctx.profile[0..host_ctx.profile_len]) and
++                std.mem.eql(u8, pane.browserName(), host_ctx.browser[0..host_ctx.browser_len]))
++            {
++                const pid = pane.paneId();
++                @memcpy(pane_z_buf[0..pid.len], pid);
++                pane_z_buf[pid.len] = 0;
++                host_ctx.pane_id_len = pid.len;
++                @memcpy(host_ctx.pane_id[0..pid.len], pid);
++                have_pane = true;
++                break;
++            }
++        }
++    }
++    state_mutex.unlock();
++    if (!have_pane) return;
++    // Present every live tile into SurfaceView multi-tile layer stack.
++    if (tiles) |tptr| {
++        const arr: [*]const c.tsgt_tile_t = @ptrCast(tptr);
++        const n: usize = @intCast(count);
++        var i: usize = 0;
++        while (i < n) : (i += 1) {
++            const t = arr[i];
++            if (t.live == 0 or t.iosurface == null) continue;
++            termsurf_present_gecko_tile(
++                pane_z_buf[0..host_ctx.pane_id_len :0].ptr,
++                t.iosurface,
++                t.layer_id,
++                t.generation,
++                t.pos_x,
++                t.pos_y,
++                t.disp_x,
++                t.disp_y,
++                t.disp_w,
++                t.disp_h,
++                pane_w_phys,
++                pane_h_phys,
++                scale,
++            );
++        }
++    }
++}
++
++fn geckoTileHostThread(ctx: *GeckoTileHostCtx) void {
++    defer {
++        if (ctx.host) |h| {
++            var st: c.tsgt_stats_t = std.mem.zeroes(c.tsgt_stats_t);
++            c.tsgt_host_stats(h, &st);
++            log.info(
++                "gecko_tile_host_final_stats=1 updates={} acquired={} released={} acked={} removes={} max_live={} gen_monotonic_ok={} partial_tile_ok={} band_mask=0x{x} marker_changes={} exporter_pid={}",
++                .{
++                    st.updates,
++                    st.acquired,
++                    st.released,
++                    st.acked,
++                    st.removes,
++                    st.max_live,
++                    st.gen_monotonic_ok,
++                    st.partial_tile_ok,
++                    st.band_mask,
++                    st.marker_changes,
++                    st.exporter_pid,
++                },
++            );
++            c.tsgt_host_clear(h);
++            c.tsgt_host_stats(h, &st);
++            log.info(
++                "gecko_tile_host_after_clear=1 live={} acquired={} released={} acked={}",
++                .{ c.tsgt_host_live_count(h), st.acquired, st.released, st.acked },
++            );
++            c.tsgt_host_destroy(h);
++            ctx.host = null;
++        }
++        std.heap.c_allocator.destroy(ctx);
++    }
++    const host = ctx.host orelse return;
++    log.info("gecko_tile_host_thread=1 service={s}", .{c.tsgt_host_service(host)});
++    var sample_ticks: u32 = 0;
++    var idle_ms: u32 = 0;
++    var last_updates: u64 = 0;
++    while (!ctx.stop.load(.seq_cst)) {
++        const n = c.tsgt_host_poll(host, 100);
++        sample_ticks += 1;
++        var st: c.tsgt_stats_t = std.mem.zeroes(c.tsgt_stats_t);
++        c.tsgt_host_stats(host, &st);
++        if (n > 0 or st.updates != last_updates) {
++            idle_ms = 0;
++            last_updates = st.updates;
++        } else if (st.updates > 0) {
++            idle_ms += 100;
++        }
++        // Producer gone / stream idle: clear tile map for live=0 accounting.
++        if (idle_ms >= 3000) {
++            log.info("gecko_tile_host_idle_clear=1 updates={}", .{st.updates});
++            break;
++        }
++        if (sample_ticks % 25 == 0) {
++            c.tsgt_host_sample(host);
++            log.info(
++                "gecko_tile_host_stats=1 updates={} max_live={} acquired={} released={} acked={} live={} gen_monotonic_ok={} partial_tile_ok={}",
++                .{
++                    st.updates,
++                    st.max_live,
++                    st.acquired,
++                    st.released,
++                    st.acked,
++                    c.tsgt_host_live_count(host),
++                    st.gen_monotonic_ok,
++                    st.partial_tile_ok,
++                },
++            );
++        }
++    }
++}
++
++fn startGeckoTileHostThread(
++    profile: []const u8,
++    browser: []const u8,
++    service: []const u8,
++    child_pid: std.process.Child.Id,
++) void {
++    _ = child_pid;
++    var service_z_buf: [max_render_service_name_len + 1]u8 = undefined;
++    const service_z = std.fmt.bufPrintZ(&service_z_buf, "{s}", .{service}) catch {
++        log.warn("gecko tile host skipped: service name too long", .{});
++        return;
++    };
++    const ctx = std.heap.c_allocator.create(GeckoTileHostCtx) catch {
++        log.warn("gecko tile host ctx alloc failed", .{});
++        return;
++    };
++    ctx.* = .{};
++    if (!copyText(&ctx.profile, &ctx.profile_len, profile) or
++        !copyText(&ctx.browser, &ctx.browser_len, browser))
++    {
++        std.heap.c_allocator.destroy(ctx);
++        return;
++    }
++    const host = c.tsgt_host_create(service_z.ptr, termsurfGeckoTilePresent, ctx);
++    if (host == null) {
++        log.warn("gecko tile host create failed service={s}", .{service});
++        std.heap.c_allocator.destroy(ctx);
++        return;
++    }
++    ctx.host = host;
++    const thread = std.Thread.spawn(.{}, geckoTileHostThread, .{ctx}) catch |err| {
++        c.tsgt_host_destroy(host);
++        std.heap.c_allocator.destroy(ctx);
++        log.warn("gecko tile host thread spawn failed err={}", .{err});
++        return;
++    };
++    thread.detach();
++    log.info("gecko_tile_host_started=1 service={s} profile={s}", .{ service, profile });
++}
++
+ fn spawnBrowserProcess(
+     profile_z: [:0]const u8,
+     browser_name_z: [:0]const u8,
+@@ -4503,24 +4739,28 @@ fn spawnBrowserProcess(
+     ) orelse return null;
+ 
+     var render_control_port: c.tsrc_port_t = 0;
++    // Ladybird only: tsrc side-channel. Gecko multi-tile uses tsgt bootstrap
++    // (Exp4) started after spawn — do not tsrc_register gecko tile names.
+     if (spawn_argv.renderService()) |render_service| {
+-        var render_service_z_buf: [max_render_service_name_len + 1]u8 = undefined;
+-        const render_service_z = std.fmt.bufPrintZ(&render_service_z_buf, "{s}", .{render_service}) catch {
+-            log.warn("browser render side-channel skipped: service name too long browser={s}", .{browser_name_z});
+-            return null;
+-        };
+-        const result = c.tsrc_register_service(render_service_z.ptr, &render_control_port);
+-        if (result != c.TSRC_OK) {
+-            log.warn(
+-                "browser render side-channel registration failed browser={s} service={s} result={s}",
+-                .{ browser_name_z, render_service, cStringConst(c.tsrc_result_name(result)) },
+-            );
+-            render_control_port = 0;
+-        } else {
+-            log.info(
+-                "browser render side-channel registered browser={s} service={s}",
+-                .{ browser_name_z, render_service },
+-            );
++        if (std.mem.eql(u8, browser_name_z, "ladybird")) {
++            var render_service_z_buf: [max_render_service_name_len + 1]u8 = undefined;
++            const render_service_z = std.fmt.bufPrintZ(&render_service_z_buf, "{s}", .{render_service}) catch {
++                log.warn("browser render side-channel skipped: service name too long browser={s}", .{browser_name_z});
++                return null;
++            };
++            const result = c.tsrc_register_service(render_service_z.ptr, &render_control_port);
++            if (result != c.TSRC_OK) {
++                log.warn(
++                    "browser render side-channel registration failed browser={s} service={s} result={s}",
++                    .{ browser_name_z, render_service, cStringConst(c.tsrc_result_name(result)) },
++                );
++                render_control_port = 0;
++            } else {
++                log.info(
++                    "browser render side-channel registered browser={s} service={s}",
++                    .{ browser_name_z, render_service },
++                );
++            }
+         }
+     }
+ 
+@@ -4555,6 +4795,24 @@ fn spawnBrowserProcess(
+                 .{ browser_name_z, framework_path },
+             );
+         }
++        if (std.mem.eql(u8, browser_name_z, "gecko")) {
++            if (spawn_argv.renderService()) |render_service| {
++                env.put("ASTROHACKER_GECKO_SURFACE_SERVICE", render_service) catch |err| {
++                    log.warn("gecko surface service env skipped err={}", .{err});
++                };
++                // Epoch+high initial enables continuous export without rebuild.
++                env.put("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "1") catch {};
++                env.put("ASTROHACKER_GECKO_SURFACE_INITIAL_TARGET", "1000000") catch {};
++                env.put("ASTROHACKER_GECKO_SURFACE_CONTINUOUS", "1") catch {};
++                env.put("ASTROHACKER_GECKO_SURFACE_PROBE", "1") catch {};
++                env.put("ASTROHACKER_GECKO_VISIBLE", "1") catch {};
++                env.put("ASTROHACKER_GECKO_HOLD", "1") catch {};
++                log.info(
++                    "browser spawn gecko tile service env service={s}",
++                    .{render_service},
++                );
++            }
++        }
+         child.env_map = env;
+     }
+     traceBrowserStartup(
+@@ -4605,13 +4863,13 @@ fn spawnBrowserProcess(
+         .pid = child.id,
+         .render_control_port = render_control_port,
+     };
+-    if (render_control_port != 0) {
+-        if (spawn_argv.renderService()) |render_service| {
+-            if (!copyText(&result.render_service_name, &result.render_service_name_len, render_service)) {
+-                c.tsrc_destroy_receive_port(render_control_port);
+-                log.warn("browser render side-channel skipped: service name copy failed browser={s}", .{browser_name_z});
+-                result.render_control_port = 0;
+-            }
++    if (spawn_argv.renderService()) |render_service| {
++        _ = copyText(&result.render_service_name, &result.render_service_name_len, render_service);
++        if (render_control_port != 0) {
++            // Ladybird tsrc path only.
++        } else if (std.mem.eql(u8, browser_name_z, "gecko")) {
++            // Exp4: start multi-tile bootstrap host after spawn (service name in env).
++            startGeckoTileHostThread(profile_z, browser_name_z, render_service, child.id);
+         }
+     }
+     return result;
+@@ -4656,9 +4914,14 @@ fn buildBrowserSpawnArgv(
+             log.warn("browser spawn skipped: gecko argv overflow", .{});
+             return null;
+         }
++        // Exp4: record Ghostboard-owned multi-tile bootstrap service name for env
++        // (not --render-surface-service; that is Ladybird tsrc). Present is multi-tile.
++        if (buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name)) |service_name| {
++            out.render_service_len = service_name.len;
++        }
+         log.info(
+-            "browser spawn argv gecko-safe browser={s} path={s}",
+-            .{ browser_name, browser_executable },
++            "browser spawn argv gecko-safe browser={s} path={s} tile_service={s}",
++            .{ browser_name, browser_executable, if (out.renderService()) |s| s else "" },
+         );
+         return out.slice();
+     }
+@@ -4700,6 +4963,9 @@ fn buildBrowserSpawnArgv(
+ }
+ 
+ fn renderSurfaceSideChannelBrowser(browser: []const u8) bool {
++    // Ladybird only: tsrc single-surface side channel registration/receive.
++    // Gecko multi-tile uses a separate bootstrap service name (see gecko_safe
++    // argv path + ASTROHACKER_GECKO_SURFACE_SERVICE env) — Exp4.
+     return std.mem.eql(u8, browser, "ladybird");
+ }
+ 
+@@ -4708,6 +4974,13 @@ fn buildRenderSurfaceServiceName(buf: []u8, ghostboard_pid: i32, profile: []cons
+     var browser_buf: [max_render_service_component_len]u8 = undefined;
+     const safe_profile = sanitizeRenderServiceComponent(&profile_buf, profile);
+     const safe_browser = sanitizeRenderServiceComponent(&browser_buf, browser);
++    if (std.mem.eql(u8, browser, "gecko")) {
++        return std.fmt.bufPrint(
++            buf,
++            "com.astrohacker.terminal.geckod.tiles.{d}.{s}.{s}",
++            .{ ghostboard_pid, safe_profile, safe_browser },
++        ) catch null;
++    }
+     return std.fmt.bufPrint(
+         buf,
+         "com.astrohacker.terminal.ladybirdd.render.{d}.{s}.{s}",
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index bddfef7ec..7ca7d3705 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -432,6 +432,15 @@ pub fn add(
+         .file = b.path("../../rust/render-channel/termsurf_render_channel.c"),
+         .flags = &.{"-std=c99"},
+     });
++    // Exp4: Gecko multi-tile Mach host (bootstrap + IOSurface tile map).
++    step.addCSourceFile(.{
++        .file = b.path("../../rust/render-channel/termsurf_gecko_tiles.c"),
++        .flags = &.{"-std=c99"},
++    });
++    if (step.rootModuleTarget().os.tag.isDarwin()) {
++        step.linkFramework("IOSurface");
++        step.linkFramework("CoreFoundation");
++    }
+     if (step.rootModuleTarget().os.tag == .linux) {
+         step.addIncludePath(b.path("src/apprt/gtk"));
+     }

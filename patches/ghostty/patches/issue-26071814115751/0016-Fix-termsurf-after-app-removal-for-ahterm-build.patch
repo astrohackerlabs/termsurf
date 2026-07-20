@@ -1,0 +1,69 @@
+From bf2629254f9dcb7fa8d55d89434921ba76b34af3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 08:36:08 -0500
+Subject: [PATCH 16/17] Fix termsurf after app removal for ahterm build
+
+Restore testSetPane for non-app host tests, drop stopAllApps shutdown
+hook, and remove leftover app readiness test that referenced deleted
+helpers so AHTKit compiles again.
+---
+ src/apprt/termsurf.zig | 32 +++++++++++++++++++++-----------
+ 1 file changed, 21 insertions(+), 11 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index bff5c5a2c..4591aab02 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -914,8 +914,6 @@ pub fn stop() void {
+     for (client_threads) |maybe_thread| {
+         if (maybe_thread) |t| t.join();
+     }
+-    stopAllApps();
+-
+     if (socket_path_len > 0) {
+         const path = socket_path_buf[0..socket_path_len];
+         std.posix.unlink(path) catch {};
+@@ -5858,15 +5856,6 @@ test "termsurf create devtools tab snapshots tracked color scheme" {
+     }
+ }
+ 
+-test "termsurf app readiness error includes backend stderr when available" {
+-    const testing = std.testing;
+-
+-    var error_buf: [256]u8 = undefined;
+-    try testing.expect(copyReadinessError(&error_buf, .exited, .{ .Exited = 1 }, "deno failed to start"));
+-    const error_text = std.mem.sliceTo(error_buf[0..], 0);
+-    try testing.expect(std.mem.indexOf(u8, error_text, "exit=1") != null);
+-    try testing.expect(std.mem.indexOf(u8, error_text, "deno failed to start") != null);
+-}
+ 
+ test "termsurf app health response accepts any 2xx status" {
+     const testing = std.testing;
+@@ -6168,3 +6157,24 @@ test "termsurf browser disconnect clears navigation capabilities only for affect
+     try testing.expectEqual(@as(std.posix.fd_t, -1), servers[0].attached_fd);
+     try testing.expectEqual(browser_b[0], servers[1].attached_fd);
+ }
++
++fn testSetPane(
++    index: usize,
++    pane_id: []const u8,
++    profile: []const u8,
++    browser: []const u8,
++    url: []const u8,
++    tui_fd: std.posix.fd_t,
++) !void {
++    panes[index] = .{};
++    try testingCopyText(&panes[index].pane_id, &panes[index].pane_id_len, pane_id);
++    try testingCopyText(&panes[index].profile, &panes[index].profile_len, profile);
++    try testingCopyText(&panes[index].browser, &panes[index].browser_len, browser);
++    try testingCopyText(&panes[index].url, &panes[index].url_len, url);
++    panes[index].in_use = true;
++    panes[index].width = 80;
++    panes[index].height = 24;
++    panes[index].browsing = true;
++    panes[index].tui_fd = tui_fd;
++}
++
+-- 
+2.50.1 (Apple Git-155)
+

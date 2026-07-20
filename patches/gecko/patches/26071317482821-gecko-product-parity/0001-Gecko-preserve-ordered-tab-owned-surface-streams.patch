@@ -1,0 +1,286 @@
+From ee847d0c20559a720d6719ea2096c11706b58766 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 14:41:50 -0500
+Subject: [PATCH] Gecko: preserve ordered tab-owned surface streams
+
+---
+ gfx/layers/AstrohackerSurfaceExporterMac.h   |   8 ++
+ gfx/layers/AstrohackerSurfaceExporterMac.mm  | 129 ++++++++++++++++++-
+ gfx/layers/NativeLayerRootRemoteMacParent.h  |   1 +
+ gfx/layers/NativeLayerRootRemoteMacParent.mm |   4 +
+ 4 files changed, 138 insertions(+), 4 deletions(-)
+
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.h b/gfx/layers/AstrohackerSurfaceExporterMac.h
+index ffe0bcd25361..2a2262e95c84 100644
+--- a/gfx/layers/AstrohackerSurfaceExporterMac.h
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.h
+@@ -5,6 +5,9 @@
+ #ifndef mozilla_layers_AstrohackerSurfaceExporterMac_h
+ #define mozilla_layers_AstrohackerSurfaceExporterMac_h
+ 
++#include <cstddef>
++#include <cstdint>
++
+ #include "mozilla/gfx/Point.h"
+ #include "mozilla/gfx/Rect.h"
+ 
+@@ -22,6 +25,11 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+                                    const gfx::IntPoint& aPosition,
+                                    const gfx::IntRect& aDisplayRect);
+ 
++// Publish the ordered native-layer set after a compositor commit. The
++// receiver uses this to remove destroyed/replaced tiles and to reproduce the
++// same back-to-front CALayer order as Firefox's own window.
++void AstrohackerMaybeExportLayerSet(const uint64_t* aLayerIds, size_t aCount);
++
+ }  // namespace mozilla::layers
+ 
+ #endif  // mozilla_layers_AstrohackerSurfaceExporterMac_h
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.mm b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+index 0c54dad1be48..041b3ce756c5 100644
+--- a/gfx/layers/AstrohackerSurfaceExporterMac.mm
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+@@ -14,6 +14,7 @@
+ #include <unistd.h>
+ 
+ #include <atomic>
++#include <algorithm>
+ #include <chrono>
+ #include <cstddef>
+ #include <unordered_map>
+@@ -25,6 +26,8 @@ namespace {
+ 
+ constexpr mach_msg_id_t kAstrohackerSurfaceMessageId = 0x41534847;
+ constexpr mach_msg_id_t kAstrohackerSurfaceAckMessageId = 0x41534841;
++constexpr mach_msg_id_t kAstrohackerLayerSetMessageId = 0x4153484c;
++constexpr size_t kAstrohackerMaxLayerCount = 64;
+ constexpr auto kTokenTimeout = std::chrono::seconds(5);
+ 
+ struct AstrohackerSurfaceMessage {
+@@ -41,6 +44,7 @@ struct AstrohackerSurfaceMessage {
+   double deviceScale;
+   int32_t exporterPid;
+   char exporterRole[16];
++  uint64_t streamId;
+   uint64_t layerId;
+   int32_t positionX;
+   int32_t positionY;
+@@ -62,6 +66,14 @@ struct AstrohackerSurfaceAckMessage {
+   mach_msg_trailer_t trailer;
+ };
+ 
++struct AstrohackerLayerSetMessage {
++  mach_msg_header_t header;
++  uint64_t streamId;
++  int32_t exporterPid;
++  uint32_t count;
++  uint64_t layerIds[kAstrohackerMaxLayerCount];
++};
++
+ struct LiveSurface {
+   IOSurfaceRef surface;
+   uint64_t generation;
+@@ -79,6 +91,7 @@ uint64_t sTokenReleased = 0;
+ uint64_t sTokenSent = 0;
+ uint64_t sTokenAcked = 0;
+ std::unordered_map<uint64_t, LiveSurface> sLiveSurfaces;
++std::vector<uint64_t> sLastLayerSet;
+ 
+ uint64_t ExportTarget() {
+   static uint64_t target = [] {
+@@ -97,6 +110,14 @@ uint64_t InitialExportTarget() {
+   return target;
+ }
+ 
++uint64_t SurfaceStreamId() {
++  static uint64_t streamId = [] {
++    const char* value = getenv("ASTROHACKER_GECKO_SURFACE_STREAM_ID");
++    return value ? strtoull(value, nullptr, 10) : 0;
++  }();
++  return streamId;
++}
++
+ mach_port_t AckPort() {
+   if (sAckPort != MACH_PORT_NULL) {
+     return sAckPort;
+@@ -282,14 +303,56 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+   if (receiver == MACH_PORT_NULL) {
+     return;
+   }
++  const uint64_t streamId = SurfaceStreamId();
++  if (!streamId) {
++    fprintf(stderr,
++            "AstrohackerSurface export=0 reason=missing_stream_id "
++            "role=parent pid=%d\n",
++            getpid());
++    return;
++  }
+ 
+   DrainAcknowledgements();
++  // Product continuous mode (Exp4): export while SURFACE_SERVICE is live
++  // without requiring SURFACE_PROBE epoch sequencing. Optional control file
++  // (ASTROHACKER_GECKO_SURFACE_CONTROL_PATH) supplies resize_epoch + expected
++  // size written by ah-geckod on TermSurf Resize.
++  const bool continuous =
++      getenv("ASTROHACKER_GECKO_SURFACE_CONTINUOUS") &&
++      getenv("ASTROHACKER_GECKO_SURFACE_CONTINUOUS")[0] == '1';
++  const char* controlPath = getenv("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH");
++  if (controlPath && controlPath[0]) {
++    FILE* cf = fopen(controlPath, "r");
++    if (cf) {
++      unsigned long epoch = 0, ew = 0, eh = 0;
++      if (fscanf(cf, "epoch=%lu width=%lu height=%lu", &epoch, &ew, &eh) >= 1) {
++        char buf[64];
++        snprintf(buf, sizeof(buf), "%lu", epoch);
++        setenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", buf, 1);
++        if (ew > 0) {
++          snprintf(buf, sizeof(buf), "%lu", ew);
++          setenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_WIDTH", buf, 1);
++        }
++        if (eh > 0) {
++          snprintf(buf, sizeof(buf), "%lu", eh);
++          setenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_HEIGHT", buf, 1);
++        }
++      }
++      fclose(cf);
++    }
++  }
+   const char* epochValue =
+       getenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH");
+   uint32_t resizeEpoch = epochValue ? strtoul(epochValue, nullptr, 10) : 0;
+-  if (!resizeEpoch ||
+-      (resizeEpoch == 1 && sTokenSent >= InitialExportTarget())) {
+-    return;
++  if (!continuous) {
++    if (!resizeEpoch ||
++        (resizeEpoch == 1 && sTokenSent >= InitialExportTarget())) {
++      return;
++    }
++  } else if (!resizeEpoch) {
++    // Continuous product path defaults epoch=1 so messages carry a generation.
++    resizeEpoch = 1;
++    setenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "1", 0);
+   }
+   uint64_t target = ExportTarget();
+   if (target && sTokenSent >= target) {
+@@ -353,6 +416,7 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+   message.deviceScale = DeviceScale();
+   message.exporterPid = getpid();
+   strncpy(message.exporterRole, "parent", sizeof(message.exporterRole) - 1);
++  message.streamId = streamId;
+   message.layerId = aLayerId;
+   message.positionX = aPosition.x;
+   message.positionY = aPosition.y;
+@@ -394,12 +458,14 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+           "NativeLayerRootRemoteMacParent::HandleChangedSurface role=parent "
+           "pid=%d generation=%llu token=%llu surface_id=%u width=%u "
+           "height=%u scale=%.1f pixel_format=0x%08x layer_id=%llu "
++          "stream_id=%llu "
+           "position=%d,%d display=%d,%d,%d,%d resize_epoch=%u "
+           "expected=%ux%u handoff_release=1 sent=%llu\n",
+           getpid(), static_cast<unsigned long long>(generation),
+           static_cast<unsigned long long>(token), surfaceId, message.width,
+           message.height, message.deviceScale, message.pixelFormat,
+-          static_cast<unsigned long long>(message.layerId), message.positionX,
++          static_cast<unsigned long long>(message.layerId),
++          static_cast<unsigned long long>(message.streamId), message.positionX,
+           message.positionY, message.displayX, message.displayY,
+           message.displayWidth, message.displayHeight, message.resizeEpoch,
+           message.expectedWidth, message.expectedHeight,
+@@ -416,4 +482,59 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+   }
+ }
+ 
++void AstrohackerMaybeExportLayerSet(const uint64_t* aLayerIds, size_t aCount) {
++  if (aCount > kAstrohackerMaxLayerCount || (aCount > 0 && !aLayerIds)) {
++    fprintf(stderr,
++            "AstrohackerSurface layer_set=0 reason=invalid_count count=%zu "
++            "max=%zu\n",
++            aCount, kAstrohackerMaxLayerCount);
++    return;
++  }
++  if (sLastLayerSet.size() == aCount &&
++      std::equal(sLastLayerSet.begin(), sLastLayerSet.end(), aLayerIds)) {
++    return;
++  }
++
++  mach_port_t receiver = ReceiverPort();
++  const uint64_t streamId = SurfaceStreamId();
++  if (receiver == MACH_PORT_NULL || !streamId) {
++    return;
++  }
++
++  AstrohackerLayerSetMessage message = {};
++  message.header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
++  message.header.msgh_size = sizeof(message);
++  message.header.msgh_remote_port = receiver;
++  message.header.msgh_local_port = MACH_PORT_NULL;
++  message.header.msgh_id = kAstrohackerLayerSetMessageId;
++  message.streamId = streamId;
++  message.exporterPid = getpid();
++  message.count = static_cast<uint32_t>(aCount);
++  if (aCount > 0) {
++    std::copy_n(aLayerIds, aCount, message.layerIds);
++  }
++
++  kern_return_t kr = mach_msg(&message.header,
++                              MACH_SEND_MSG | MACH_SEND_TIMEOUT,
++                              message.header.msgh_size, 0, MACH_PORT_NULL, 0,
++                              MACH_PORT_NULL);
++  if (kr != KERN_SUCCESS) {
++    fprintf(stderr,
++            "AstrohackerSurface layer_set=0 reason=mach_send stream_id=%llu "
++            "count=%zu kr=%d\n",
++            static_cast<unsigned long long>(streamId), aCount, kr);
++    return;
++  }
++
++  if (aCount > 0) {
++    sLastLayerSet.assign(aLayerIds, aLayerIds + aCount);
++  } else {
++    sLastLayerSet.clear();
++  }
++  fprintf(stderr,
++          "AstrohackerSurface layer_set=1 stream_id=%llu count=%zu "
++          "exporter_pid=%d\n",
++          static_cast<unsigned long long>(streamId), aCount, getpid());
++}
++
+ }  // namespace mozilla::layers
+diff --git a/gfx/layers/NativeLayerRootRemoteMacParent.h b/gfx/layers/NativeLayerRootRemoteMacParent.h
+index 484a45d00f59..734d99488b6f 100644
+--- a/gfx/layers/NativeLayerRootRemoteMacParent.h
++++ b/gfx/layers/NativeLayerRootRemoteMacParent.h
+@@ -50,6 +50,7 @@ class NativeLayerRootRemoteMacParent final : public NativeLayerRemoteParent {
+   RefPtr<NativeLayerRootCA> mRealNativeLayerRoot;
+   UniquePtr<NativeLayerRootSnapshotter> mSnapshotter;
+   nsTHashMap<uint64_t, RefPtr<NativeLayer>> mKnownLayers;
++  nsTArray<uint64_t> mActiveLayerIDs;
+ };
+ 
+ }  // namespace layers
+diff --git a/gfx/layers/NativeLayerRootRemoteMacParent.mm b/gfx/layers/NativeLayerRootRemoteMacParent.mm
+index 653e4412e873..64445b1eeec0 100644
+--- a/gfx/layers/NativeLayerRootRemoteMacParent.mm
++++ b/gfx/layers/NativeLayerRootRemoteMacParent.mm
+@@ -83,6 +83,8 @@ NativeLayerRootRemoteMacParent::RecvCommitNativeLayerCommands(
+   }
+ 
+   mRealNativeLayerRoot->CommitToScreen();
++  AstrohackerMaybeExportLayerSet(mActiveLayerIDs.Elements(),
++                                 mActiveLayerIDs.Length());
+ 
+   return IPC_OK();
+ }
+@@ -157,6 +159,8 @@ void NativeLayerRootRemoteMacParent::HandleLayerDestroyed(uint64_t aID) {
+ 
+ void NativeLayerRootRemoteMacParent::HandleSetLayers(
+     const nsTArray<uint64_t>& aIDs) {
++  mActiveLayerIDs.Clear();
++  mActiveLayerIDs.AppendElements(aIDs);
+   nsTArray<RefPtr<NativeLayer>> layers;
+   for (auto ID : aIDs) {
+     auto entry = mKnownLayers.MaybeGet(ID);
+-- 
+2.54.0
+

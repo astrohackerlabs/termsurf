@@ -1,0 +1,53 @@
+From 16421c42403c8a36bcf5d960b1fed0721377d824 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 17:02:34 -0500
+Subject: [PATCH 46/90] Externalize PDF plugin embeds
+
+A trusted frame held out a key,
+The plugin took the proper hall.
+No painted page arrived just yet,
+But now the right renderer takes the call.
+---
+ .../ts_content_renderer_client.cc             | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index 7390b75a7f..b98b5e4937 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -7,6 +7,7 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "components/pdf/common/constants.h"
++#include "components/pdf/common/pdf_util.h"
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+@@ -101,6 +102,24 @@ bool TsContentRendererClient::IsPluginHandledExternally(
+     const blink::WebElement& plugin_element,
+     const GURL& original_url,
+     const std::string& mime_type) {
++  if (mime_type == pdf::kInternalPluginMimeType && render_frame &&
++      render_frame->GetWebFrame()) {
++    const bool allowed_origin = IsPdfInternalPluginAllowedOrigin(
++        render_frame->GetWebFrame()->GetSecurityOrigin(), {});
++    LOG(INFO) << "[issue-792-exp27] internal-plugin-external-check "
++              << "document_url=" << DocumentUrl(render_frame)
++              << " original_url=" << original_url << " mime_type=" << mime_type
++              << " allowed_origin=" << (allowed_origin ? 1 : 0);
++    if (allowed_origin) {
++      LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
++                << "handled=1";
++      return true;
++    }
++
++    LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
++              << "handled=0 reason=disallowed-origin";
++  }
++
+   const bool has_internal_id = HasInternalId(plugin_element);
+   const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
+                            mime_type == pdf::kInternalPluginMimeType;
+-- 
+2.54.0
+

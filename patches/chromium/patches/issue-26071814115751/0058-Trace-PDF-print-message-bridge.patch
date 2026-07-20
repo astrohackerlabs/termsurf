@@ -1,0 +1,336 @@
+From ec91f655cf26fc109ae2b76b5f81ebcc95a20b6d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 14:12:52 -0500
+Subject: [PATCH 058/122] Trace PDF print message bridge
+
+---
+ chrome/browser/resources/pdf/controller.ts    | 53 ++++++++++++++++++
+ ...ts_component_extension_resource_manager.cc | 15 +++++
+ .../extensions/ts_resources_private_api.cc    | 15 +++++
+ .../libtermsurf_chromium/ts_browser_client.cc | 42 ++++++++------
+ pdf/pdf_view_web_plugin.cc                    | 56 ++++++++++++++++++-
+ 5 files changed, 164 insertions(+), 17 deletions(-)
+
+diff --git a/chrome/browser/resources/pdf/controller.ts b/chrome/browser/resources/pdf/controller.ts
+index 2885372370..d733be0b32 100644
+--- a/chrome/browser/resources/pdf/controller.ts
++++ b/chrome/browser/resources/pdf/controller.ts
+@@ -3,6 +3,7 @@
+ // found in the LICENSE file.
+ 
+ import {assert} from 'chrome://resources/js/assert.js';
++import {loadTimeData} from 'chrome://resources/js/load_time_data.js';
+ import {PromiseResolver} from 'chrome://resources/js/promise_resolver.js';
+ 
+ // clang-format off
+@@ -19,6 +20,39 @@ import {PinchPhase} from './viewport.js';
+ 
+ type SaveRequestType = chrome.pdfViewerPrivate.SaveRequestType;
+ 
++function termsurfPdfPrintBridgeTraceEnabled(): boolean {
++  try {
++    return loadTimeData.getBoolean('termsurfPdfPrintBridgeTrace');
++  } catch {
++    return false;
++  }
++}
++
++function termsurfPdfPrintBridgeActivationId(): string {
++  return String((window as any).__termsurfPdfPrintBridgeActivationId || '');
++}
++
++function shouldTraceTermSurfPdfMessage(type: string): boolean {
++  return type === 'print' || type === 'rotateCounterclockwise' ||
++      type === 'rotateClockwise' || type === 'viewport';
++}
++
++function traceTermSurfPdfPrintBridge(
++    event: string, fields: Record<string, any> = {}) {
++  if (!termsurfPdfPrintBridgeTraceEnabled()) {
++    return;
++  }
++
++  const trace =
++      ((window as any).__termsurfPdfPrintBridgeTrace ||= [] as Array<any>);
++  trace.push({
++    source: 'controller.ts',
++    event,
++    activationId: termsurfPdfPrintBridgeActivationId(),
++    ...fields,
++  });
++}
++
+ export interface MessageData {
+   type: string;
+   messageId?: string;
+@@ -533,6 +567,17 @@ export class PluginController implements ContentController {
+    */
+   private postMessage_(message: PluginMessage) {
+     assert(this.plugin_);
++    if (shouldTraceTermSurfPdfMessage(message.type)) {
++      traceTermSurfPdfPrintBridge('post-message', {
++        type: message.type,
++        hasPlugin: !!this.plugin_,
++        delayedMessagesActive: this.delayedMessages_ !== null,
++      });
++      const activationId = termsurfPdfPrintBridgeActivationId();
++      if (activationId) {
++        (message as any).termsurfActivationId = activationId;
++      }
++    }
+     this.plugin_.postMessage(message);
+   }
+ 
+@@ -576,6 +621,10 @@ export class PluginController implements ContentController {
+   }
+ 
+   print() {
++    traceTermSurfPdfPrintBridge('controller-print', {
++      hasPlugin: !!this.plugin_,
++      delayedMessagesActive: this.delayedMessages_ !== null,
++    });
+     this.postMessage_({type: 'print'});
+   }
+ 
+@@ -742,6 +791,10 @@ export class PluginController implements ContentController {
+     assert(this.delayedMessages_ !== null);
+     assert(this.plugin_);
+     const delayedMessages = this.delayedMessages_;
++    traceTermSurfPdfPrintBridge('bind-message-handler', {
++      delayedCount: delayedMessages.length,
++      delayedTypes: delayedMessages.map(({message}) => String(message?.type)),
++    });
+     this.delayedMessages_ = null;
+ 
+     this.port_ = port;
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index 252bffa1e7..8ae248aad7 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -38,6 +38,19 @@ bool IsTermSurfPdfPrintInterceptActive() {
+   return path && !path->empty();
+ }
+ 
++bool IsTermSurfPdfPrintBridgeTraceActive() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
++  if (!enabled || *enabled != "1") {
++    return false;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  return path && !path->empty();
++}
++
+ void AddPdfString(ui::TemplateReplacements* replacements,
+                   const char* name,
+                   int resource_id) {
+@@ -213,6 +226,8 @@ void PopulatePdfTemplateReplacements(ui::TemplateReplacements* replacements) {
+   (*replacements)["pdfOopifEnabled"] = "";
+   (*replacements)["printingEnabled"] =
+       IsTermSurfPdfPrintInterceptActive() ? "true" : "false";
++  (*replacements)["termsurfPdfPrintBridgeTrace"] =
++      IsTermSurfPdfPrintBridgeTraceActive() ? "true" : "false";
+ 
+   webui::SetLoadTimeDataDefaults(l10n_util::GetApplicationLocale(std::string()),
+                                  replacements);
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index 99dc53d387..f499f61de8 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -38,6 +38,19 @@ bool IsTermSurfPdfPrintInterceptActive() {
+   return path && !path->empty();
+ }
+ 
++bool IsTermSurfPdfPrintBridgeTraceActive() {
++  std::unique_ptr<base::Environment> env = base::Environment::Create();
++  std::optional<std::string> enabled =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
++  if (!enabled || *enabled != "1") {
++    return false;
++  }
++
++  std::optional<std::string> path =
++      env->GetVar("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  return path && !path->empty();
++}
++
+ base::DictValue GetPdfStringsForTermSurf() {
+   base::DictValue dict;
+ 
+@@ -222,6 +235,8 @@ base::DictValue GetPdfStringsForTermSurf() {
+   dict.Set("pdfTextAnnotationsEnabled", false);
+   dict.Set("pdfUseShowSaveFilePicker", false);
+   dict.Set("printingEnabled", IsTermSurfPdfPrintInterceptActive());
++  dict.Set("termsurfPdfPrintBridgeTrace",
++           IsTermSurfPdfPrintBridgeTraceActive());
+ 
+   return dict;
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index a20d7bbed4..7c86587763 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -65,17 +65,21 @@ namespace {
+ constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
+ constexpr char kTsPdfPrintInterceptFileSwitch[] =
+     "termsurf-pdf-print-intercept-file";
+-
+-std::optional<std::string> GetTsPdfPrintInterceptFileFromEnv() {
++constexpr char kTsPdfPrintBridgeTraceSwitch[] =
++    "termsurf-pdf-print-bridge-trace";
++constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
++    "termsurf-pdf-print-bridge-trace-file";
++
++std::optional<std::string> GetTsPdfTraceFileFromEnv(
++    const std::string& enabled_var,
++    const std::string& path_var) {
+   std::unique_ptr<base::Environment> env = base::Environment::Create();
+-  std::optional<std::string> enabled =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT");
++  std::optional<std::string> enabled = env->GetVar(enabled_var);
+   if (!enabled || *enabled != "1") {
+     return std::nullopt;
+   }
+ 
+-  std::optional<std::string> path =
+-      env->GetVar("TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  std::optional<std::string> path = env->GetVar(path_var);
+   if (!path || path->empty()) {
+     return std::nullopt;
+   }
+@@ -357,18 +361,24 @@ void TsBrowserClient::AppendExtraCommandLineSwitches(
+     return;
+   }
+ 
+-  std::optional<std::string> intercept_file =
+-      GetTsPdfPrintInterceptFileFromEnv();
+-  if (!intercept_file) {
+-    return;
++  // Renderer processes do not reliably inherit the browser process environment.
++  // Forward the contained PDF print test guards explicitly.
++  std::optional<std::string> intercept_file = GetTsPdfTraceFileFromEnv(
++      "TERMSURF_PDF_PRINT_INTERCEPT", "TERMSURF_PDF_PRINT_INTERCEPT_FILE");
++  if (intercept_file) {
++    command_line->AppendSwitch(kTsPdfPrintInterceptSwitch);
++    command_line->AppendSwitchASCII(kTsPdfPrintInterceptFileSwitch,
++                                    *intercept_file);
+   }
+ 
+-  // Renderer processes do not reliably inherit the browser process environment.
+-  // Forward the contained PDF print test guard explicitly so the PDF plugin can
+-  // intercept before reaching native print.
+-  command_line->AppendSwitch(kTsPdfPrintInterceptSwitch);
+-  command_line->AppendSwitchASCII(kTsPdfPrintInterceptFileSwitch,
+-                                  *intercept_file);
++  std::optional<std::string> bridge_trace_file =
++      GetTsPdfTraceFileFromEnv("TERMSURF_PDF_PRINT_BRIDGE_TRACE",
++                               "TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  if (bridge_trace_file) {
++    command_line->AppendSwitch(kTsPdfPrintBridgeTraceSwitch);
++    command_line->AppendSwitchASCII(kTsPdfPrintBridgeTraceFileSwitch,
++                                    *bridge_trace_file);
++  }
+ }
+ 
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index 44c082f3b2..72e56c83ad 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -158,6 +158,10 @@ constexpr std::string_view kChromeExtensionHost =
+ constexpr char kTsPdfPrintInterceptSwitch[] = "termsurf-pdf-print-intercept";
+ constexpr char kTsPdfPrintInterceptFileSwitch[] =
+     "termsurf-pdf-print-intercept-file";
++constexpr char kTsPdfPrintBridgeTraceSwitch[] =
++    "termsurf-pdf-print-bridge-trace";
++constexpr char kTsPdfPrintBridgeTraceFileSwitch[] =
++    "termsurf-pdf-print-bridge-trace-file";
+ 
+ bool Issue794InputTraceEnabled() {
+   static const bool enabled =
+@@ -186,6 +190,53 @@ std::optional<base::FilePath> GetTermSurfPdfPrintInterceptPath() {
+   return base::FilePath::FromUTF8Unsafe(path);
+ }
+ 
++std::optional<base::FilePath> GetTermSurfPdfPrintBridgeTracePath() {
++  const base::CommandLine* command_line =
++      base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTsPdfPrintBridgeTraceSwitch)) {
++    base::FilePath path =
++        command_line->GetSwitchValuePath(kTsPdfPrintBridgeTraceFileSwitch);
++    if (!path.empty()) {
++      return path;
++    }
++  }
++
++  const char* enabled = std::getenv("TERMSURF_PDF_PRINT_BRIDGE_TRACE");
++  const char* path = std::getenv("TERMSURF_PDF_PRINT_BRIDGE_TRACE_FILE");
++  if (!enabled || std::string_view(enabled) != "1" || !path ||
++      std::string_view(path).empty()) {
++    return std::nullopt;
++  }
++
++  return base::FilePath::FromUTF8Unsafe(path);
++}
++
++bool ShouldTraceTermSurfPdfMessage(std::string_view type) {
++  return type == "print" || type == "rotateCounterclockwise" ||
++         type == "rotateClockwise" || type == "viewport";
++}
++
++void TraceTermSurfPdfPrintBridge(const base::DictValue& message,
++                                 std::string_view event) {
++  const std::string* type = message.FindString("type");
++  if (!type || !ShouldTraceTermSurfPdfMessage(*type)) {
++    return;
++  }
++
++  std::optional<base::FilePath> trace_path =
++      GetTermSurfPdfPrintBridgeTracePath();
++  if (!trace_path) {
++    return;
++  }
++
++  const std::string* activation_id = message.FindString("termsurfActivationId");
++  const std::string line = base::StrCat(
++      {"pdf-print-bridge pid=", base::NumberToString(base::GetCurrentProcId()),
++       " source=pdf_view_web_plugin.cc event=", event, " type=", *type,
++       " activationId=", activation_id ? *activation_id : "", "\n"});
++  base::AppendToFile(*trace_path, line);
++}
++
+ bool Issue794IsMousePointerEvent(blink::WebInputEvent::Type type) {
+   return type == blink::WebInputEvent::Type::kMouseDown ||
+          type == blink::WebInputEvent::Type::kMouseMove ||
+@@ -1905,6 +1956,7 @@ PdfViewWebPlugin::CreateAssociatedURLLoader(
+ }
+ 
+ void PdfViewWebPlugin::OnMessage(const base::DictValue& message) {
++  TraceTermSurfPdfPrintBridge(message, "on-message");
+ #if BUILDFLAG(ENABLE_PDF_INK2)
+   if (ink_module_ && ink_module_->OnMessage(message)) {
+     return;
+@@ -1953,6 +2005,7 @@ void PdfViewWebPlugin::OnMessage(const base::DictValue& message) {
+       });
+ 
+   MessageHandler handler = kMessageHandlers.at(*message.FindString("type"));
++  TraceTermSurfPdfPrintBridge(message, "before-dispatch");
+   (this->*handler)(message);
+ }
+ 
+@@ -2068,7 +2121,8 @@ void PdfViewWebPlugin::HandleHighlightTextFragmentsMessage(
+   }
+ }
+ 
+-void PdfViewWebPlugin::HandlePrintMessage(const base::DictValue& /*message*/) {
++void PdfViewWebPlugin::HandlePrintMessage(const base::DictValue& message) {
++  TraceTermSurfPdfPrintBridge(message, "handle-print");
+   Print();
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,466 @@
+From 05f6a4d599ea42bf598d031bbeae02b2dc61e7a4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 19 Jul 2026 08:41:20 -0500
+Subject: [PATCH] Prefer MRU leaf in nearest spatial split cohort
+
+Spatial goto_split left/right/up/down now restores the most recently
+focused leaf among the nearest primary-axis cohort, fixing nested split
+return (bottom-right after left then right). previous/next stay tree-order.
+
+Issue 26071913243342 exp-0001.
+---
+ macos/Sources/Features/Splits/SplitTree.swift |  75 +++++-
+ .../Terminal/BaseTerminalController.swift     |  38 ++-
+ macos/Sources/Ghostty/Ghostty.App.swift       |   7 +-
+ macos/Tests/Splits/SplitTreeTests.swift       | 224 ++++++++++++++++++
+ 4 files changed, 329 insertions(+), 15 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/SplitTree.swift b/macos/Sources/Features/Splits/SplitTree.swift
+index 30caae0da..8200a27ab 100644
+--- a/macos/Sources/Features/Splits/SplitTree.swift
++++ b/macos/Sources/Features/Splits/SplitTree.swift
+@@ -173,8 +173,16 @@ extension SplitTree {
+         return .init(root: newRoot, zoomed: newZoomed)
+     }
+ 
+-    /// Find the next view to focus based on the current focused node and direction
+-    func focusTarget(for direction: FocusDirection, from currentNode: Node) -> ViewType? {
++    /// Find the next view to focus based on the current focused node and direction.
++    ///
++    /// - Parameter recentFocusIDs: Most-recently-focused leaf IDs first (spatial only).
++    ///   Used to restore the last active leaf within the **nearest primary-axis cohort**
++    ///   in the requested direction. Empty list preserves pure geometry selection.
++    func focusTarget(
++        for direction: FocusDirection,
++        from currentNode: Node,
++        recentFocusIDs: [ViewType.ID] = []
++    ) -> ViewType? {
+         guard let root else { return nil }
+ 
+         switch direction {
+@@ -200,7 +208,11 @@ extension SplitTree {
+             return allLeaves[index]
+ 
+         case .spatial(let spatialDirection):
+-            // Get spatial representation and find best candidate
++            // Spatial navigation:
++            // 1) Directional leaf candidates (geometry half-plane)
++            // 2) Nearest primary-axis cohort (locality)
++            // 3) MRU among that cohort (recentFocusIDs)
++            // 4) Else geometry fallback (top-left distance / leftmost·rightmost)
+             let spatial = root.spatial()
+             let nodes = spatial.slots(in: spatialDirection, from: currentNode)
+ 
+@@ -210,24 +222,67 @@ extension SplitTree {
+                 return nil
+             }
+ 
+-            // Extract the view from the best candidate node. The best candidate
+-            // node is the closest leaf node. If we have no leaves (impossible?)
+-            // just use the first node.
++            // Geometry fallback winner (historical behavior).
+             let bestNode = nodes.first(where: {
+                 if case .leaf = $0.node { return true } else { return false }
+             }) ?? nodes[0]
+-            switch bestNode.node {
++            let geometryWinner: ViewType = switch bestNode.node {
+             case .leaf(let view):
+-                return view
+-
++                view
+             case .split:
+                 // If the best candidate is a split node, use its the leaf/rightmost
+                 // depending on our spatial direction.
+-                return switch spatialDirection {
++                switch spatialDirection {
+                 case .up, .left: bestNode.node.leftmostLeaf()
+                 case .down, .right: bestNode.node.rightmostLeaf()
+                 }
+             }
++
++            // Leaf slots only for cohort + MRU (stable bounds from spatial map).
++            let leafSlots: [(view: ViewType, bounds: CGRect)] = nodes.compactMap { slot in
++                if case .leaf(let view) = slot.node {
++                    return (view, slot.bounds)
++                }
++                return nil
++            }
++            if leafSlots.isEmpty {
++                return geometryWinner
++            }
++
++            // Primary-axis key: nearest band for this direction.
++            func primaryKey(_ bounds: CGRect) -> Double {
++                switch spatialDirection {
++                case .right: return bounds.minX
++                case .left: return bounds.maxX
++                case .down: return bounds.minY
++                case .up: return bounds.maxY
++                }
++            }
++            let keys = leafSlots.map { primaryKey($0.bounds) }
++            let nearestKey: Double = switch spatialDirection {
++            case .right, .down: keys.min()!
++            case .left, .up: keys.max()!
++            }
++            // Epsilon so stacked panes sharing an edge form one cohort.
++            let epsilon = 1e-6
++            let cohort = leafSlots.filter {
++                abs(primaryKey($0.bounds) - nearestKey) <= epsilon
++            }
++
++            // Prefer most recently focused leaf still in the nearest cohort.
++            if !recentFocusIDs.isEmpty {
++                var cohortByID: [ViewType.ID: ViewType] = [:]
++                for item in cohort {
++                    cohortByID[item.view.id] = item.view
++                }
++                for id in recentFocusIDs {
++                    if let view = cohortByID[id] {
++                        return view
++                    }
++                }
++            }
++
++            return geometryWinner
+         }
+     }
+ 
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index c9d8c5309..3854bef76 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -37,7 +37,13 @@ class BaseTerminalController: NSWindowController,
+ 
+     /// The currently focused surface.
+     var focusedSurface: Ghostty.SurfaceView? {
+-        didSet { syncFocusToSurfaceTree() }
++        didSet {
++            // Keep spatial MRU history in sync for any assignment path.
++            if focusedSurface !== oldValue {
++                recordRecentFocus(focusedSurface)
++            }
++            syncFocusToSurfaceTree()
++        }
+     }
+ 
+     /// The tree of splits within this terminal window.
+@@ -59,6 +65,11 @@ class BaseTerminalController: NSWindowController,
+         self.derivedConfig.focusFollowsMouse
+     }
+ 
++    /// Most-recently-focused surface IDs in this window (newest first).
++    /// Used only for spatial `goto_split` nearest-cohort MRU (not previous/next).
++    /// Stores IDs only — never retains SurfaceView instances.
++    private var recentFocusSurfaceIDs: [UUID] = []
++
+     /// Non-nil when an alert is active so we don't overlap multiple.
+     private var alert: NSAlert?
+ 
+@@ -300,9 +311,24 @@ class BaseTerminalController: NSWindowController,
+         if to.isEmpty {
+             focusedSurface = nil
+         }
++        pruneRecentFocusHistory()
+         syncSurfaceTreeOcclusionState()
+     }
+ 
++    /// Record a focused leaf for spatial split MRU (ID only).
++    private func recordRecentFocus(_ surface: Ghostty.SurfaceView?) {
++        guard let surface, surfaceTree.contains(surface) else { return }
++        recentFocusSurfaceIDs.removeAll { $0 == surface.id }
++        recentFocusSurfaceIDs.insert(surface.id, at: 0)
++        pruneRecentFocusHistory()
++    }
++
++    /// Drop history entries for surfaces no longer in the tree.
++    private func pruneRecentFocusHistory() {
++        let live = Set(surfaceTree.map(\.id))
++        recentFocusSurfaceIDs.removeAll { !live.contains($0) }
++    }
++
+     /// Update all surfaces with the focus state. This ensures that libghostty has an accurate view about
+     /// what surface is focused. This must be called whenever a surface OR window changes focus.
+     func syncFocusToSurfaceTree() {
+@@ -736,8 +762,12 @@ class BaseTerminalController: NSWindowController,
+         // Find the node for the target surface
+         guard let targetNode = surfaceTree.root?.node(view: target) else { return }
+ 
+-        // Find the next surface to focus
+-        guard let nextSurface = surfaceTree.focusTarget(for: direction.toSplitTreeFocusDirection(), from: targetNode) else {
++        // Find the next surface to focus (spatial uses nearest-cohort MRU)
++        guard let nextSurface = surfaceTree.focusTarget(
++            for: direction.toSplitTreeFocusDirection(),
++            from: targetNode,
++            recentFocusIDs: recentFocusSurfaceIDs
++        ) else {
+             return
+         }
+ 
+@@ -903,7 +933,7 @@ class BaseTerminalController: NSWindowController,
+ 
+     func focusedSurfaceDidChange(to: Ghostty.SurfaceView?) {
+         let lastFocusedSurface = focusedSurface
+-        focusedSurface = to
++        focusedSurface = to // didSet records MRU history
+ 
+         // Important to cancel any prior subscriptions
+         focusedSurfaceCancellables = []
+diff --git a/macos/Sources/Ghostty/Ghostty.App.swift b/macos/Sources/Ghostty/Ghostty.App.swift
+index 583357077..b11cf2bb0 100644
+--- a/macos/Sources/Ghostty/Ghostty.App.swift
++++ b/macos/Sources/Ghostty/Ghostty.App.swift
+@@ -1209,7 +1209,12 @@ extension Ghostty {
+                     // returning true. This ensures performable keybinds only consume
+                     // the key event when we actually perform navigation.
+                     let focusDirection: SplitTree<Ghostty.SurfaceView>.FocusDirection = splitDirection.toSplitTreeFocusDirection()
+-                    guard controller.surfaceTree.focusTarget(for: focusDirection, from: targetNode) != nil else {
++                    // Existence check only — empty history is fine (geometry path).
++                    guard controller.surfaceTree.focusTarget(
++                        for: focusDirection,
++                        from: targetNode,
++                        recentFocusIDs: []
++                    ) != nil else {
+                         return false
+                     }
+ 
+diff --git a/macos/Tests/Splits/SplitTreeTests.swift b/macos/Tests/Splits/SplitTreeTests.swift
+index 8b1974022..9922ba945 100644
+--- a/macos/Tests/Splits/SplitTreeTests.swift
++++ b/macos/Tests/Splits/SplitTreeTests.swift
+@@ -171,8 +171,232 @@ struct SplitTreeTests {
+         #expect(target === view1)
+     }
+ 
++    // MARK: - Spatial MRU / nearest primary-axis cohort (issue 26071913243342 exp-0001)
++
++    /// L | (TR / BR): horizontal split, then vertical split on the right.
++    static func makeNestedRightSplit() throws -> (
++        tree: SplitTree<MockView>,
++        left: MockView,
++        topRight: MockView,
++        bottomRight: MockView
++    ) {
++        let left = MockView()
++        let topRight = MockView()
++        let bottomRight = MockView()
++        var tree = SplitTree<MockView>(view: left)
++        tree = try tree.inserting(view: topRight, at: left, direction: .right)
++        tree = try tree.inserting(view: bottomRight, at: topRight, direction: .down)
++        return (tree, left, topRight, bottomRight)
++    }
++
++    @Test func spatialMRURestoresBottomRightAfterLeavingNestedSplit() throws {
++        let (tree, left, topRight, bottomRight) = try Self.makeNestedRightSplit()
++        // Empty history: geometry prefers top-right (top-left distance from L).
++        let empty = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [])
++        #expect(empty === topRight)
++        // History after BR → L: MRU among nearest right cohort restores BR.
++        let restored = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [left.id, bottomRight.id, topRight.id])
++        #expect(restored === bottomRight)
++    }
++
++    @Test func spatialEmptyHistoryReturnsGeometryWinnerNotArbitraryLeaf() throws {
++        let (tree, left, topRight, _) = try Self.makeNestedRightSplit()
++        let target = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [])
++        #expect(target === topRight)
++    }
++
++    @Test func spatialMRUIgnoresOutOfCohortHistory() throws {
++        let (tree, left, topRight, bottomRight) = try Self.makeNestedRightSplit()
++        // Far history that is not a right-side candidate should not matter.
++        let outsider = MockView()
++        let target = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [outsider.id, left.id])
++        #expect(target === topRight)
++        // BR preferred when in history and in cohort.
++        let withBR = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [left.id, bottomRight.id])
++        #expect(withBR === bottomRight)
++    }
++
++    @Test func spatialMRUSkipsRemovedPreferredLeaf() throws {
++        let (tree, left, topRight, bottomRight) = try Self.makeNestedRightSplit()
++        // Prefer closed/removed id first, then fall back to live cohort/geometry.
++        let gone = UUID()
++        let target = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [gone, bottomRight.id, topRight.id])
++        #expect(target === bottomRight)
++        let onlyGone = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [gone])
++        #expect(onlyGone === topRight)
++    }
++
++    @Test func spatialNearerBandBeatsFartherRecentHistory() throws {
++        // L | Mid | Far — three horizontal columns.
++        let left = MockView()
++        let mid = MockView()
++        let far = MockView()
++        var tree = SplitTree<MockView>(view: left)
++        tree = try tree.inserting(view: mid, at: left, direction: .right)
++        tree = try tree.inserting(view: far, at: mid, direction: .right)
++        // History prefers far, but nearest right band is Mid only.
++        let target = tree.focusTarget(
++            for: .spatial(.right),
++            from: .leaf(view: left),
++            recentFocusIDs: [far.id, mid.id, left.id])
++        #expect(target === mid)
++    }
++
++    @Test(
++        arguments: [
++            SplitTree<MockView>.Spatial.Direction.right,
++            .left,
++            .down,
++            .up,
++        ]
++    )
++    func spatialMRUFourDirectionsInBand(
++        direction: SplitTree<MockView>.Spatial.Direction
++    ) throws {
++        // Build a 2×2 grid: insert right then down on each column.
++        // A | B
++        // C | D
++        let a = MockView()
++        let b = MockView()
++        let c = MockView()
++        let d = MockView()
++        var tree = SplitTree<MockView>(view: a)
++        tree = try tree.inserting(view: b, at: a, direction: .right)
++        tree = try tree.inserting(view: c, at: a, direction: .down)
++        tree = try tree.inserting(view: d, at: b, direction: .down)
++
++        // From each origin, the two leaves in `direction` share a nearest band;
++        // prefer the "secondary" leaf via MRU.
++        switch direction {
++        case .right:
++            // From C, right cohort is D (and possibly others in that column).
++            let t = tree.focusTarget(
++                for: .spatial(.right),
++                from: .leaf(view: c),
++                recentFocusIDs: [d.id, c.id])
++            #expect(t === d)
++            // Farther history cannot apply if we only have right neighbors in band —
++            // with only D to the right of C, still D.
++            let empty = tree.focusTarget(
++                for: .spatial(.right),
++                from: .leaf(view: c),
++                recentFocusIDs: [])
++            #expect(empty === d || empty === b) // geometry may pick B or D by distance
++        case .left:
++            let t = tree.focusTarget(
++                for: .spatial(.left),
++                from: .leaf(view: d),
++                recentFocusIDs: [c.id, d.id])
++            #expect(t === c)
++        case .down:
++            // From A, down cohort: C (same column). Prefer C via MRU.
++            let t = tree.focusTarget(
++                for: .spatial(.down),
++                from: .leaf(view: a),
++                recentFocusIDs: [c.id, a.id])
++            #expect(t === c)
++        case .up:
++            let t = tree.focusTarget(
++                for: .spatial(.up),
++                from: .leaf(view: c),
++                recentFocusIDs: [a.id, c.id])
++            #expect(t === a)
++        }
++    }
++
++    @Test(
++        arguments: [
++            SplitTree<MockView>.Spatial.Direction.right,
++            .left,
++            .down,
++            .up,
++        ]
++    )
++    func spatialNearerBandBeatsFarHistoryFourDirections(
++        direction: SplitTree<MockView>.Spatial.Direction
++    ) throws {
++        // Three leaves in a line along the primary axis of `direction`.
++        let near = MockView()
++        let mid = MockView()
++        let far = MockView()
++        var tree = SplitTree<MockView>(view: near)
++        switch direction {
++        case .right:
++            tree = try tree.inserting(view: mid, at: near, direction: .right)
++            tree = try tree.inserting(view: far, at: mid, direction: .right)
++            let t = tree.focusTarget(
++                for: .spatial(.right),
++                from: .leaf(view: near),
++                recentFocusIDs: [far.id, mid.id, near.id])
++            #expect(t === mid)
++        case .left:
++            tree = try tree.inserting(view: mid, at: near, direction: .left)
++            tree = try tree.inserting(view: far, at: mid, direction: .left)
++            let t = tree.focusTarget(
++                for: .spatial(.left),
++                from: .leaf(view: near),
++                recentFocusIDs: [far.id, mid.id, near.id])
++            #expect(t === mid)
++        case .down:
++            tree = try tree.inserting(view: mid, at: near, direction: .down)
++            tree = try tree.inserting(view: far, at: mid, direction: .down)
++            let t = tree.focusTarget(
++                for: .spatial(.down),
++                from: .leaf(view: near),
++                recentFocusIDs: [far.id, mid.id, near.id])
++            #expect(t === mid)
++        case .up:
++            tree = try tree.inserting(view: mid, at: near, direction: .up)
++            tree = try tree.inserting(view: far, at: mid, direction: .up)
++            let t = tree.focusTarget(
++                for: .spatial(.up),
++                from: .leaf(view: near),
++                recentFocusIDs: [far.id, mid.id, near.id])
++            #expect(t === mid)
++        }
++    }
++
++    @Test func previousNextIgnoreSpatialMRUHistory() throws {
++        let (tree, view1, view2) = try makeHorizontalSplit()
++        let view3 = MockView()
++        let tree3 = try tree.inserting(view: view3, at: view2, direction: .right)
++        // Non-empty MRU must not alter tree-order previous/next.
++        let next = tree3.focusTarget(
++            for: .next,
++            from: .leaf(view: view1),
++            recentFocusIDs: [view3.id, view2.id, view1.id])
++        #expect(next === view2)
++        let prev = tree3.focusTarget(
++            for: .previous,
++            from: .leaf(view: view2),
++            recentFocusIDs: [view3.id, view1.id, view2.id])
++        #expect(prev === view1)
++    }
++
+     // MARK: - Equalized
+ 
++
+     @Test func equalizedAdjustsRatioByLeafCount() throws {
+         let view1 = MockView()
+         let view2 = MockView()
+-- 
+2.50.1 (Apple Git-155)
+

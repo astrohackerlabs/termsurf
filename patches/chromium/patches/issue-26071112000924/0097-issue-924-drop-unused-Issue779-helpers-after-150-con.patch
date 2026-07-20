@@ -1,0 +1,42 @@
+From 27af837394a08fa697596c486a45a83f1d1739d7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:25:26 -0500
+Subject: [PATCH 097/119] issue-924: drop unused Issue779 helpers after 150
+ conflict merge
+
+---
+ .../core/frame/web_frame_widget_impl.cc        | 18 ------------------
+ 1 file changed, 18 deletions(-)
+
+diff --git a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+index caa3160802..a536e2dbd6 100644
+--- a/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
++++ b/third_party/blink/renderer/core/frame/web_frame_widget_impl.cc
+@@ -194,24 +194,6 @@ using ::ui::mojom::blink::DragOperation;
+ #if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
+ constexpr base::TimeDelta kWindowingControlsChangeTimeout = base::Seconds(5);
+ #endif
+-bool Issue779TraceEnabled() {
+-  static const bool enabled =
+-      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+-  return enabled;
+-}
+-
+-void Issue779TraceAnnounce() {
+-  static bool announced = false;
+-  if (!announced) {
+-    announced = true;
+-    LOG(INFO) << "[issue-779-trace] trace_enabled component=web-frame-widget";
+-  }
+-}
+-
+-bool Issue779IsMouseClick(const WebInputEvent& event) {
+-  return event.GetType() == WebInputEvent::Type::kMouseDown ||
+-         event.GetType() == WebInputEvent::Type::kMouseUp;
+-}
+ 
+ void ForEachLocalFrameControlledByWidget(
+     LocalFrame* frame,
+-- 
+2.54.0
+

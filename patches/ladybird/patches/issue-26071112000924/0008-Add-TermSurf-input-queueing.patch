@@ -1,0 +1,311 @@
+From 9d4d4ad977e9d4afcf1d6c883328531ef85e65f6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 02:47:18 -0500
+Subject: [PATCH 08/18] Add TermSurf input queueing
+
+A click found a queue,
+A key found a door.
+The bird did not browse yet,
+But it heard four knocks more.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 242 +++++++++++++++++-
+ 1 file changed, 241 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 86ed2b03fb..61e8f699ee 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -20,6 +20,7 @@
+ #include <LibWeb/Bindings/Navigation.h>
+ #include <LibWeb/CSS/PreferredColorScheme.h>
+ #include <LibWeb/HTML/VisibilityState.h>
++#include <LibWeb/Page/InputEvent.h>
+ #include <LibWebView/Application.h>
+ #include <LibWebView/HeadlessWebView.h>
+ #include <LibWebView/Options.h>
+@@ -155,6 +156,16 @@ public:
+         set_system_visibility_state(active ? Web::HTML::VisibilityState::Visible : Web::HTML::VisibilityState::Hidden);
+     }
+ 
++    void enqueue_mouse_event(Web::MouseEvent event)
++    {
++        enqueue_input_event(move(event));
++    }
++
++    void enqueue_key_event(Web::KeyEvent event)
++    {
++        enqueue_input_event(move(event));
++    }
++
+ private:
+     TermSurfWebView(Core::AnonymousBuffer theme, Web::DevicePixelSize viewport_size)
+         : HeadlessWebView(move(theme), viewport_size)
+@@ -206,6 +217,10 @@ extern "C" bool ts_ladybird_view_load_url(TsLadybirdView*, char const*);
+ extern "C" bool ts_ladybird_view_resize(TsLadybirdView*, int, int);
+ extern "C" bool ts_ladybird_view_set_color_scheme(TsLadybirdView*, bool);
+ extern "C" bool ts_ladybird_view_set_gui_active(TsLadybirdView*, bool);
++extern "C" bool ts_ladybird_view_mouse_event(TsLadybirdView*, char const*, char const*, double, double, int, unsigned long long);
++extern "C" bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
++extern "C" bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
++extern "C" bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -292,6 +307,116 @@ static bool validate_view(TsLadybirdView* view)
+     return true;
+ }
+ 
++static Web::UIEvents::KeyModifier termsurf_modifiers_to_ladybird(unsigned long long modifiers)
++{
++    auto mapped = Web::UIEvents::KeyModifier::Mod_None;
++    if (modifiers & 1)
++        mapped |= Web::UIEvents::KeyModifier::Mod_Shift;
++    if (modifiers & 2)
++        mapped |= Web::UIEvents::KeyModifier::Mod_Ctrl;
++    if (modifiers & 4)
++        mapped |= Web::UIEvents::KeyModifier::Mod_Alt;
++    if (modifiers & 8)
++        mapped |= Web::UIEvents::KeyModifier::Mod_Super;
++    return mapped;
++}
++
++static Web::UIEvents::MouseButton mouse_button_from_name(char const* button)
++{
++    if (!button)
++        return Web::UIEvents::MouseButton::None;
++    if (strcmp(button, "left") == 0)
++        return Web::UIEvents::MouseButton::Primary;
++    if (strcmp(button, "right") == 0)
++        return Web::UIEvents::MouseButton::Secondary;
++    if (strcmp(button, "middle") == 0)
++        return Web::UIEvents::MouseButton::Middle;
++    return Web::UIEvents::MouseButton::None;
++}
++
++static Web::UIEvents::MouseButton pressed_buttons_from_termsurf(unsigned long long modifiers)
++{
++    auto buttons = Web::UIEvents::MouseButton::None;
++    if (modifiers & 64)
++        buttons |= Web::UIEvents::MouseButton::Primary;
++    if (modifiers & 128)
++        buttons |= Web::UIEvents::MouseButton::Middle;
++    if (modifiers & 256)
++        buttons |= Web::UIEvents::MouseButton::Secondary;
++    return buttons;
++}
++
++static Optional<Web::MouseEvent::Type> mouse_event_type_from_name(char const* type)
++{
++    if (!type)
++        return {};
++    if (strcmp(type, "down") == 0)
++        return Web::MouseEvent::Type::MouseDown;
++    if (strcmp(type, "up") == 0)
++        return Web::MouseEvent::Type::MouseUp;
++    return {};
++}
++
++static Optional<Web::KeyEvent::Type> key_event_type_from_name(char const* type)
++{
++    if (!type)
++        return {};
++    if (strcmp(type, "down") == 0 || strcmp(type, "repeat") == 0)
++        return Web::KeyEvent::Type::KeyDown;
++    if (strcmp(type, "up") == 0)
++        return Web::KeyEvent::Type::KeyUp;
++    return {};
++}
++
++static bool key_event_is_repeat(char const* type)
++{
++    return type && strcmp(type, "repeat") == 0;
++}
++
++static Optional<Web::UIEvents::KeyCode> key_code_from_windows_code(int windows_key_code)
++{
++    switch (windows_key_code) {
++    case 8:
++        return Web::UIEvents::KeyCode::Key_Backspace;
++    case 9:
++        return Web::UIEvents::KeyCode::Key_Tab;
++    case 13:
++        return Web::UIEvents::KeyCode::Key_Return;
++    case 27:
++        return Web::UIEvents::KeyCode::Key_Escape;
++    case 32:
++        return Web::UIEvents::KeyCode::Key_Space;
++    case 37:
++        return Web::UIEvents::KeyCode::Key_Left;
++    case 38:
++        return Web::UIEvents::KeyCode::Key_Up;
++    case 39:
++        return Web::UIEvents::KeyCode::Key_Right;
++    case 40:
++        return Web::UIEvents::KeyCode::Key_Down;
++    case 46:
++        return Web::UIEvents::KeyCode::Key_Delete;
++    default:
++        break;
++    }
++
++    if (windows_key_code >= '0' && windows_key_code <= '9')
++        return static_cast<Web::UIEvents::KeyCode>(windows_key_code);
++    if (windows_key_code >= 'A' && windows_key_code <= 'Z')
++        return static_cast<Web::UIEvents::KeyCode>(windows_key_code);
++    return {};
++}
++
++static u32 ascii_code_point(char const* utf8)
++{
++    if (!utf8 || utf8[0] == '\0')
++        return 0;
++    auto byte = static_cast<unsigned char>(utf8[0]);
++    if (byte >= 0x80)
++        return 0;
++    return byte;
++}
++
+ static ErrorOr<OwnPtr<TermSurfLadybirdApplication>> create_application()
+ {
+     tzset();
+@@ -399,6 +524,10 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView*, char co
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_resize(TsLadybirdView*, int, int);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_set_color_scheme(TsLadybirdView*, bool);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_set_gui_active(TsLadybirdView*, bool);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_event(TsLadybirdView*, char const*, char const*, double, double, int, unsigned long long);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -411,7 +540,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-state-sync-controls";
++    return "ladybird-a80d01fc-issue-0884-basic-input-forwarding";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -595,6 +724,117 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_set_gui_active(TsLadybirdView* vi
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_event(TsLadybirdView* view, char const* type, char const* button, double x, double y, int click_count, unsigned long long modifiers)
++{
++    if (!validate_view(view))
++        return false;
++
++    auto event_type = mouse_event_type_from_name(type);
++    if (!event_type.has_value()) {
++        set_runtime_error(view->runtime, "mouse event type is unsupported");
++        return false;
++    }
++    auto mouse_button = mouse_button_from_name(button);
++    if (mouse_button == Web::UIEvents::MouseButton::None) {
++        set_runtime_error(view->runtime, "mouse button is unsupported");
++        return false;
++    }
++
++    Web::MouseEvent event {
++        event_type.release_value(),
++        Web::DevicePixelPoint { static_cast<int>(x), static_cast<int>(y) },
++        Web::DevicePixelPoint {},
++        mouse_button,
++        strcmp(type, "down") == 0 ? mouse_button : pressed_buttons_from_termsurf(modifiers),
++        termsurf_modifiers_to_ladybird(modifiers),
++        0,
++        0,
++        click_count,
++        nullptr,
++        false,
++    };
++    view->view->enqueue_mouse_event(move(event));
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_move(TsLadybirdView* view, double x, double y, unsigned long long modifiers)
++{
++    if (!validate_view(view))
++        return false;
++
++    Web::MouseEvent event {
++        Web::MouseEvent::Type::MouseMove,
++        Web::DevicePixelPoint { static_cast<int>(x), static_cast<int>(y) },
++        Web::DevicePixelPoint {},
++        Web::UIEvents::MouseButton::None,
++        pressed_buttons_from_termsurf(modifiers),
++        termsurf_modifiers_to_ladybird(modifiers),
++        0,
++        0,
++        0,
++        nullptr,
++        false,
++    };
++    view->view->enqueue_mouse_event(move(event));
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_scroll_event(TsLadybirdView* view, double x, double y, double delta_x, double delta_y, unsigned long long phase, unsigned long long momentum_phase, bool precise, unsigned long long modifiers)
++{
++    (void)phase;
++    (void)momentum_phase;
++    (void)precise;
++    if (!validate_view(view))
++        return false;
++
++    Web::MouseEvent event {
++        Web::MouseEvent::Type::MouseWheel,
++        Web::DevicePixelPoint { static_cast<int>(x), static_cast<int>(y) },
++        Web::DevicePixelPoint {},
++        Web::UIEvents::MouseButton::None,
++        pressed_buttons_from_termsurf(modifiers),
++        termsurf_modifiers_to_ladybird(modifiers),
++        delta_x,
++        delta_y,
++        0,
++        nullptr,
++        false,
++    };
++    view->view->enqueue_mouse_event(move(event));
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView* view, char const* type, int windows_key_code, char const* utf8, unsigned long long modifiers)
++{
++    if (!validate_view(view))
++        return false;
++
++    auto event_type = key_event_type_from_name(type);
++    if (!event_type.has_value()) {
++        set_runtime_error(view->runtime, "key event type is unsupported");
++        return false;
++    }
++    auto key_code = key_code_from_windows_code(windows_key_code);
++    if (!key_code.has_value()) {
++        set_runtime_error(view->runtime, "windows key code is unsupported");
++        return false;
++    }
++
++    auto code_point = ascii_code_point(utf8);
++    auto type_value = event_type.release_value();
++    Web::KeyEvent event {
++        type_value,
++        key_code.release_value(),
++        termsurf_modifiers_to_ladybird(modifiers),
++        code_point,
++        key_event_is_repeat(type),
++        code_point != 0 && type_value == Web::KeyEvent::Type::KeyDown,
++        nullptr,
++    };
++    view->view->enqueue_key_event(move(event));
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

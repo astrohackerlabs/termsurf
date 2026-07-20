@@ -1,0 +1,26 @@
+From 986f63961a10e8b375c7fdc82b4d0983fce4e56a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 16:48:11 -0500
+Subject: [PATCH 18/18] issue-924: set TermSurf Ladybird runtime version for
+ issue-0924
+
+---
+ Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 00c3c53ade..26725e7b79 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -749,7 +749,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-visible-runtime-load-finish";
++    return "ladybird-2a3bc6a3-issue-0924";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_resource_root()
+-- 
+2.54.0
+

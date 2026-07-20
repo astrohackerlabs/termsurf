@@ -1,0 +1,608 @@
+From 328d150826cb17be0f0eaa15fada9549fe2c60a1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 17:46:39 -0500
+Subject: [PATCH] Add semantic refresh routing
+
+---
+ .../Surface View/SurfaceView_AppKit.swift     |   5 +-
+ src/apprt/termsurf.zig                        | 135 +++++++++++++++++-
+ src/protobuf/termsurf.pb-c.c                  |  57 ++++++--
+ src/protobuf/termsurf.pb-c.h                  |  18 ++-
+ 4 files changed, 192 insertions(+), 23 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 88fb4c343..645ddba02 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -2041,11 +2041,12 @@ extension Ghostty {
+         return false
+       }
+ 
+-      if (event.keyCode == 0x21 || event.keyCode == 0x1E),
++      if (event.keyCode == 0x21 || event.keyCode == 0x1E || event.keyCode == 0x0F),
+         isTermSurfBrowserNavigationKeyEquivalent(event),
+         termSurfScriptHasActiveOverlay
+       {
+-        let action = event.keyCode == 0x21 ? "back" : "forward"
++        let action =
++          event.keyCode == 0x21 ? "back" : (event.keyCode == 0x1E ? "forward" : "refresh")
+         let paneID = id.uuidString
+         let accepted: Bool = paneID.withCString { paneIDPointer in
+           action.withCString { actionPointer in
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 1cceff572..f915f15e7 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -272,6 +272,7 @@ const PaneState = struct {
+     cursor_type: i64 = 0,
+     can_go_back: bool = false,
+     can_go_forward: bool = false,
++    can_refresh: bool = false,
+     tui_fd: std.posix.fd_t = -1,
+ 
+     fn paneId(self: *const PaneState) []const u8 {
+@@ -682,6 +683,7 @@ const BrowserInputSnapshot = struct {
+     pane_id: [max_pane_id_len]u8 = undefined,
+     pane_id_len: usize = 0,
+     tab_id: i64 = 0,
++    navigation_request_id: u64 = 0,
+ 
+     fn paneId(self: *const BrowserInputSnapshot) []const u8 {
+         return self.pane_id[0..self.pane_id_len];
+@@ -797,6 +799,7 @@ const NavigationStateSnapshot = struct {
+     tab_id: i64 = 0,
+     can_go_back: bool = false,
+     can_go_forward: bool = false,
++    can_refresh: bool = false,
+ 
+     fn paneId(self: *const NavigationStateSnapshot) []const u8 {
+         return self.pane_id[0..self.pane_id_len];
+@@ -960,6 +963,7 @@ const CreateDevtoolsTabSnapshot = struct {
+ var mutex: std.Thread.Mutex = .{};
+ var clients_mutex: std.Thread.Mutex = .{};
+ var state_mutex: std.Thread.Mutex = .{};
++var next_navigation_request_id: u64 = 1;
+ var listener_fd: std.posix.fd_t = -1;
+ var accept_thread: ?std.Thread = null;
+ var stopping = std.atomic.Value(bool).init(false);
+@@ -1198,6 +1202,9 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE => {
+                     _ = handleNavigationState(fd, msg.*.unnamed_0.navigation_state);
+                 },
++                c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE => {
++                    _ = handleLoadingState(fd, msg.*.unnamed_0.loading_state);
++                },
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CA_CONTEXT => {
+                     handleCaContext(fd, msg.*.unnamed_0.ca_context);
+                 },
+@@ -3077,8 +3084,9 @@ fn handleNavigationAction(
+     };
+     const pane_id = cString(action_req.*.pane_id);
+     const action = cString(action_req.*.action);
+-    if (action_req.*.tab_id != 0 or pane_id.len == 0 or
+-        (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward")))
++    if (action_req.*.tab_id != 0 or action_req.*.request_id != 0 or pane_id.len == 0 or
++        (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
++            !std.mem.eql(u8, action, "refresh")))
+     {
+         log.warn(
+             "NavigationAction: invalid TUI request pane_id={s} tab_id={} action={s}",
+@@ -3099,7 +3107,9 @@ fn sendNavigationActionForPaneOwned(
+     action: []const u8,
+     required_tui_fd: ?std.posix.fd_t,
+ ) bool {
+-    if (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward")) {
++    if (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
++        !std.mem.eql(u8, action, "refresh"))
++    {
+         log.warn("NavigationAction: invalid product action pane_id={s} action={s}", .{ pane_id, action });
+         return false;
+     }
+@@ -3110,6 +3120,7 @@ fn sendNavigationActionForPaneOwned(
+     c.termsurf__navigation_action__init(&forwarded);
+     forwarded.tab_id = snapshot.tab_id;
+     forwarded.action = @constCast(action.ptr);
++    forwarded.request_id = snapshot.navigation_request_id;
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -3152,7 +3163,12 @@ fn snapshotEnabledNavigationAction(
+             return null;
+         }
+     }
+-    const enabled = if (std.mem.eql(u8, action, "back")) pane.can_go_back else pane.can_go_forward;
++    const enabled = if (std.mem.eql(u8, action, "back"))
++        pane.can_go_back
++    else if (std.mem.eql(u8, action, "forward"))
++        pane.can_go_forward
++    else
++        pane.can_refresh;
+     if (pane.tab_id <= 0 or !enabled) {
+         log.info(
+             "NavigationAction disabled pane_id={s} tab_id={} action={s}",
+@@ -3167,6 +3183,11 @@ fn snapshotEnabledNavigationAction(
+         .browser_fd = servers[server_index].attached_fd,
+         .tab_id = pane.tab_id,
+     };
++    if (std.mem.eql(u8, action, "refresh")) {
++        snapshot.navigation_request_id = next_navigation_request_id;
++        next_navigation_request_id +%= 1;
++        if (next_navigation_request_id == 0) next_navigation_request_id = 1;
++    }
+     if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
+     return snapshot;
+ }
+@@ -3177,6 +3198,7 @@ fn sendNavigationStateToTui(snapshot: *const NavigationStateSnapshot) !void {
+     state.tab_id = snapshot.tab_id;
+     state.can_go_back = if (snapshot.can_go_back) 1 else 0;
+     state.can_go_forward = if (snapshot.can_go_forward) 1 else 0;
++    state.can_refresh = if (snapshot.can_refresh) 1 else 0;
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -3227,12 +3249,14 @@ fn handleNavigationState(
+     }
+     pane.can_go_back = navigation_state.*.can_go_back != 0;
+     pane.can_go_forward = navigation_state.*.can_go_forward != 0;
++    pane.can_refresh = navigation_state.*.can_refresh != 0;
+     if (pane.tui_fd >= 0) {
+         var value: NavigationStateSnapshot = .{
+             .tui_fd = pane.tui_fd,
+             .tab_id = pane.tab_id,
+             .can_go_back = pane.can_go_back,
+             .can_go_forward = pane.can_go_forward,
++            .can_refresh = pane.can_refresh,
+         };
+         if (copyText(&value.pane_id, &value.pane_id_len, pane.paneId())) {
+             snapshot = value;
+@@ -3252,6 +3276,44 @@ fn handleNavigationState(
+     return true;
+ }
+ 
++fn handleLoadingState(
++    browser_fd: std.posix.fd_t,
++    req: ?*c.Termsurf__LoadingState,
++) bool {
++    const loading_state = req orelse return false;
++    if (loading_state.*.tab_id <= 0) return false;
++
++    state_mutex.lock();
++    const server_index = findServerByFd(browser_fd) orelse {
++        state_mutex.unlock();
++        return false;
++    };
++    const server = &servers[server_index];
++    const lookup_index = findTabLookup(
++        server.profileName(),
++        server.browserName(),
++        loading_state.*.tab_id,
++    ) orelse {
++        state_mutex.unlock();
++        return false;
++    };
++    const pane_index = findPane(tab_lookups[lookup_index].paneId()) orelse {
++        state_mutex.unlock();
++        return false;
++    };
++    const tui_fd = panes[pane_index].tui_fd;
++    const exact_identity = panes[pane_index].tab_id == loading_state.*.tab_id;
++    state_mutex.unlock();
++    if (!exact_identity or tui_fd < 0) return false;
++
++    var wrapper: c.Termsurf__TermSurfMessage = undefined;
++    c.termsurf__term_surf_message__init(&wrapper);
++    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE;
++    wrapper.unnamed_0.loading_state = loading_state;
++    sendProtobuf(tui_fd, &wrapper) catch return false;
++    return true;
++}
++
+ fn snapshotModeChanged(pane: *const PaneState, browsing: bool) ?ModeChangedSnapshot {
+     if (pane.tui_fd < 0) return null;
+ 
+@@ -3376,6 +3438,7 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+     panes[pane_index].tab_id = tab_id;
+     panes[pane_index].can_go_back = false;
+     panes[pane_index].can_go_forward = false;
++    panes[pane_index].can_refresh = false;
+     const lookup_count = upsertTabLookup(&panes[pane_index], tab_id);
+     if (panes[pane_index].inspected_tab_id == 0) {
+         _ = copyText(&last_browser_pane, &last_browser_pane_len, pane_id);
+@@ -4280,11 +4343,13 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+ 
+             pane.can_go_back = false;
+             pane.can_go_forward = false;
++            pane.can_refresh = false;
+             var state: NavigationStateSnapshot = .{
+                 .tui_fd = pane.tui_fd,
+                 .tab_id = pane.tab_id,
+                 .can_go_back = false,
+                 .can_go_forward = false,
++                .can_refresh = false,
+             };
+             if (copyText(&state.pane_id, &state.pane_id_len, pane.paneId())) {
+                 navigation_states[navigation_state_count] = state;
+@@ -6639,6 +6704,7 @@ fn resetTermsurfStateForTest() void {
+     hello_browser_count = 0;
+     gui_active = false;
+     pending_gui_activation = false;
++    next_navigation_request_id = 1;
+     current_color_scheme_dark = false;
+     test_iosurface_present_count = 0;
+     test_last_iosurface_present_surface = null;
+@@ -7084,7 +7150,7 @@ fn readExactTest(fd: std.posix.fd_t, buf: []u8) !void {
+     }
+ }
+ 
+-test "termsurf Back and Forward actions preserve pane tab ownership" {
++test "termsurf navigation actions preserve pane tab ownership and Refresh correlation" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+@@ -7108,9 +7174,11 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     panes[0].tab_id = 77;
+     panes[0].can_go_back = true;
+     panes[0].can_go_forward = true;
++    panes[0].can_refresh = true;
+     panes[1].tab_id = 88;
+     panes[1].can_go_back = false;
+     panes[1].can_go_forward = false;
++    panes[1].can_refresh = false;
+     _ = upsertTabLookup(&panes[0], 77);
+     _ = upsertTabLookup(&panes[1], 88);
+ 
+@@ -7129,6 +7197,7 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     try testing.expectEqual(@as(i64, 77), forwarded.*.unnamed_0.navigation_action.*.tab_id);
+     try testing.expectEqualStrings("", cString(forwarded.*.unnamed_0.navigation_action.*.pane_id));
+     try testing.expectEqualStrings("back", cString(forwarded.*.unnamed_0.navigation_action.*.action));
++    try testing.expectEqual(@as(u64, 0), forwarded.*.unnamed_0.navigation_action.*.request_id);
+     try testing.expect(panes[0].can_go_back);
+     try testing.expect(!panes[1].can_go_back);
+ 
+@@ -7141,6 +7210,7 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     );
+     try testing.expectEqual(@as(i64, 77), product_forwarded.*.unnamed_0.navigation_action.*.tab_id);
+     try testing.expectEqualStrings("back", cString(product_forwarded.*.unnamed_0.navigation_action.*.action));
++    try testing.expectEqual(@as(u64, 0), product_forwarded.*.unnamed_0.navigation_action.*.request_id);
+     try testing.expect(!sendNavigationActionForPane("pane-b", "back"));
+     try testing.expect(!sendNavigationActionForPane("missing-pane", "back"));
+     try testing.expect(sendNavigationActionForPane("pane-a", "forward"));
+@@ -7150,14 +7220,52 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+         "forward",
+         cString(forward_action.*.unnamed_0.navigation_action.*.action),
+     );
++    try testing.expectEqual(@as(u64, 0), forward_action.*.unnamed_0.navigation_action.*.request_id);
+ 
+     action.action = @constCast("forward");
+     try testing.expect(handleNavigationAction(tui_a[0], &action));
+     const tui_forward = try readTestMessage(browser_a[1], testing.allocator);
+     defer c.termsurf__term_surf_message__free_unpacked(tui_forward, null);
+     try testing.expectEqualStrings("forward", cString(tui_forward.*.unnamed_0.navigation_action.*.action));
++    try testing.expectEqual(@as(u64, 0), tui_forward.*.unnamed_0.navigation_action.*.request_id);
++
++    try testing.expect(sendNavigationActionForPane("pane-a", "refresh"));
++    const product_refresh = try readTestMessage(browser_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(product_refresh, null);
++    try testing.expectEqualStrings("refresh", cString(product_refresh.*.unnamed_0.navigation_action.*.action));
++    try testing.expectEqual(@as(i64, 77), product_refresh.*.unnamed_0.navigation_action.*.tab_id);
++    try testing.expectEqual(@as(u64, 1), product_refresh.*.unnamed_0.navigation_action.*.request_id);
++
+     action.action = @constCast("refresh");
+-    try testing.expect(!handleNavigationAction(tui_a[0], &action));
++    try testing.expect(handleNavigationAction(tui_a[0], &action));
++    const tui_refresh = try readTestMessage(browser_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(tui_refresh, null);
++    try testing.expectEqualStrings("refresh", cString(tui_refresh.*.unnamed_0.navigation_action.*.action));
++    try testing.expectEqual(@as(i64, 77), tui_refresh.*.unnamed_0.navigation_action.*.tab_id);
++    try testing.expectEqual(@as(u64, 2), tui_refresh.*.unnamed_0.navigation_action.*.request_id);
++    try testing.expect(!sendNavigationActionForPane("pane-b", "refresh"));
++
++    var loading: c.Termsurf__LoadingState = undefined;
++    c.termsurf__loading_state__init(&loading);
++    loading.tab_id = 77;
++    loading.state = @constCast("loading");
++    loading.progress = 3;
++    loading.navigation_request_id = 2;
++    try testing.expect(handleLoadingState(browser_a[0], &loading));
++    const relayed_loading = try readTestMessage(tui_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(relayed_loading, null);
++    try testing.expectEqual(
++        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE),
++        relayed_loading.*.msg_case,
++    );
++    try testing.expectEqual(@as(i64, 77), relayed_loading.*.unnamed_0.loading_state.*.tab_id);
++    try testing.expectEqualStrings("loading", cString(relayed_loading.*.unnamed_0.loading_state.*.state));
++    try testing.expectEqual(@as(u64, 3), relayed_loading.*.unnamed_0.loading_state.*.progress);
++    try testing.expectEqual(@as(u64, 2), relayed_loading.*.unnamed_0.loading_state.*.navigation_request_id);
++    try testing.expect(!handleLoadingState(browser_b[0], &loading));
++    loading.tab_id = 999;
++    try testing.expect(!handleLoadingState(browser_a[0], &loading));
++
+     action.action = @constCast("unknown");
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
+     action.action = @constCast("back");
+@@ -7171,6 +7279,7 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     state.tab_id = 77;
+     state.can_go_back = 1;
+     state.can_go_forward = 1;
++    state.can_refresh = 1;
+     try testing.expect(handleNavigationState(browser_a[0], &state));
+ 
+     const relayed = try readTestMessage(tui_a[1], testing.allocator);
+@@ -7182,10 +7291,13 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     try testing.expectEqual(@as(i64, 77), relayed.*.unnamed_0.navigation_state.*.tab_id);
+     try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_go_back);
+     try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_go_forward);
++    try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_refresh);
+     try testing.expect(panes[0].can_go_back);
+     try testing.expect(panes[0].can_go_forward);
++    try testing.expect(panes[0].can_refresh);
+     try testing.expect(!panes[1].can_go_back);
+     try testing.expect(!panes[1].can_go_forward);
++    try testing.expect(!panes[1].can_refresh);
+ 
+     try testing.expect(!handleNavigationState(browser_b[0], &state));
+     state.tab_id = 0;
+@@ -7196,19 +7308,23 @@ test "termsurf Back and Forward actions preserve pane tab ownership" {
+     state.tab_id = 77;
+     state.can_go_back = 0;
+     state.can_go_forward = 0;
++    state.can_refresh = 0;
+     try testing.expect(handleNavigationState(browser_a[0], &state));
+     const relayed_false = try readTestMessage(tui_a[1], testing.allocator);
+     defer c.termsurf__term_surf_message__free_unpacked(relayed_false, null);
+     try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_go_back);
+     try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_go_forward);
++    try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_refresh);
+     try testing.expect(!panes[0].can_go_back);
+     try testing.expect(!panes[0].can_go_forward);
++    try testing.expect(!panes[0].can_refresh);
+     try testing.expect(!panes[1].can_go_back);
+     try testing.expect(!sendNavigationActionForPane("pane-a", "back"));
++    try testing.expect(!sendNavigationActionForPane("pane-a", "refresh"));
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
+ }
+ 
+-test "termsurf browser disconnect clears Back only for affected owners" {
++test "termsurf browser disconnect clears navigation capabilities only for affected owners" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+@@ -7232,9 +7348,11 @@ test "termsurf browser disconnect clears Back only for affected owners" {
+     panes[0].tab_id = 77;
+     panes[0].can_go_back = true;
+     panes[0].can_go_forward = true;
++    panes[0].can_refresh = true;
+     panes[1].tab_id = 88;
+     panes[1].can_go_back = true;
+     panes[1].can_go_forward = true;
++    panes[1].can_refresh = true;
+     _ = upsertTabLookup(&panes[0], 77);
+     _ = upsertTabLookup(&panes[1], 88);
+ 
+@@ -7249,10 +7367,13 @@ test "termsurf browser disconnect clears Back only for affected owners" {
+     try testing.expectEqual(@as(i64, 77), cleared.*.unnamed_0.navigation_state.*.tab_id);
+     try testing.expectEqual(@as(c_int, 0), cleared.*.unnamed_0.navigation_state.*.can_go_back);
+     try testing.expectEqual(@as(c_int, 0), cleared.*.unnamed_0.navigation_state.*.can_go_forward);
++    try testing.expectEqual(@as(c_int, 0), cleared.*.unnamed_0.navigation_state.*.can_refresh);
+     try testing.expect(!panes[0].can_go_back);
+     try testing.expect(!panes[0].can_go_forward);
++    try testing.expect(!panes[0].can_refresh);
+     try testing.expect(panes[1].can_go_back);
+     try testing.expect(panes[1].can_go_forward);
++    try testing.expect(panes[1].can_refresh);
+     try testing.expectEqual(@as(std.posix.fd_t, -1), servers[0].attached_fd);
+     try testing.expectEqual(browser_b[0], servers[1].attached_fd);
+ }
+diff --git a/src/protobuf/termsurf.pb-c.c b/src/protobuf/termsurf.pb-c.c
+index 884936e15..db1fe02b5 100644
+--- a/src/protobuf/termsurf.pb-c.c
++++ b/src/protobuf/termsurf.pb-c.c
+@@ -3144,7 +3144,7 @@ const ProtobufCMessageDescriptor termsurf__navigate__descriptor =
+   (ProtobufCMessageInit) termsurf__navigate__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
+-static const ProtobufCFieldDescriptor termsurf__navigation_action__field_descriptors[3] =
++static const ProtobufCFieldDescriptor termsurf__navigation_action__field_descriptors[4] =
+ {
+   {
+     "tab_id",
+@@ -3182,16 +3182,29 @@ static const ProtobufCFieldDescriptor termsurf__navigation_action__field_descrip
+     0,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "request_id",
++    4,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_UINT64,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationAction, request_id),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__navigation_action__field_indices_by_name[] = {
+   2,   /* field[2] = action */
+   1,   /* field[1] = pane_id */
++  3,   /* field[3] = request_id */
+   0,   /* field[0] = tab_id */
+ };
+ static const ProtobufCIntRange termsurf__navigation_action__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 3 }
++  { 0, 4 }
+ };
+ const ProtobufCMessageDescriptor termsurf__navigation_action__descriptor =
+ {
+@@ -3201,14 +3214,14 @@ const ProtobufCMessageDescriptor termsurf__navigation_action__descriptor =
+   "Termsurf__NavigationAction",
+   "termsurf",
+   sizeof(Termsurf__NavigationAction),
+-  3,
++  4,
+   termsurf__navigation_action__field_descriptors,
+   termsurf__navigation_action__field_indices_by_name,
+   1,  termsurf__navigation_action__number_ranges,
+   (ProtobufCMessageInit) termsurf__navigation_action__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
+-static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descriptors[3] =
++static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descriptors[4] =
+ {
+   {
+     "tab_id",
+@@ -3246,16 +3259,29 @@ static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descript
+     0,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "can_refresh",
++    4,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_BOOL,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, can_refresh),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__navigation_state__field_indices_by_name[] = {
+   1,   /* field[1] = can_go_back */
+   2,   /* field[2] = can_go_forward */
++  3,   /* field[3] = can_refresh */
+   0,   /* field[0] = tab_id */
+ };
+ static const ProtobufCIntRange termsurf__navigation_state__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 3 }
++  { 0, 4 }
+ };
+ const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor =
+ {
+@@ -3265,7 +3291,7 @@ const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor =
+   "Termsurf__NavigationState",
+   "termsurf",
+   sizeof(Termsurf__NavigationState),
+-  3,
++  4,
+   termsurf__navigation_state__field_descriptors,
+   termsurf__navigation_state__field_indices_by_name,
+   1,  termsurf__navigation_state__number_ranges,
+@@ -4222,7 +4248,7 @@ const ProtobufCMessageDescriptor termsurf__url_changed__descriptor =
+   (ProtobufCMessageInit) termsurf__url_changed__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
+-static const ProtobufCFieldDescriptor termsurf__loading_state__field_descriptors[3] =
++static const ProtobufCFieldDescriptor termsurf__loading_state__field_descriptors[4] =
+ {
+   {
+     "tab_id",
+@@ -4260,8 +4286,21 @@ static const ProtobufCFieldDescriptor termsurf__loading_state__field_descriptors
+     0,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "navigation_request_id",
++    4,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_UINT64,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__LoadingState, navigation_request_id),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__loading_state__field_indices_by_name[] = {
++  3,   /* field[3] = navigation_request_id */
+   2,   /* field[2] = progress */
+   1,   /* field[1] = state */
+   0,   /* field[0] = tab_id */
+@@ -4269,7 +4308,7 @@ static const unsigned termsurf__loading_state__field_indices_by_name[] = {
+ static const ProtobufCIntRange termsurf__loading_state__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 3 }
++  { 0, 4 }
+ };
+ const ProtobufCMessageDescriptor termsurf__loading_state__descriptor =
+ {
+@@ -4279,7 +4318,7 @@ const ProtobufCMessageDescriptor termsurf__loading_state__descriptor =
+   "Termsurf__LoadingState",
+   "termsurf",
+   sizeof(Termsurf__LoadingState),
+-  3,
++  4,
+   termsurf__loading_state__field_descriptors,
+   termsurf__loading_state__field_indices_by_name,
+   1,  termsurf__loading_state__number_ranges,
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index 0167b2648..87e131275 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -320,8 +320,7 @@ struct  Termsurf__Navigate
+ /*
+  * TUI → GUI: tab_id=0, pane_id identifies the owning pane.
+  * GUI → engine: tab_id identifies the native tab, pane_id is empty.
+- * Legal actions are "back" and "forward". Other values, including "refresh",
+- * are rejected.
++ * Legal actions are "back", "forward", and "refresh".
+  */
+ struct  Termsurf__NavigationAction
+ {
+@@ -329,10 +328,14 @@ struct  Termsurf__NavigationAction
+   int64_t tab_id;
+   char *pane_id;
+   char *action;
++  /*
++   * zero TUI -> GUI; nonzero GUI -> engine for Refresh
++   */
++  uint64_t request_id;
+ };
+ #define TERMSURF__NAVIGATION_ACTION__INIT \
+  { PROTOBUF_C_MESSAGE_INIT (&termsurf__navigation_action__descriptor) \
+-, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
++, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string, 0 }
+ 
+ 
+ /*
+@@ -344,10 +347,11 @@ struct  Termsurf__NavigationState
+   int64_t tab_id;
+   protobuf_c_boolean can_go_back;
+   protobuf_c_boolean can_go_forward;
++  protobuf_c_boolean can_refresh;
+ };
+ #define TERMSURF__NAVIGATION_STATE__INIT \
+  { PROTOBUF_C_MESSAGE_INIT (&termsurf__navigation_state__descriptor) \
+-, 0, 0, 0 }
++, 0, 0, 0, 0 }
+ 
+ 
+ struct  Termsurf__MouseEvent
+@@ -541,10 +545,14 @@ struct  Termsurf__LoadingState
+    * 0-100
+    */
+   uint64_t progress;
++  /*
++   * nonzero only for a correlated Refresh
++   */
++  uint64_t navigation_request_id;
+ };
+ #define TERMSURF__LOADING_STATE__INIT \
+  { PROTOBUF_C_MESSAGE_INIT (&termsurf__loading_state__descriptor) \
+-, 0, (char *)protobuf_c_empty_string, 0 }
++, 0, (char *)protobuf_c_empty_string, 0, 0 }
+ 
+ 
+ struct  Termsurf__TitleChanged
+-- 
+2.54.0
+

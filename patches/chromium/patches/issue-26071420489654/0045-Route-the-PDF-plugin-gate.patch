@@ -1,0 +1,67 @@
+From 69d51640e6ae0b26c3ec0ea5177be01c53ad56c6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 16:49:19 -0500
+Subject: [PATCH 045/119] Route the PDF plugin gate
+
+The plugin knocked, the guard asked why,
+"Are you PDF?" came no reply.
+We log the door, then let it wait,
+Until the proper process gate.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../ts_content_renderer_client.cc             | 20 +++++++++++++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index cd971fcc7d..f0038e8959 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -84,6 +84,7 @@ shared_library("libtermsurf_chromium") {
+     "//components/keyed_service/core",
+     "//components/pdf/browser",
+     "//components/pdf/browser:interceptors",
++    "//components/pdf/renderer",
+     "//components/pref_registry",
+     "//components/prefs",
+     "//components/resources:components_resources",
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index 005df4d8de..7390b75a7f 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -7,6 +7,7 @@
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
+ #include "components/pdf/common/constants.h"
++#include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+ #include "content/public/common/url_constants.h"
+@@ -123,6 +124,25 @@ bool TsContentRendererClient::OverrideCreatePlugin(
+     RenderFrame* render_frame,
+     const blink::WebPluginParams& params,
+     blink::WebPlugin** plugin) {
++  if (params.mime_type.Utf8() == pdf::kInternalPluginMimeType) {
++    const bool has_pdf_renderer = pdf::IsPdfRenderer();
++    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-check "
++              << "document_url=" << DocumentUrl(render_frame)
++              << " mime_type=" << params.mime_type.Utf8()
++              << " url=" << GURL(params.url)
++              << " has_pdf_renderer=" << (has_pdf_renderer ? 1 : 0);
++    if (!has_pdf_renderer) {
++      LOG(INFO) << "[issue-792-exp26] internal-plugin-create-skipped "
++                << "reason=missing-pdf-renderer";
++      return false;
++    }
++
++    *plugin = pdf::CreateInternalPlugin(std::move(params), render_frame, {});
++    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-result "
++              << "created=" << (*plugin ? 1 : 0);
++    return true;
++  }
++
+   const bool delegated_to_extensions =
+       extensions_renderer_client_ &&
+       extensions_renderer_client_->OverrideCreatePlugin(render_frame, params);
+-- 
+2.54.0
+

@@ -1,0 +1,124 @@
+From 04587d507ae9c6779f1ccb6f45c5e9bca1a28a14 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 14:57:29 -0500
+Subject: [PATCH 08/17] Default split borders to theme palette colors
+
+Width defaults to 2; unset focused/unfocused colors
+fall back to palette[6]/[8] on macOS paint path.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift | 48 +++++++++++++++-------
+ src/config/Config.zig                      | 19 ++++++---
+ 2 files changed, 46 insertions(+), 21 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 05984005f..fcfe1ae7a 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -584,13 +584,20 @@ extension Ghostty {
+             )
+         }
+ 
+-        var focusedSplitBorderColor: Color? {
++        /// Theme-relative defaults for split borders when config colors are unset.
++        /// Index 6 = ANSI cyan (focused); index 8 = ANSI bright black (unfocused).
++        private func paletteColor(index: Int) -> Color? {
+             guard let config = self.config else { return nil }
+-            var color: ghostty_config_color_s = .init()
+-            let key = "focused-split-border-color"
+-            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
++            guard index >= 0 && index < 256 else { return nil }
++            var palette: ghostty_config_palette_s = .init()
++            let key = "palette"
++            guard ghostty_config_get(config, &palette, key, UInt(key.lengthOfBytes(using: .utf8))) else {
+                 return nil
+             }
++            // C fixed arrays import as Swift tuples; rebind to index by Int.
++            let color: ghostty_config_color_s = withUnsafeBytes(of: palette.colors) { raw in
++                raw.bindMemory(to: ghostty_config_color_s.self)[index]
++            }
+             return .init(
+                 red: Double(color.r) / 255,
+                 green: Double(color.g) / 255,
+@@ -598,23 +605,34 @@ extension Ghostty {
+             )
+         }
+ 
+-        var unfocusedSplitBorderColor: Color? {
++        private func configColorOrPalette(
++            key: String,
++            paletteIndex: Int
++        ) -> Color? {
+             guard let config = self.config else { return nil }
+             var color: ghostty_config_color_s = .init()
+-            let key = "unfocused-split-border-color"
+-            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return nil
++            if ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
++                return .init(
++                    red: Double(color.r) / 255,
++                    green: Double(color.g) / 255,
++                    blue: Double(color.b) / 255
++                )
+             }
+-            return .init(
+-                red: Double(color.r) / 255,
+-                green: Double(color.g) / 255,
+-                blue: Double(color.b) / 255
+-            )
++            return paletteColor(index: paletteIndex)
++        }
++
++        var focusedSplitBorderColor: Color? {
++            configColorOrPalette(key: "focused-split-border-color", paletteIndex: 6)
++        }
++
++        var unfocusedSplitBorderColor: Color? {
++            configColorOrPalette(key: "unfocused-split-border-color", paletteIndex: 8)
+         }
+ 
+         var splitBorderWidth: Double {
+-            guard let config = self.config else { return 0 }
+-            var value: Double = 0
++            // Match Config.zig default (2). Zero still disables borders.
++            guard let config = self.config else { return 2 }
++            var value: Double = 2
+             let key = "split-border-width"
+             _ = ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8)))
+             return value
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index b215ea9b1..8d4645b32 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1085,16 +1085,23 @@ palette: Palette = .{},
+ /// Available since: 1.1.0
+ @"split-divider-color": ?Color = null,
+ 
+-/// The border color of the focused split pane. If not set, no border is drawn.
+-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++/// The border color of the focused split pane. Specified as either hex
++/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++///
++/// When unset, the macOS UI falls back to the active theme palette index 6
++/// (ANSI cyan) so borders stay theme-relative by default.
+ @"focused-split-border-color": ?Color = null,
+ 
+-/// The border color of unfocused split panes. If not set, no border is drawn.
+-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++/// The border color of unfocused split panes. Specified as either hex
++/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++///
++/// When unset, the macOS UI falls back to the active theme palette index 8
++/// (ANSI bright black) so borders stay theme-relative by default.
+ @"unfocused-split-border-color": ?Color = null,
+ 
+-/// The width of the split pane border in points. Set to 0 to disable borders.
+-@"split-border-width": f64 = 0,
++/// The width of the split pane border in points. Defaults to 2 so multi-pane
++/// windows show borders without config. Set to 0 to disable borders.
++@"split-border-width": f64 = 2,
+ 
+ /// The color saturation of unfocused split panes. 1.0 is full color, 0.0 is
+ /// full grayscale. Only applies when in a split layout.
+-- 
+2.50.1 (Apple Git-155)
+

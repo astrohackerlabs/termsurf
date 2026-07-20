@@ -1,0 +1,525 @@
+From 981e8d9cde0c7074107e82e0f61e1290e9be1a42 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 13:37:03 -0500
+Subject: [PATCH 036/119] Probe PDF attach path
+
+The stream wore a wrapper hat,
+The helper arrived after that.
+It knocked on the frame,
+But nobody came,
+So now we know where not to bat.
+---
+ .../libtermsurf_chromium/ts_content_client.cc | 46 ++++++++++++-
+ .../libtermsurf_chromium/ts_content_client.h  |  5 ++
+ .../ts_content_renderer_client.cc             | 47 ++++++++++++++
+ .../ts_content_renderer_client.h              | 10 +++
+ ...esponse_interceptor_url_loader_throttle.cc | 64 +++++++++++--------
+ .../mime_handler_view_attach_helper.cc        |  4 ++
+ .../mime_handler_view_embedder.cc             | 37 +++++++++--
+ .../mime_handler_stream_manager.cc            |  6 ++
+ 8 files changed, 186 insertions(+), 33 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index 48f05351f3..45710d4ed0 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -5,15 +5,57 @@
+ #include "content/libtermsurf_chromium/ts_content_client.h"
+ 
+ #include "base/command_line.h"
++#include "base/files/file_path.h"
+ #include "base/logging.h"
+ #include "content/public/common/content_switches.h"
++#include "content/public/common/webplugininfo.h"
+ #include "extensions/common/constants.h"
++#include "pdf/buildflags.h"
++
++#if BUILDFLAG(ENABLE_PDF)
++#include "components/pdf/common/constants.h"
++#endif
+ 
+ namespace content {
++namespace {
++
++#if BUILDFLAG(ENABLE_PDF)
++constexpr base::FilePath::CharType kTsPdfInternalPluginPath[] =
++    FILE_PATH_LITERAL("internal-pdf-viewer");
++#endif
++
++}  // namespace
+ 
+ TsContentClient::TsContentClient() = default;
+ TsContentClient::~TsContentClient() = default;
+ 
++void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
++  ShellContentClient::AddPlugins(plugins);
++
++#if BUILDFLAG(ENABLE_PDF)
++  static constexpr char16_t kPDFPluginName[] = u"Chromium PDF Plugin";
++  static constexpr char16_t kPDFPluginDescription[] = u"Built-in PDF viewer";
++  static constexpr char kPDFPluginExtension[] = "pdf";
++  static constexpr char kPDFPluginExtensionDescription[] =
++      "Portable Document Format";
++
++  content::WebPluginInfo pdf_info;
++  pdf_info.name = kPDFPluginName;
++  pdf_info.path = base::FilePath(kTsPdfInternalPluginPath);
++  pdf_info.desc = kPDFPluginDescription;
++  content::WebPluginMimeType pdf_mime_type(pdf::kInternalPluginMimeType,
++                                           kPDFPluginExtension,
++                                           kPDFPluginExtensionDescription);
++  pdf_info.mime_types.push_back(pdf_mime_type);
++  pdf_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
++  plugins->push_back(pdf_info);
++
++  LOG(INFO) << "[issue-792-exp15] internal-pdf-plugin-registered mime_type="
++            << pdf::kInternalPluginMimeType
++            << " path=" << pdf_info.path.value();
++#endif
++}
++
+ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   ShellContentClient::AddAdditionalSchemes(schemes);
+ 
+@@ -23,8 +65,8 @@ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   schemes->cors_enabled_schemes.push_back(extensions::kExtensionScheme);
+   schemes->csp_bypassing_schemes.push_back(extensions::kExtensionScheme);
+ 
+-  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-          switches::kProcessType)
++  if (base::CommandLine::ForCurrentProcess()
++          ->GetSwitchValueASCII(switches::kProcessType)
+           .empty()) {
+     LOG(INFO) << "[issue-792-exp6] extension-scheme-registered scheme="
+               << extensions::kExtensionScheme;
+diff --git a/content/libtermsurf_chromium/ts_content_client.h b/content/libtermsurf_chromium/ts_content_client.h
+index 9de8bc9f15..6fe6136646 100644
+--- a/content/libtermsurf_chromium/ts_content_client.h
++++ b/content/libtermsurf_chromium/ts_content_client.h
+@@ -5,10 +5,14 @@
+ #ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+ #define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+ 
++#include <vector>
++
+ #include "content/shell/common/shell_content_client.h"
+ 
+ namespace content {
+ 
++struct WebPluginInfo;
++
+ class TsContentClient : public ShellContentClient {
+  public:
+   TsContentClient();
+@@ -17,6 +21,7 @@ class TsContentClient : public ShellContentClient {
+   TsContentClient(const TsContentClient&) = delete;
+   TsContentClient& operator=(const TsContentClient&) = delete;
+ 
++  void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
+   void AddAdditionalSchemes(Schemes* schemes) override;
+ };
+ 
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index c3249abf1e..b3ad28199d 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -4,20 +4,28 @@
+ 
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ 
++#include "base/functional/bind.h"
+ #include "base/logging.h"
++#include "components/pdf/common/constants.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+ #include "content/public/common/url_constants.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extensions_client.h"
++#include "extensions/common/mojom/guest_view.mojom.h"
+ #include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
+ #include "extensions/renderer/dispatcher.h"
+ #include "extensions/renderer/extension_frame_helper.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
++#include "extensions/renderer/guest_view/mime_handler_view/mime_handler_view_container_manager.h"
+ #include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "third_party/blink/public/platform/web_url.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_element.h"
++#include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
+ #include "third_party/blink/public/web/web_security_policy.h"
+ 
+@@ -40,6 +48,17 @@ void AllowPdfViewerChromeResources() {
+             << extension_misc::kPdfExtensionId;
+ }
+ 
++bool HasInternalId(const blink::WebElement& plugin_element) {
++  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
++}
++
++std::string DocumentUrl(RenderFrame* render_frame) {
++  if (!render_frame || !render_frame->GetWebFrame()) {
++    return "";
++  }
++  return GURL(render_frame->GetWebFrame()->GetDocument().Url()).spec();
++}
++
+ }  // namespace
+ 
+ TsContentRendererClient::TsContentRendererClient() = default;
+@@ -63,11 +82,39 @@ void TsContentRendererClient::RenderThreadStarted() {
+ void TsContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   ShellContentRendererClient::RenderFrameCreated(render_frame);
+ 
++  render_frame->GetAssociatedInterfaceRegistry()
++      ->AddInterface<extensions::mojom::MimeHandlerViewContainerManager>(
++          base::BindRepeating(
++              &extensions::MimeHandlerViewContainerManager::BindReceiver,
++              base::Unretained(render_frame)));
++  LOG(INFO) << "[issue-792-exp15] mime-handler-container-manager-bound "
++            << "render_frame=" << render_frame;
++
+   // ExtensionFrameHelper destroys itself when the RenderFrame is destroyed.
+   new extensions::ExtensionFrameHelper(render_frame, dispatcher());
+   dispatcher()->OnRenderFrameCreated(render_frame);
+ }
+ 
++bool TsContentRendererClient::IsPluginHandledExternally(
++    RenderFrame* render_frame,
++    const blink::WebElement& plugin_element,
++    const GURL& original_url,
++    const std::string& mime_type) {
++  const bool has_internal_id = HasInternalId(plugin_element);
++  const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
++                           mime_type == pdf::kInternalPluginMimeType;
++  const bool handled = has_internal_id && is_pdf_mime;
++
++  LOG(INFO) << "[issue-792-exp15] is-plugin-handled-externally mime_type="
++            << mime_type << " url=" << original_url
++            << " document_url=" << DocumentUrl(render_frame)
++            << " has_internal_id=" << has_internal_id
++            << " plugin_lookup=" << (handled ? "ok" : "missing")
++            << " handled=" << handled;
++
++  return handled;
++}
++
+ bool TsContentRendererClient::OverrideCreatePlugin(
+     RenderFrame* render_frame,
+     const blink::WebPluginParams& params,
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.h b/content/libtermsurf_chromium/ts_content_renderer_client.h
+index 4b618fc35a..d4242674ab 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.h
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.h
+@@ -6,8 +6,14 @@
+ #define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_RENDERER_CLIENT_H_
+ 
+ #include <memory>
++#include <string>
+ 
+ #include "content/shell/renderer/shell_content_renderer_client.h"
++#include "url/gurl.h"
++
++namespace blink {
++class WebElement;
++}  // namespace blink
+ 
+ namespace extensions {
+ class Dispatcher;
+@@ -29,6 +35,10 @@ class TsContentRendererClient : public ShellContentRendererClient {
+ 
+   void RenderThreadStarted() override;
+   void RenderFrameCreated(RenderFrame* render_frame) override;
++  bool IsPluginHandledExternally(RenderFrame* render_frame,
++                                 const blink::WebElement& plugin_element,
++                                 const GURL& original_url,
++                                 const std::string& mime_type) override;
+   bool OverrideCreatePlugin(RenderFrame* render_frame,
+                             const blink::WebPluginParams& params,
+                             blink::WebPlugin** plugin) override;
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index f7b0373a94..a295638bdf 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -90,36 +90,35 @@ void ClearAllButFrameAncestors(network::mojom::URLResponseHead* response_head) {
+   csp.swap(cleared);
+ }
+ 
+-void AddPdfStreamContainer(
++bool AddPdfStreamContainer(
+     const std::string& extension_id,
+     bool embedded,
+     FrameTreeNodeId frame_tree_node_id,
+     blink::mojom::TransferrableURLLoaderPtr transferrable_loader,
+     const GURL& original_url,
+     const std::string& internal_id) {
+-  WebContents* web_contents = WebContents::FromFrameTreeNodeId(
+-      frame_tree_node_id);
++  WebContents* web_contents =
++      WebContents::FromFrameTreeNodeId(frame_tree_node_id);
+   if (!web_contents) {
+-    return;
++    return false;
+   }
+ 
+-  auto* registry = extensions::ExtensionRegistry::Get(
+-      web_contents->GetBrowserContext());
++  auto* registry =
++      extensions::ExtensionRegistry::Get(web_contents->GetBrowserContext());
+   const extensions::Extension* extension =
+       registry ? registry->enabled_extensions().GetByID(extension_id) : nullptr;
+   if (!extension) {
+-    return;
++    return false;
+   }
+ 
+   auto* handler = MimeTypesHandler::GetHandler(extension);
+   if (!handler || !handler->HasPlugin()) {
+-    return;
++    return false;
+   }
+ 
+-  GURL handler_url(extensions::Extension::GetBaseURLFromExtensionId(
+-                       extension_id)
+-                       .spec() +
+-                   handler->handler_url());
++  GURL handler_url(
++      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec() +
++      handler->handler_url());
+   auto stream_container = std::make_unique<extensions::StreamContainer>(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+@@ -132,6 +131,10 @@ void AddPdfStreamContainer(
+             << frame_tree_node_id << " internal_id=" << internal_id
+             << " original_url=" << original_url
+             << " handler_url=" << handler_url;
++  LOG(INFO) << "[issue-792-exp15] stream-container-added-before-resume "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " internal_id=" << internal_id;
++  return true;
+ }
+ 
+ }  // namespace
+@@ -152,8 +155,8 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+     bool* defer) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+-  WebContents* web_contents = WebContents::FromFrameTreeNodeId(
+-      frame_tree_node_id_);
++  WebContents* web_contents =
++      WebContents::FromFrameTreeNodeId(frame_tree_node_id_);
+   if (!web_contents) {
+     return;
+   }
+@@ -189,10 +192,15 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   mojo::PendingReceiver<network::mojom::URLLoaderClient> new_client_receiver =
+       new_client.BindNewPipeAndPassReceiver();
+ 
++  const std::string stream_id =
++      base::Uuid::GenerateRandomV4().AsLowercaseString();
+   const std::string internal_id = base::UnguessableToken::Create().ToString();
+-  const std::string payload = extensions::MimeHandlerViewAttachHelper::
+-      CreateTemplateMimeHandlerPage(response_url, response_head->mime_type,
+-                                    internal_id);
++  LOG(INFO) << "[issue-792-exp15] override-body-start frame_tree_node_id="
++            << frame_tree_node_id_ << " internal_id=" << internal_id
++            << " stream_id=" << stream_id << " original_url=" << response_url;
++  const std::string payload =
++      extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
++          response_url, response_head->mime_type, internal_id);
+   *defer = true;
+ 
+   mojo::ScopedDataPipeProducerHandle producer_handle;
+@@ -233,18 +241,22 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ 
+   bool embedded =
+       request_destination_ != network::mojom::RequestDestination::kDocument;
+-  GetUIThreadTaskRunner({})->PostTask(
+-      FROM_HERE, base::BindOnce(&AddPdfStreamContainer, extension_id, embedded,
+-                                frame_tree_node_id_,
+-                                std::move(transferrable_loader), response_url,
+-                                internal_id));
+-  GetUIThreadTaskRunner({})->PostTask(
+-      FROM_HERE,
+-      base::BindOnce(&TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad,
+-                     weak_factory_.GetWeakPtr()));
++  AddPdfStreamContainer(extension_id, embedded, frame_tree_node_id_,
++                        std::move(transferrable_loader), response_url,
++                        internal_id);
++
++  std::ignore = extensions::MimeHandlerViewAttachHelper::
++      OverrideBodyForInterceptedResponse(
++          frame_tree_node_id_, response_url, response_head->mime_type,
++          stream_id, internal_id,
++          base::BindOnce(
++              &TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad,
++              weak_factory_.GetWeakPtr()));
+ }
+ 
+ void TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad() {
++  LOG(INFO) << "[issue-792-exp15] override-body-resume frame_tree_node_id="
++            << frame_tree_node_id_;
+   delegate_->Resume();
+ }
+ 
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
+index b1ab7caaa4..b9e2eb87a3 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
+@@ -11,6 +11,7 @@
+ 
+ #include "base/containers/flat_map.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
+ #include "content/public/browser/browser_task_traits.h"
+@@ -104,6 +105,9 @@ void MimeHandlerViewAttachHelper::CreateFullPageMimeHandlerView(
+     const GURL& resource_url,
+     const std::string& stream_id,
+     const std::string& token) {
++  LOG(INFO) << "[issue-792-exp15] mhv-embedder-create frame_tree_node_id="
++            << frame_tree_node_id << " resource_url=" << resource_url
++            << " stream_id=" << stream_id << " internal_id=" << token;
+   MimeHandlerViewEmbedder::Create(frame_tree_node_id, resource_url, stream_id,
+                                   token);
+ }
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+index b4b761d0bd..897d420db6 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+@@ -5,6 +5,7 @@
+ #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.h"
+ 
+ #include "base/containers/flat_map.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
+ #include "components/guest_view/browser/guest_view_manager.h"
+@@ -40,8 +41,9 @@ MimeHandlerViewEmbedder* MimeHandlerViewEmbedder::Get(
+     content::FrameTreeNodeId frame_tree_node_id) {
+   const auto& map = *GetMimeHandlerViewEmbeddersMap();
+   auto it = map.find(frame_tree_node_id);
+-  if (it == map.cend())
++  if (it == map.cend()) {
+     return nullptr;
++  }
+   return it->second.get();
+ }
+ 
+@@ -92,10 +94,12 @@ void MimeHandlerViewEmbedder::DidStartNavigation(
+ 
+ void MimeHandlerViewEmbedder::ReadyToCommitNavigation(
+     content::NavigationHandle* handle) {
+-  if (handle->GetFrameTreeNodeId() != frame_tree_node_id_)
++  if (handle->GetFrameTreeNodeId() != frame_tree_node_id_) {
+     return;
+-  if (render_frame_host_)
++  }
++  if (render_frame_host_) {
+     return;
++  }
+ 
+   // It's possible for the navigation to the template HTML document to fail
+   // (e.g. attempting to load a PDF in a fenced frame).
+@@ -111,6 +115,8 @@ void MimeHandlerViewEmbedder::ReadyToCommitNavigation(
+                 network::mojom::WebSandboxFlags::kPlugins);
+ 
+   render_frame_host_ = handle->GetRenderFrameHost();
++  LOG(INFO) << "[issue-792-exp15] mhv-ready-to-commit frame_tree_node_id="
++            << frame_tree_node_id_ << " url=" << handle->GetURL();
+   GetContainerManager()->SetInternalId(internal_id_);
+ }
+ 
+@@ -129,6 +135,23 @@ void MimeHandlerViewEmbedder::DidFinishNavigation(
+ 
+ void MimeHandlerViewEmbedder::RenderFrameCreated(
+     content::RenderFrameHost* render_frame_host) {
++  const bool parent_matches =
++      render_frame_host_ &&
++      render_frame_host_ == render_frame_host->GetParent();
++  const bool url_matches =
++      render_frame_host_ &&
++      render_frame_host_->GetLastCommittedURL() == resource_url_;
++  const bool owner_matches = render_frame_host->GetFrameOwnerElementType() ==
++                             blink::FrameOwnerElementType::kEmbed;
++  const bool name_matches = render_frame_host->GetFrameName() == internal_id_;
++  LOG(INFO) << "[issue-792-exp15] mhv-render-frame-created parent_matches="
++            << parent_matches << " url_matches=" << url_matches
++            << " owner_type="
++            << static_cast<int>(render_frame_host->GetFrameOwnerElementType())
++            << " owner_matches=" << owner_matches
++            << " name_matches=" << name_matches
++            << " ready=" << ready_to_create_mime_handler_view_;
++
+   // If an extension injects a frame before we finish attaching the PDF's
+   // iframe, then we don't want to early out by mistake. We also put an
+   // unguessable name element on the <embed> to guard against the possibility
+@@ -180,6 +203,8 @@ void MimeHandlerViewEmbedder::FrameDeleted(
+ void MimeHandlerViewEmbedder::CreateMimeHandlerViewGuest(
+     mojo::PendingRemote<mime_handler::BeforeUnloadControl>
+         before_unload_control_remote) {
++  LOG(INFO) << "[issue-792-exp15] mhv-create-guest frame_tree_node_id="
++            << frame_tree_node_id_ << " stream_id=" << stream_id_;
+   auto* browser_context = web_contents()->GetBrowserContext();
+   auto* manager =
+       guest_view::GuestViewManager::FromBrowserContext(browser_context);
+@@ -206,8 +231,9 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
+   std::unique_ptr<MimeHandlerViewGuest> guest_view =
+       base::WrapUnique(raw_guest_view);
+ 
+-  if (!guest_view)
++  if (!guest_view) {
+     return;
++  }
+   guest_view->SetBeforeUnloadController(
+       std::move(before_unload_control_remote));
+ 
+@@ -258,8 +284,9 @@ MimeHandlerViewEmbedder::GetContainerManager() {
+ void MimeHandlerViewEmbedder::ReadyToCreateMimeHandlerView(
+     bool ready_to_create_mime_handler_view) {
+   ready_to_create_mime_handler_view_ = ready_to_create_mime_handler_view;
+-  if (!ready_to_create_mime_handler_view_)
++  if (!ready_to_create_mime_handler_view_) {
+     DestroySelf();
++  }
+ }
+ 
+ void MimeHandlerViewEmbedder::OnFrameSandboxed() {
+diff --git a/extensions/browser/mime_handler/mime_handler_stream_manager.cc b/extensions/browser/mime_handler/mime_handler_stream_manager.cc
+index 1c438f13da..8c63a307b7 100644
+--- a/extensions/browser/mime_handler/mime_handler_stream_manager.cc
++++ b/extensions/browser/mime_handler/mime_handler_stream_manager.cc
+@@ -11,6 +11,7 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/strings/to_string.h"
+@@ -637,6 +638,9 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+       about_blank_host->GetFrameTreeNodeId();
+   stream_info->set_extension_host_frame_tree_node_id(
+       extension_host_frame_tree_node_id);
++  LOG(INFO) << "[issue-792-exp15] pdf-extension-about-blank "
++            << "frame_tree_node_id=" << extension_host_frame_tree_node_id
++            << " embedder=" << embedder_host->GetFrameTreeNodeId();
+ 
+   NavigateToExtensionUrl(extension_host_frame_tree_node_id, stream_info,
+                          embedder_host->GetSiteInstance(),
+@@ -684,6 +688,8 @@ void MimeHandlerStreamManager::NavigateToExtensionUrl(
+       stream_info->stream()->handler_url());
+   params.frame_tree_node_id = extension_host_frame_tree_node_id;
+   params.source_site_instance = source_site_instance;
++  LOG(INFO) << "[issue-792-exp15] pdf-extension-navigate handler_url="
++            << stream_info->stream()->handler_url();
+   web_contents()->GetController().LoadURLWithParams(params);
+ }
+ 
+-- 
+2.54.0
+

@@ -1,0 +1,269 @@
+From 9d472e6691962cde56dccc35163d9f9cd1a28d32 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 22:43:21 -0500
+Subject: [PATCH 72/90] Auto-select upload fixtures
+
+A hidden switch picks one small file,
+Then sends it through the browser aisle.
+No panel opens, no secrets roam,
+Just fixture bytes that make it home.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../ts_file_select_helper.cc                  | 144 ++++++++++++++++++
+ .../ts_file_select_helper.h                   |  25 +++
+ .../ts_javascript_dialog_manager.cc           |  16 +-
+ .../ts_javascript_dialog_manager.h            |   3 +
+ 5 files changed, 188 insertions(+), 2 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_file_select_helper.cc
+ create mode 100644 content/libtermsurf_chromium/ts_file_select_helper.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 0d69e9f14d..d4b6346d10 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -55,6 +55,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_renderer_client.h",
+     "ts_download_support.cc",
+     "ts_download_support.h",
++    "ts_file_select_helper.cc",
++    "ts_file_select_helper.h",
+     "ts_http_auth_delegate.cc",
+     "ts_http_auth_delegate.h",
+     "ts_javascript_dialog_manager.cc",
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+new file mode 100644
+index 0000000000..6b2cf6e142
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -0,0 +1,144 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_file_select_helper.h"
++
++#include <stdint.h>
++#include <sys/stat.h>
++
++#include <utility>
++#include <vector>
++
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/logging.h"
++#include "content/public/browser/file_select_listener.h"
++#include "content/public/browser/render_frame_host.h"
++#include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
++
++namespace content {
++namespace {
++
++constexpr char kTermSurfFileUploadAutoSelectSwitch[] =
++    "termsurf-file-upload-auto-select";
++
++const char* FileChooserModeName(blink::mojom::FileChooserParams::Mode mode) {
++  switch (mode) {
++    case blink::mojom::FileChooserParams::Mode::kOpen:
++      return "kOpen";
++    case blink::mojom::FileChooserParams::Mode::kOpenMultiple:
++      return "kOpenMultiple";
++    case blink::mojom::FileChooserParams::Mode::kUploadFolder:
++      return "kUploadFolder";
++    case blink::mojom::FileChooserParams::Mode::kOpenDirectory:
++      return "kOpenDirectory";
++    case blink::mojom::FileChooserParams::Mode::kSave:
++      return "kSave";
++  }
++}
++
++void LogChooserRequest(const char* event,
++                       const blink::mojom::FileChooserParams& params) {
++  LOG(INFO) << "[termsurf-file-upload] " << event
++            << " mode=" << FileChooserModeName(params.mode)
++            << " need_local_path=" << (params.need_local_path ? 1 : 0)
++            << " use_media_capture=" << (params.use_media_capture ? 1 : 0)
++            << " open_writable=" << (params.open_writable ? 1 : 0);
++}
++
++bool IsOrdinaryReadOnlyUpload(const blink::mojom::FileChooserParams& params,
++                              const char** reason) {
++  if (params.mode != blink::mojom::FileChooserParams::Mode::kOpen &&
++      params.mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple) {
++    *reason = "unsupported-mode";
++    return false;
++  }
++  if (params.use_media_capture) {
++    *reason = "media-capture";
++    return false;
++  }
++  if (params.open_writable) {
++    *reason = "writable";
++    return false;
++  }
++  return true;
++}
++
++bool IsValidUploadFixturePath(const base::FilePath& path,
++                              int64_t* size,
++                              const char** reason) {
++  if (path.empty()) {
++    *reason = "empty-path";
++    return false;
++  }
++  if (!path.IsAbsolute()) {
++    *reason = "relative-path";
++    return false;
++  }
++  struct stat stat_info;
++  if (lstat(path.value().c_str(), &stat_info) != 0) {
++    *reason = "missing-path";
++    return false;
++  }
++  if (S_ISLNK(stat_info.st_mode)) {
++    *reason = "symlink";
++    return false;
++  }
++  if (S_ISDIR(stat_info.st_mode)) {
++    *reason = "directory";
++    return false;
++  }
++  if (!S_ISREG(stat_info.st_mode)) {
++    *reason = "non-regular-file";
++    return false;
++  }
++  *size = stat_info.st_size;
++  return true;
++}
++
++}  // namespace
++
++bool MaybeRunTsFileChooser(RenderFrameHost* render_frame_host,
++                           scoped_refptr<FileSelectListener> listener,
++                           const blink::mojom::FileChooserParams& params) {
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (!command_line->HasSwitch(kTermSurfFileUploadAutoSelectSwitch)) {
++    return false;
++  }
++
++  LogChooserRequest("request", params);
++
++  const char* reason = nullptr;
++  if (!IsOrdinaryReadOnlyUpload(params, &reason)) {
++    LOG(WARNING) << "[termsurf-file-upload] cancelled reason=" << reason;
++    listener->FileSelectionCanceled();
++    return true;
++  }
++
++  base::FilePath selected_path =
++      command_line->GetSwitchValuePath(kTermSurfFileUploadAutoSelectSwitch);
++  int64_t selected_size = 0;
++  if (!IsValidUploadFixturePath(selected_path, &selected_size, &reason)) {
++    LOG(WARNING) << "[termsurf-file-upload] cancelled reason=" << reason
++                 << " path=" << selected_path.AsUTF8Unsafe();
++    listener->FileSelectionCanceled();
++    return true;
++  }
++
++  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
++  files.push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
++      blink::mojom::NativeFileInfo::New(
++          selected_path, selected_path.BaseName().AsUTF16Unsafe(),
++          std::vector<std::u16string>())));
++
++  LOG(INFO) << "[termsurf-file-upload] selected"
++            << " path=" << selected_path.AsUTF8Unsafe()
++            << " basename=" << selected_path.BaseName().AsUTF8Unsafe()
++            << " size=" << selected_size << " frame=" << render_frame_host;
++
++  listener->FileSelected(std::move(files), base::FilePath(), params.mode);
++  return true;
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+new file mode 100644
+index 0000000000..4d2a809766
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_FILE_SELECT_HELPER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_FILE_SELECT_HELPER_H_
++
++#include "base/memory/scoped_refptr.h"
++
++namespace blink::mojom {
++class FileChooserParams;
++}
++
++namespace content {
++
++class FileSelectListener;
++class RenderFrameHost;
++
++bool MaybeRunTsFileChooser(RenderFrameHost* render_frame_host,
++                           scoped_refptr<FileSelectListener> listener,
++                           const blink::mojom::FileChooserParams& params);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_FILE_SELECT_HELPER_H_
+diff --git a/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+index d006de0ada..13677c2bb1 100644
+--- a/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
++++ b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+@@ -10,6 +10,8 @@
+ #include "base/check.h"
+ #include "base/logging.h"
+ #include "base/strings/utf_string_conversions.h"
++#include "content/libtermsurf_chromium/ts_file_select_helper.h"
++#include "content/public/browser/file_select_listener.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
+ #include "url/gurl.h"
+@@ -171,8 +173,7 @@ bool TsJavaScriptDialogManager::Reply(WebContents* web_contents,
+   uint64_t stored_request_id = it->second.request_id;
+   pending.erase(it);
+   LOG(INFO) << "[termsurf-js-dialog] reply wc=" << web_contents
+-            << " request_id=" << stored_request_id
+-            << " accepted=" << accepted;
++            << " request_id=" << stored_request_id << " accepted=" << accepted;
+   std::move(callback).Run(accepted, prompt_text);
+   return true;
+ }
+@@ -185,4 +186,15 @@ TsShellPlatformDelegate::CreateJavaScriptDialogManager(Shell* shell) {
+   return std::make_unique<TsJavaScriptDialogManager>();
+ }
+ 
++void TsShellPlatformDelegate::RunFileChooser(
++    RenderFrameHost* render_frame_host,
++    scoped_refptr<FileSelectListener> listener,
++    const blink::mojom::FileChooserParams& params) {
++  if (MaybeRunTsFileChooser(render_frame_host, listener, params)) {
++    return;
++  }
++  ShellPlatformDelegate::RunFileChooser(render_frame_host, std::move(listener),
++                                        params);
++}
++
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_javascript_dialog_manager.h b/content/libtermsurf_chromium/ts_javascript_dialog_manager.h
+index dd63f867bf..54b22db285 100644
+--- a/content/libtermsurf_chromium/ts_javascript_dialog_manager.h
++++ b/content/libtermsurf_chromium/ts_javascript_dialog_manager.h
+@@ -63,6 +63,9 @@ class TsShellPlatformDelegate : public ShellPlatformDelegate {
+ 
+   std::unique_ptr<JavaScriptDialogManager> CreateJavaScriptDialogManager(
+       Shell* shell) override;
++  void RunFileChooser(RenderFrameHost* render_frame_host,
++                      scoped_refptr<FileSelectListener> listener,
++                      const blink::mojom::FileChooserParams& params) override;
+ };
+ 
+ }  // namespace content
+-- 
+2.54.0
+

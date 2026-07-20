@@ -1,0 +1,175 @@
+From 0d665340ddaef5ad9606e27d549201df1182add4 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 15:44:39 -0500
+Subject: [PATCH 081/119] Probe GUI active print focus
+
+A print panel knocked, but stayed offstage,
+So active state stepped onto the page.
+It rang the shell and wrote down the score,
+The window still answered: not yet, no more.
+---
+ .../ts_browser_main_parts.cc                  | 53 +++++++++++++++++++
+ .../ts_shell_window_mac.h                     |  6 +++
+ .../ts_shell_window_mac.mm                    | 30 +++++++++++
+ 3 files changed, 89 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1244f6a180..1c79dc41e4 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -10,6 +10,7 @@
+ 
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
++#include "base/process/process_handle.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/single_thread_task_runner.h"
+@@ -90,6 +91,20 @@ bool Issue794InputTraceEnabled() {
+   return enabled;
+ }
+ 
++bool PdfNativePrintTraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_PDF_NATIVE_PRINT_TRACE") != nullptr;
++  return enabled;
++}
++
++void TracePdfNativePrintFromBrowserMainParts(const std::string& event) {
++  if (!PdfNativePrintTraceEnabled()) {
++    return;
++  }
++  LOG(INFO) << "pdf-native-print pid=" << base::GetCurrentProcId()
++            << " source=ts_browser_main_parts.cc event=" << event;
++}
++
+ void NotifyTermSurfInputActivation(WebContents* web_contents) {
+   if (auto* frame = web_contents->GetPrimaryMainFrame()) {
+     frame->NotifyUserActivation(
+@@ -1274,6 +1289,41 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+   }
+ 
+   auto* web_contents = tab->shell->web_contents();
++  TracePdfNativePrintFromBrowserMainParts(
++      base::StringPrintf("set-gui-active-enter active=%d reason=%s shell=%p "
++                         "web_contents=%p",
++                         active ? 1 : 0, reason.c_str(),
++                         static_cast<void*>(tab->shell),
++                         static_cast<void*>(web_contents)));
++#if BUILDFLAG(IS_MAC)
++  if (Issue794InputTraceEnabled() || PdfNativePrintTraceEnabled()) {
++    LOG(INFO) << "[termsurf-pdf-input] set-gui-active-before"
++              << " active=" << (active ? 1 : 0) << " reason=" << reason
++              << " shell=" << static_cast<void*>(tab->shell)
++              << " web_contents=" << static_cast<void*>(web_contents) << " "
++              << DescribeShellWindowActivationStateForTermSurf(tab->shell);
++    TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
++        "set-gui-active-before active=%d reason=%s %s", active ? 1 : 0,
++        reason.c_str(),
++        DescribeShellWindowActivationStateForTermSurf(tab->shell).c_str()));
++  }
++  if (active) {
++    ActivateShellWindowForTermSurf(tab->shell);
++    TracePdfNativePrintFromBrowserMainParts(
++        "set-gui-active-activate-shell-called");
++  }
++  if (Issue794InputTraceEnabled() || PdfNativePrintTraceEnabled()) {
++    LOG(INFO) << "[termsurf-pdf-input] set-gui-active-after"
++              << " active=" << (active ? 1 : 0) << " reason=" << reason
++              << " shell=" << static_cast<void*>(tab->shell)
++              << " web_contents=" << static_cast<void*>(web_contents) << " "
++              << DescribeShellWindowActivationStateForTermSurf(tab->shell);
++    TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
++        "set-gui-active-after active=%d reason=%s %s", active ? 1 : 0,
++        reason.c_str(),
++        DescribeShellWindowActivationStateForTermSurf(tab->shell).c_str()));
++  }
++#endif
+   auto* main_frame = web_contents->GetPrimaryMainFrame();
+   auto* render_widget_host =
+       main_frame ? main_frame->GetRenderWidgetHost() : nullptr;
+@@ -1297,6 +1347,9 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+     return;
+   }
+   render_widget_host_impl->SetPageFocus(active);
++  TracePdfNativePrintFromBrowserMainParts(
++      base::StringPrintf("set-gui-active-page-focus active=%d",
++                         active ? 1 : 0));
+ }
+ 
+ void TsBrowserMainParts::SetColorScheme(void* wc_handle, bool dark) {
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index 9b7d1b6560..5375e9ed1d 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -5,6 +5,8 @@
+ #ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_SHELL_WINDOW_MAC_H_
+ #define CONTENT_LIBTERMSURF_CHROMIUM_TS_SHELL_WINDOW_MAC_H_
+ 
++#include <string>
++
+ #include "ui/gfx/geometry/size.h"
+ 
+ namespace content {
+@@ -13,6 +15,10 @@ class Shell;
+ 
+ void ConfigureShellWindowForTermSurf(Shell* shell);
+ 
++std::string DescribeShellWindowActivationStateForTermSurf(Shell* shell);
++
++void ActivateShellWindowForTermSurf(Shell* shell);
++
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+                                          double screen_x,
+                                          double screen_y,
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index fce3033204..9300cdab6c 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -8,6 +8,7 @@
+ 
+ #include <algorithm>
+ #include <cmath>
++#include <sstream>
+ 
+ #include "base/logging.h"
+ #include "content/public/browser/web_contents.h"
+@@ -51,6 +52,35 @@ void ConfigureShellWindowForTermSurf(Shell* shell) {
+   [window setIgnoresMouseEvents:YES];
+ }
+ 
++std::string DescribeShellWindowActivationStateForTermSurf(Shell* shell) {
++  std::ostringstream out;
++  out << "activation_policy=" << static_cast<int>(NSApp.activationPolicy)
++      << " app_active=" << (NSApp.active ? 1 : 0)
++      << " key_window=" << (__bridge void*)NSApp.keyWindow
++      << " main_window=" << (__bridge void*)NSApp.mainWindow;
++
++  NSWindow* window = shell ? shell->window().GetNativeNSWindow() : nil;
++  out << " shell_window=" << (__bridge void*)window;
++  if (window) {
++    out << " visible=" << (window.visible ? 1 : 0)
++        << " key=" << (window.keyWindow ? 1 : 0)
++        << " main=" << (window.mainWindow ? 1 : 0)
++        << " miniaturized=" << (window.miniaturized ? 1 : 0)
++        << " can_key=" << ([window canBecomeKeyWindow] ? 1 : 0)
++        << " can_main=" << ([window canBecomeMainWindow] ? 1 : 0)
++        << " matches_key=" << (NSApp.keyWindow == window ? 1 : 0)
++        << " matches_main=" << (NSApp.mainWindow == window ? 1 : 0);
++  }
++  return out.str();
++}
++
++void ActivateShellWindowForTermSurf(Shell* shell) {
++  if (!shell || !shell->web_contents()) {
++    return;
++  }
++  shell->ActivateContents(shell->web_contents());
++}
++
+ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+                                          double screen_x,
+                                          double screen_y,
+-- 
+2.54.0
+

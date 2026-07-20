@@ -1,0 +1,405 @@
+From db4e7864f59b5228575ad17ccae3256a06be4737 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 21:48:49 -0500
+Subject: [PATCH 071/122] Deny permissions by default
+
+A shell once handed out keys,
+To every bright API breeze.
+Now TermSurf says "no,"
+Unless features can show
+A safe path with tests that appease.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   4 +
+ .../libtermsurf_chromium/ts_browser_client.cc |   8 +
+ .../libtermsurf_chromium/ts_browser_client.h  |   2 +
+ .../ts_browser_context.cc                     |  28 ++++
+ .../libtermsurf_chromium/ts_browser_context.h |  28 ++++
+ .../ts_browser_main_parts.cc                  |   5 +-
+ .../ts_permission_manager.cc                  | 152 ++++++++++++++++++
+ .../ts_permission_manager.h                   |  61 +++++++
+ 8 files changed, 286 insertions(+), 2 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_browser_context.cc
+ create mode 100644 content/libtermsurf_chromium/ts_browser_context.h
+ create mode 100644 content/libtermsurf_chromium/ts_permission_manager.cc
+ create mode 100644 content/libtermsurf_chromium/ts_permission_manager.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 0b0053d1ab..0d69e9f14d 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -45,6 +45,8 @@ shared_library("libtermsurf_chromium") {
+     "libtermsurf_chromium.h",
+     "ts_browser_client.cc",
+     "ts_browser_client.h",
++    "ts_browser_context.cc",
++    "ts_browser_context.h",
+     "ts_browser_main_parts.cc",
+     "ts_browser_main_parts.h",
+     "ts_content_client.cc",
+@@ -75,6 +77,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_pdf_stream_delegate.h",
+     "ts_payment_request.cc",
+     "ts_payment_request.h",
++    "ts_permission_manager.cc",
++    "ts_permission_manager.h",
+     "ts_plugin_response_interceptor_url_loader_throttle.cc",
+     "ts_plugin_response_interceptor_url_loader_throttle.h",
+     "ts_plugin_utils.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 3109bc627b..a75baf0f9e 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,6 +5,7 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "base/command_line.h"
++#include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/libtermsurf_chromium/ts_http_auth_delegate.h"
+ #include "content/libtermsurf_chromium/ts_payment_request.h"
+@@ -264,6 +265,13 @@ void TsBrowserClient::SiteInstanceGotProcessAndSite(
+   MaybeActivateTsPdfSiteInstance(site_instance);
+ }
+ 
++bool TsBrowserClient::IsFileSystemAccessApiFilePickerAllowed(
++    WebContents* web_contents) {
++  LOG(INFO) << "[termsurf-permission] file-system-access-picker denied"
++            << " web_contents=" << web_contents;
++  return false;
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 0c20d08cb5..12f65f7ac1 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -99,6 +99,8 @@ class TsBrowserClient : public ShellContentBrowserClient {
+                                const GURL& site_url) override;
+   bool IsHandledURL(const GURL& url) override;
+   void SiteInstanceGotProcessAndSite(SiteInstance* site_instance) override;
++  bool IsFileSystemAccessApiFilePickerAllowed(
++      WebContents* web_contents) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_browser_context.cc b/content/libtermsurf_chromium/ts_browser_context.cc
+new file mode 100644
+index 0000000000..8c0a412808
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_browser_context.cc
+@@ -0,0 +1,28 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_browser_context.h"
++
++#include <memory>
++
++#include "content/libtermsurf_chromium/ts_permission_manager.h"
++#include "content/public/browser/permission_controller_delegate.h"
++
++namespace content {
++
++TsBrowserContext::TsBrowserContext(bool off_the_record,
++                                   bool delay_services_creation)
++    : ShellBrowserContext(off_the_record, delay_services_creation) {}
++
++TsBrowserContext::~TsBrowserContext() = default;
++
++PermissionControllerDelegate*
++TsBrowserContext::GetPermissionControllerDelegate() {
++  if (!permission_manager_) {
++    permission_manager_ = std::make_unique<TsPermissionManager>();
++  }
++  return permission_manager_.get();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_browser_context.h b/content/libtermsurf_chromium/ts_browser_context.h
+new file mode 100644
+index 0000000000..937a20daf6
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_browser_context.h
+@@ -0,0 +1,28 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_BROWSER_CONTEXT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_BROWSER_CONTEXT_H_
++
++#include "content/shell/browser/shell_browser_context.h"
++
++namespace content {
++
++class PermissionControllerDelegate;
++
++class TsBrowserContext : public ShellBrowserContext {
++ public:
++  TsBrowserContext(bool off_the_record, bool delay_services_creation);
++
++  TsBrowserContext(const TsBrowserContext&) = delete;
++  TsBrowserContext& operator=(const TsBrowserContext&) = delete;
++
++  ~TsBrowserContext() override;
++
++  PermissionControllerDelegate* GetPermissionControllerDelegate() override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_BROWSER_CONTEXT_H_
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 4ad7fa501e..3196866833 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -26,6 +26,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
++#include "content/libtermsurf_chromium/ts_browser_context.h"
+ #include "content/libtermsurf_chromium/ts_download_support.h"
+ #include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+@@ -240,8 +241,8 @@ void TsBrowserMainParts::InitializeBrowserContexts() {
+   EnsureTsBrowserContextKeyedServiceFactoriesBuilt();
+   LOG(INFO) << "[termsurf-pdf] keyed-service-factories-built";
+ 
+-  set_browser_context(new ShellBrowserContext(false, true));
+-  set_off_the_record_browser_context(new ShellBrowserContext(true, true));
++  set_browser_context(new TsBrowserContext(false, true));
++  set_off_the_record_browser_context(new TsBrowserContext(true, true));
+ 
+   ConfigureTsDownloads(browser_context());
+   ConfigureTsDownloads(off_the_record_browser_context());
+diff --git a/content/libtermsurf_chromium/ts_permission_manager.cc b/content/libtermsurf_chromium/ts_permission_manager.cc
+new file mode 100644
+index 0000000000..575f1c4455
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_permission_manager.cc
+@@ -0,0 +1,152 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_permission_manager.h"
++
++#include <optional>
++#include <string>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/logging.h"
++#include "content/public/browser/permission_request_description.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
++#include "third_party/blink/public/common/permissions/permission_utils.h"
++#include "third_party/blink/public/mojom/permissions/permission_status.mojom.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++
++namespace content {
++namespace {
++
++blink::mojom::PermissionStatus DeniedStatus() {
++  return blink::mojom::PermissionStatus::DENIED;
++}
++
++PermissionResult DeniedResult() {
++  return PermissionResult(DeniedStatus());
++}
++
++std::string PermissionNameForLog(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor) {
++  std::optional<blink::PermissionType> permission_type =
++      blink::MaybePermissionDescriptorToPermissionType(permission_descriptor);
++  if (!permission_type.has_value()) {
++    return "unknown";
++  }
++  return blink::GetPermissionString(permission_type.value());
++}
++
++void LogDenied(const char* method,
++               const blink::mojom::PermissionDescriptorPtr& permission,
++               const GURL& requesting_origin = GURL(),
++               const GURL& embedding_origin = GURL()) {
++  LOG(INFO) << "[termsurf-permission] denied"
++            << " method=" << method
++            << " type=" << PermissionNameForLog(permission)
++            << " requesting_origin=" << requesting_origin.spec()
++            << " embedding_origin=" << embedding_origin.spec();
++}
++
++}  // namespace
++
++TsPermissionManager::TsPermissionManager() = default;
++TsPermissionManager::~TsPermissionManager() = default;
++
++void TsPermissionManager::RequestPermissionsFromCurrentDocument(
++    RenderFrameHost* render_frame_host,
++    const PermissionRequestDescription& request_description,
++    base::OnceCallback<void(const std::vector<PermissionResult>&)> callback) {
++  std::vector<PermissionResult> results;
++  results.reserve(request_description.permissions.size());
++  GURL requesting_origin = request_description.requesting_origin;
++  GURL embedding_origin;
++  if (render_frame_host) {
++    if (requesting_origin.is_empty()) {
++      requesting_origin = render_frame_host->GetLastCommittedURL();
++    }
++    if (RenderFrameHost* main_frame = render_frame_host->GetMainFrame()) {
++      embedding_origin = main_frame->GetLastCommittedURL();
++    }
++  }
++
++  for (const auto& permission : request_description.permissions) {
++    LogDenied("request-current-document", permission, requesting_origin,
++              embedding_origin);
++    results.push_back(DeniedResult());
++  }
++  std::move(callback).Run(results);
++}
++
++blink::mojom::PermissionStatus TsPermissionManager::GetPermissionStatus(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    const GURL& requesting_origin,
++    const GURL& embedding_origin) {
++  LogDenied("status", permission_descriptor, requesting_origin,
++            embedding_origin);
++  return DeniedStatus();
++}
++
++PermissionResult
++TsPermissionManager::GetPermissionResultForOriginWithoutContext(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    const url::Origin& requesting_origin,
++    const url::Origin& embedding_origin) {
++  LogDenied("origin-without-context", permission_descriptor,
++            requesting_origin.GetURL(), embedding_origin.GetURL());
++  return DeniedResult();
++}
++
++PermissionResult TsPermissionManager::GetPermissionResultForCurrentDocument(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    RenderFrameHost* render_frame_host,
++    bool should_include_device_status) {
++  GURL requesting_origin;
++  GURL embedding_origin;
++  if (render_frame_host) {
++    requesting_origin = render_frame_host->GetLastCommittedURL();
++    if (RenderFrameHost* main_frame = render_frame_host->GetMainFrame()) {
++      embedding_origin = main_frame->GetLastCommittedURL();
++    }
++  }
++  LogDenied("current-document", permission_descriptor, requesting_origin,
++            embedding_origin);
++  return DeniedResult();
++}
++
++PermissionResult TsPermissionManager::GetPermissionResultForWorker(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    RenderProcessHost* render_process_host,
++    const GURL& worker_origin) {
++  (void)render_process_host;
++  LogDenied("worker", permission_descriptor, worker_origin, worker_origin);
++  return DeniedResult();
++}
++
++PermissionResult TsPermissionManager::GetPermissionResultForEmbeddedRequester(
++    const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++    RenderFrameHost* render_frame_host,
++    const url::Origin& requesting_origin) {
++  GURL embedding_origin;
++  if (render_frame_host) {
++    if (RenderFrameHost* main_frame = render_frame_host->GetMainFrame()) {
++      embedding_origin = main_frame->GetLastCommittedURL();
++    }
++  }
++  LogDenied("embedded-requester", permission_descriptor,
++            requesting_origin.GetURL(), embedding_origin);
++  return DeniedResult();
++}
++
++void TsPermissionManager::ResetPermission(blink::PermissionType permission,
++                                          const GURL& requesting_origin,
++                                          const GURL& embedding_origin) {
++  LOG(INFO) << "[termsurf-permission] reset ignored"
++            << " type=" << blink::GetPermissionString(permission)
++            << " requesting_origin=" << requesting_origin.spec()
++            << " embedding_origin=" << embedding_origin.spec();
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_permission_manager.h b/content/libtermsurf_chromium/ts_permission_manager.h
+new file mode 100644
+index 0000000000..76838566b9
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_permission_manager.h
+@@ -0,0 +1,61 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PERMISSION_MANAGER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PERMISSION_MANAGER_H_
++
++#include "base/functional/callback_forward.h"
++#include "content/public/browser/permission_controller_delegate.h"
++#include "content/public/browser/permission_result.h"
++
++class GURL;
++
++namespace blink {
++enum class PermissionType;
++}
++
++namespace content {
++
++class TsPermissionManager : public PermissionControllerDelegate {
++ public:
++  TsPermissionManager();
++
++  TsPermissionManager(const TsPermissionManager&) = delete;
++  TsPermissionManager& operator=(const TsPermissionManager&) = delete;
++
++  ~TsPermissionManager() override;
++
++  void RequestPermissionsFromCurrentDocument(
++      RenderFrameHost* render_frame_host,
++      const PermissionRequestDescription& request_description,
++      base::OnceCallback<void(const std::vector<PermissionResult>&)> callback)
++      override;
++  blink::mojom::PermissionStatus GetPermissionStatus(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      const GURL& requesting_origin,
++      const GURL& embedding_origin) override;
++  PermissionResult GetPermissionResultForOriginWithoutContext(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      const url::Origin& requesting_origin,
++      const url::Origin& embedding_origin) override;
++  PermissionResult GetPermissionResultForCurrentDocument(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderFrameHost* render_frame_host,
++      bool should_include_device_status) override;
++  PermissionResult GetPermissionResultForWorker(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderProcessHost* render_process_host,
++      const GURL& worker_origin) override;
++  PermissionResult GetPermissionResultForEmbeddedRequester(
++      const blink::mojom::PermissionDescriptorPtr& permission_descriptor,
++      content::RenderFrameHost* render_frame_host,
++      const url::Origin& requesting_origin) override;
++  void ResetPermission(blink::PermissionType permission,
++                       const GURL& requesting_origin,
++                       const GURL& embedding_origin) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PERMISSION_MANAGER_H_
+-- 
+2.50.1 (Apple Git-155)
+

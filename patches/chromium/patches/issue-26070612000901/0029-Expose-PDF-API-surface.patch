@@ -1,0 +1,287 @@
+From e7d2c4049c3ed51faa5acd9709d459fc0b9c1cab Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 11:10:26 -0500
+Subject: [PATCH 29/90] Expose PDF API surface
+
+Two private keys stayed on the ring,
+Chrome's common map began to sing.
+The door still stuck, but now we know:
+The renderer never asked the show.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  3 ++
+ .../extensions/ts_extensions_api_provider.cc  | 32 ++++++++++++
+ .../extensions/ts_extensions_client.cc        |  4 ++
+ .../extensions/ts_pdf_component_extension.cc  | 51 +++++++++++++------
+ .../extensions/ts_pdf_resource_bundle.cc      | 45 +++++++++++-----
+ 5 files changed, 108 insertions(+), 27 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index ae6ed04f9a..05f2646fc4 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -60,6 +60,9 @@ shared_library("libtermsurf_chromium") {
+ 
+   deps = [
+     "//chrome/browser/resources/pdf:resources",
++    "//chrome/common:resources",
++    "//chrome/common/extensions",
++    "//chrome/common/extensions/api",
+     "//components/custom_handlers",
+     "//components/keyed_service/content",
+     "//components/keyed_service/core",
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+index 63606adf57..fe767224b2 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_api_provider.cc
+@@ -4,7 +4,31 @@
+ 
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h"
+ 
++#include "base/logging.h"
++#include "chrome/common/extensions/api/generated_schemas.h"
++
+ namespace content {
++namespace {
++
++bool ShouldLogSchemaRequest(const std::string& name) {
++  static bool pdf_viewer_private_logged = false;
++  static bool resources_private_logged = false;
++
++  bool* logged = nullptr;
++  if (name == "pdfViewerPrivate") {
++    logged = &pdf_viewer_private_logged;
++  } else if (name == "resourcesPrivate") {
++    logged = &resources_private_logged;
++  }
++
++  if (!logged || *logged) {
++    return false;
++  }
++  *logged = true;
++  return true;
++}
++
++}  // namespace
+ 
+ TsExtensionsAPIProvider::TsExtensionsAPIProvider() = default;
+ TsExtensionsAPIProvider::~TsExtensionsAPIProvider() = default;
+@@ -25,11 +49,19 @@ void TsExtensionsAPIProvider::AddAPIJSONSources(
+     extensions::JSONFeatureProviderSource* json_source) {}
+ 
+ bool TsExtensionsAPIProvider::IsAPISchemaGenerated(const std::string& name) {
++  if (ShouldLogSchemaRequest(name)) {
++    LOG(INFO) << "[issue-792-exp8] schema-request name=" << name << " found="
++              << extensions::api::ChromeGeneratedSchemas::IsGenerated(name);
++  }
+   return false;
+ }
+ 
+ std::string_view TsExtensionsAPIProvider::GetAPISchema(
+     const std::string& name) {
++  if (ShouldLogSchemaRequest(name)) {
++    LOG(INFO) << "[issue-792-exp8] schema-request name=" << name << " found="
++              << extensions::api::ChromeGeneratedSchemas::IsGenerated(name);
++  }
+   return {};
+ }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+index f977413a1e..789c4e76e5 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_client.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/logging.h"
+ #include "base/no_destructor.h"
++#include "chrome/common/extensions/chrome_extensions_api_provider.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_api_provider.h"
+ #include "content/public/common/url_constants.h"
+ #include "extensions/common/constants.h"
+@@ -57,6 +58,9 @@ class TsPermissionMessageProvider
+ TsExtensionsClient::TsExtensionsClient() {
+   AddAPIProvider(std::make_unique<extensions::CoreExtensionsAPIProvider>());
+   AddAPIProvider(std::make_unique<TsExtensionsAPIProvider>());
++  AddAPIProvider(std::make_unique<extensions::ChromeExtensionsAPIProvider>());
++  LOG(INFO) << "[issue-792-exp8] chrome-api-provider-enabled"
++            << " provider=ChromeExtensionsAPIProvider";
+ }
+ 
+ TsExtensionsClient::~TsExtensionsClient() = default;
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+index e53142be57..f5ca15c500 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+@@ -55,6 +55,16 @@ constexpr char kPdfManifestFallback[] = R"({
+   ]
+ })";
+ 
++std::string DescribePermissionForLog(const base::Value& permission) {
++  if (permission.is_string()) {
++    return permission.GetString();
++  }
++  if (permission.is_dict() && permission.GetDict().contains("fileSystem")) {
++    return "fileSystem.write";
++  }
++  return "<object>";
++}
++
+ std::optional<base::DictValue> LoadPdfManifest(
+     std::vector<std::string>* stripped_manifest_keys) {
+   std::string manifest_contents = kPdfManifestFallback;
+@@ -64,9 +74,8 @@ std::optional<base::DictValue> LoadPdfManifest(
+     LOG(ERROR) << "[issue-792-exp3] pdf-manifest-error reason=missing-name-tag";
+     return std::nullopt;
+   }
+-  base::ReplaceFirstSubstringAfterOffset(&manifest_contents, 0,
+-                                         kPdfExtensionNameTag,
+-                                         kPdfExtensionName);
++  base::ReplaceFirstSubstringAfterOffset(
++      &manifest_contents, 0, kPdfExtensionNameTag, kPdfExtensionName);
+ 
+   std::optional<base::DictValue> manifest = base::JSONReader::ReadDict(
+       manifest_contents, base::JSON_PARSE_CHROMIUM_EXTENSIONS);
+@@ -75,13 +84,23 @@ std::optional<base::DictValue> LoadPdfManifest(
+     return std::nullopt;
+   }
+ 
+-  if (manifest->Remove("permissions")) {
+-    stripped_manifest_keys->push_back("permissions");
+-    LOG(INFO) << "[issue-792-exp3] pdf-component-extension-stripped-value"
+-              << " key=permissions"
+-              << " values=chrome://resources/,chrome://webui-test/,"
+-                 "contentSettings,metricsPrivate,pdfViewerPrivate,"
+-                 "resourcesPrivate,tabs,fileSystem.write";
++  if (base::ListValue* permissions = manifest->FindList("permissions")) {
++    base::ListValue kept_permissions;
++    std::vector<std::string> stripped_permissions;
++    for (const base::Value& permission : *permissions) {
++      if (permission.is_string() &&
++          (permission.GetString() == "pdfViewerPrivate" ||
++           permission.GetString() == "resourcesPrivate")) {
++        kept_permissions.Append(permission.Clone());
++        continue;
++      }
++      stripped_permissions.push_back(DescribePermissionForLog(permission));
++    }
++    manifest->Set("permissions", std::move(kept_permissions));
++    LOG(INFO) << "[issue-792-exp8] pdf-permissions-kept"
++              << " values=pdfViewerPrivate,resourcesPrivate";
++    LOG(INFO) << "[issue-792-exp8] pdf-permissions-stripped values="
++              << base::JoinString(stripped_permissions, ",");
+   }
+   if (manifest->Remove("web_accessible_resources")) {
+     stripped_manifest_keys->push_back("web_accessible_resources");
+@@ -117,8 +136,9 @@ scoped_refptr<const extensions::Extension> CreateTsPdfComponentExtension(
+           extension_root, extensions::mojom::ManifestLocation::kComponent,
+           *manifest, extensions::Extension::REQUIRE_KEY, error);
+   if (!extension) {
+-    LOG(ERROR) << "[issue-792-exp3] pdf-component-extension-create-failed error="
+-               << base::UTF16ToUTF8(*error);
++    LOG(ERROR)
++        << "[issue-792-exp3] pdf-component-extension-create-failed error="
++        << base::UTF16ToUTF8(*error);
+     return nullptr;
+   }
+ 
+@@ -141,7 +161,8 @@ bool RegisterTsPdfComponentExtension(BrowserContext* browser_context) {
+     return false;
+   }
+ 
+-  if (registry->enabled_extensions().Contains(extension_misc::kPdfExtensionId)) {
++  if (registry->enabled_extensions().Contains(
++          extension_misc::kPdfExtensionId)) {
+     LOG(INFO) << "[issue-792-exp3] pdf-component-extension-registered context="
+               << browser_context << " enabled=1";
+     return true;
+@@ -173,8 +194,8 @@ bool RegisterTsPdfComponentExtension(BrowserContext* browser_context) {
+   }
+ 
+   LOG(INFO) << "[issue-792-exp3] pdf-component-extension-stripped-keys count="
+-            << stripped_manifest_keys.size() << " keys="
+-            << base::JoinString(stripped_manifest_keys, ",");
++            << stripped_manifest_keys.size()
++            << " keys=" << base::JoinString(stripped_manifest_keys, ",");
+   LOG(INFO) << "[issue-792-exp3] pdf-component-extension-registered context="
+             << browser_context << " enabled="
+             << registry->enabled_extensions().Contains(
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index c48517a134..407acf3681 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -13,6 +13,7 @@
+ #include "base/logging.h"
+ #include "base/path_service.h"
+ #include "base/strings/string_util.h"
++#include "chrome/grit/common_resources.h"
+ #include "chrome/grit/pdf_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -35,33 +36,53 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   base::FilePath assets_path;
+   if (!base::PathService::Get(base::DIR_ASSETS, &assets_path)) {
+     LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path= found=0 loaded=0";
++    LOG(INFO) << "[issue-792-exp8] chrome-common-pak path= found=0 loaded=0";
+     return;
+   }
+ 
+-  base::FilePath pak_path = assets_path.AppendASCII("gen")
+-                                .AppendASCII("chrome")
+-                                .AppendASCII("pdf_resources.pak");
+-  const bool found = base::PathExists(pak_path);
+-  if (found) {
++  base::FilePath pdf_pak_path =
++      assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
++          "pdf_resources.pak");
++  const bool pdf_found = base::PathExists(pdf_pak_path);
++  if (pdf_found) {
+     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
+-        pak_path, ui::kScaleFactorNone);
++        pdf_pak_path, ui::kScaleFactorNone);
+   }
+ 
+   std::string index_html;
+-  if (found) {
++  if (pdf_found) {
+     index_html = ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+         IDR_PDF_INDEX_HTML);
+   }
+-  const bool loaded = !index_html.empty();
++  const bool pdf_loaded = !index_html.empty();
+   LOG(INFO) << "[issue-792-exp4] pdf-resource-pak path="
+-            << pak_path.AsUTF8Unsafe() << " found=" << found
+-            << " loaded=" << loaded;
++            << pdf_pak_path.AsUTF8Unsafe() << " found=" << pdf_found
++            << " loaded=" << pdf_loaded;
+ 
+   if (process_type.empty()) {
+-    LOG(INFO) << "[issue-792-exp4] pdf-resource-bytes id="
+-              << IDR_PDF_INDEX_HTML << " bytes=" << index_html.size()
++    LOG(INFO) << "[issue-792-exp4] pdf-resource-bytes id=" << IDR_PDF_INDEX_HTML
++              << " bytes=" << index_html.size()
+               << " html_signature=" << HasHtmlSignature(index_html);
+   }
++
++  base::FilePath common_pak_path =
++      assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
++          "common_resources.pak");
++  const bool common_found = base::PathExists(common_pak_path);
++  if (common_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        common_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::string api_features;
++  if (common_found) {
++    api_features =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            IDR_CHROME_EXTENSION_API_FEATURES);
++  }
++  LOG(INFO) << "[issue-792-exp8] chrome-common-pak path="
++            << common_pak_path.AsUTF8Unsafe() << " found=" << common_found
++            << " loaded=" << !api_features.empty();
+ }
+ 
+ }  // namespace content
+-- 
+2.54.0
+

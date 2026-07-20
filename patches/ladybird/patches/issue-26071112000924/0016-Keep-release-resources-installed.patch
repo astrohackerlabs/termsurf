@@ -1,0 +1,28 @@
+From 366c6340f8209e1c9f913d52f2b454405f8c2d34 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 08:34:13 -0500
+Subject: [PATCH 16/18] Keep release resources installed
+
+Debug may know its workshop lane,
+But release must not point home again.
+Let Girlbat wake where brewers park,
+With Resources waiting after dark.
+---
+ Libraries/LibTermSurfLadybird/CMakeLists.txt | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/CMakeLists.txt b/Libraries/LibTermSurfLadybird/CMakeLists.txt
+index 1afb1d6b1a..2f0aa1c62b 100644
+--- a/Libraries/LibTermSurfLadybird/CMakeLists.txt
++++ b/Libraries/LibTermSurfLadybird/CMakeLists.txt
+@@ -14,6 +14,6 @@ add_dependencies(TermSurfLadybird ${ladybird_helper_processes})
+ target_link_libraries(TermSurfLadybird PRIVATE AK LibCore LibDiff LibFileSystem LibGfx LibImageDecoders LibImageDecoderClient LibIPC LibJS LibMain LibRequests LibURL LibWeb LibWebView)
+ target_link_libraries(TermSurfLadybird PUBLIC GenericClangPlugin)
+ 
+-if (APPLE)
++if (APPLE AND CMAKE_BUILD_TYPE MATCHES "Debug")
+     target_compile_definitions(TermSurfLadybird PRIVATE LADYBIRD_BINARY_PATH="$<TARGET_FILE_DIR:ladybird>")
+ endif()
+-- 
+2.54.0
+

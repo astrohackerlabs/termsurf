@@ -1,0 +1,417 @@
+From 3a80fe186f9dfb1afdad5bb91d3ab1c963792552 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 23 May 2026 08:20:57 -0500
+Subject: [PATCH 019/122] Trace datalist Autofill
+
+A datalist knocked, but who heard the call?
+
+We hung little bells through Autofill's hall.
+
+If the client is missing,
+
+The logs will start hissing.
+---
+ .../content/renderer/autofill_agent.cc        | 143 ++++++++++++++++++
+ .../browser/ui/autofill_external_delegate.cc  |  17 +++
+ .../renderer/shell_content_renderer_client.cc |  24 +++
+ .../renderer/core/page/chrome_client_impl.cc  |  51 ++++++-
+ 4 files changed, 231 insertions(+), 4 deletions(-)
+
+diff --git a/components/autofill/content/renderer/autofill_agent.cc b/components/autofill/content/renderer/autofill_agent.cc
+index 4556e8cc53..261b84c7e2 100644
+--- a/components/autofill/content/renderer/autofill_agent.cc
++++ b/components/autofill/content/renderer/autofill_agent.cc
+@@ -26,6 +26,7 @@
+ #include "base/functional/bind.h"
+ #include "base/i18n/case_conversion.h"
+ #include "base/json/string_escape.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ref.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/no_destructor.h"
+@@ -114,6 +115,36 @@ constexpr base::TimeDelta kWaitTimeForOptionsChanges = base::Milliseconds(50);
+ 
+ using FormAndField = std::pair<FormData, raw_ref<const FormFieldData>>;
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=autofill-agent";
++  }
++}
++
++const char* Issue784TriggerSourceName(
++    AutofillSuggestionTriggerSource trigger_source) {
++  switch (trigger_source) {
++    case AutofillSuggestionTriggerSource::kOpenTextDataListChooser:
++      return "kOpenTextDataListChooser";
++    case AutofillSuggestionTriggerSource::kTextFieldDidReceiveKeyDown:
++      return "kTextFieldDidReceiveKeyDown";
++    case AutofillSuggestionTriggerSource::kTextFieldValueChanged:
++      return "kTextFieldValueChanged";
++    case AutofillSuggestionTriggerSource::kFormControlElementClicked:
++      return "kFormControlElementClicked";
++    default:
++      return "other";
++  }
++}
++
+ void LogRendererExtractLabeledTextNodeValueLatency(base::TimeDelta latency,
+                                                    bool is_successful) {
+   base::UmaHistogramTimes(
+@@ -531,6 +562,16 @@ AutofillAgent::AutofillAgent(
+   if (password_autofill_agent_) {
+     password_autofill_agent_->Init(this);
+   }
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=AutofillAgent::AutofillAgent.after_set_client"
++              << " agent=" << static_cast<void*>(this)
++              << " render_frame=" << static_cast<void*>(render_frame)
++              << " web_frame="
++              << static_cast<void*>(render_frame->GetWebFrame());
++  }
++  password_autofill_agent_->Init(this);
+   form_tracker_ = std::make_unique<FormTracker>(unsafe_render_frame(), *this,
+                                                 password_autofill_agent_.get());
+   form_tracker_->SetUserGestureRequired(config_.user_gesture_required);
+@@ -1083,6 +1124,21 @@ void AutofillAgent::OpenTextDataListChooser(const WebInputElement& element) {
+   ShowSuggestions(element,
+                   AutofillSuggestionTriggerSource::kOpenTextDataListChooser,
+                   /*form_cache=*/{}, password_request);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=AutofillAgent::OpenTextDataListChooser"
++              << " agent=" << static_cast<void*>(this)
++              << " render_frame=" << static_cast<void*>(unsafe_render_frame())
++              << " element=" << static_cast<void*>(&element)
++              << " value_length=" << element.Value().length();
++  }
++  ShowSuggestions(
++      element, AutofillSuggestionTriggerSource::kOpenTextDataListChooser,
++      /*form_cache=*/{},
++      password_autofill_agent_->CreateRequestForDomain(
++          element, AutofillSuggestionTriggerSource::kOpenTextDataListChooser,
++          /*form_cache=*/{}));
+ }
+ 
+ // Notifies the AutofillDriver about changes in the <datalist> options in
+@@ -1585,7 +1641,27 @@ void AutofillAgent::ShowSuggestions(
+   DCHECK(form_util::MaybeWasOwnedByFrame(element, unsafe_render_frame()));
+   CHECK_NE(trigger_source, AutofillSuggestionTriggerSource::kUnspecified);
+ 
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=AutofillAgent::ShowSuggestions.enter"
++              << " agent=" << static_cast<void*>(this)
++              << " render_frame=" << static_cast<void*>(unsafe_render_frame())
++              << " element=" << static_cast<const void*>(&element)
++              << " trigger_source=" << Issue784TriggerSourceName(trigger_source)
++              << " trigger_source_int=" << static_cast<int>(trigger_source);
++  }
++
+   if (!element.IsEnabled() || element.IsReadOnly()) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=disabled_or_readonly"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source);
++    }
+     return;
+   }
+   // Proactive password recovery can be triggered on forms that have just been
+@@ -1595,9 +1671,27 @@ void AutofillAgent::ShowSuggestions(
+   if (!element.SuggestedValue().IsEmpty() &&
+       trigger_source !=
+           AutofillSuggestionTriggerSource::kProactivePasswordRecovery) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=suggested_value_present"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source);
++    }
+     return;
+   }
+   if (!form_util::IsTextAreaElementOrTextInput(element)) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=not_text_input"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source);
++    }
+     return;
+   }
+ 
+@@ -1622,6 +1716,16 @@ void AutofillAgent::ShowSuggestions(
+   if (!element_value_valid) {
+     // Any popup currently showing is obsolete.
+     HidePopup();
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=invalid_element_value"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source)
++                << " value_length=" << element.EditingValue().length();
++    }
+     return;
+   }
+ 
+@@ -1647,6 +1751,15 @@ void AutofillAgent::ShowSuggestions(
+       !element.GetDocument().IsSecureContext()) {
+     LOG(WARNING) << "Autofill suggestions are disabled because the document "
+                     "isn't a secure context.";
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=insecure_context"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source);
++    }
+     return;
+   }
+ 
+@@ -1656,17 +1769,47 @@ void AutofillAgent::ShowSuggestions(
+           GetCallTimerState(kQueryAutofillSuggestions), button_titles_cache(),
+           form_cache);
+   if (!form_and_field) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=no_form_and_field"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source);
++    }
+     return;
+   }
+   auto& [form, field] = *form_and_field;
+ 
+   if (ShouldThrottleAskForValuesToFill(field->renderer_id())) {
++    if (Issue779TraceEnabled()) {
++      Issue779TraceAnnounce();
++      LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                << " event=AutofillAgent::ShowSuggestions.return"
++                << " reason=throttled"
++                << " trigger_source="
++                << Issue784TriggerSourceName(trigger_source)
++                << " trigger_source_int=" << static_cast<int>(trigger_source)
++                << " field_renderer_id=" << field->renderer_id();
++    }
+     return;
+   }
+ 
+   is_popup_possibly_visible_ = true;
+   if (auto* autofill_driver = unsafe_autofill_driver()) {
+     if (auto* render_frame = unsafe_render_frame()) {
++      if (Issue779TraceEnabled()) {
++        Issue779TraceAnnounce();
++        LOG(INFO) << "[issue-779-trace] datalist_autofill"
++                  << " event=AutofillAgent::ShowSuggestions.ask_for_values"
++                  << " trigger_source="
++                  << Issue784TriggerSourceName(trigger_source)
++                  << " trigger_source_int=" << static_cast<int>(trigger_source)
++                  << " field_renderer_id=" << field->renderer_id()
++                  << " autofill_driver=" << static_cast<void*>(autofill_driver)
++                  << " render_frame=" << static_cast<void*>(render_frame);
++      }
+       autofill_driver->AskForValuesToFill(form, field->renderer_id(),
+                                           GetCaretBounds(*render_frame),
+                                           trigger_source, password_request);
+diff --git a/components/autofill/core/browser/ui/autofill_external_delegate.cc b/components/autofill/core/browser/ui/autofill_external_delegate.cc
+index b79d9dba65..bf3bdd36cc 100644
+--- a/components/autofill/core/browser/ui/autofill_external_delegate.cc
++++ b/components/autofill/core/browser/ui/autofill_external_delegate.cc
+@@ -352,6 +352,23 @@ void AutofillExternalDelegate::OnQuery(
+     const gfx::Rect& caret_bounds,
+     AutofillSuggestionTriggerSource trigger_source,
+     bool update_datalist) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO)
++        << "[issue-779-trace] datalist_autofill"
++        << " event=AutofillExternalDelegate::OnQuery"
++        << " delegate=" << static_cast<void*>(this)
++        << " manager=" << static_cast<void*>(&*manager_) << " trigger_source="
++        << (trigger_source ==
++                    AutofillSuggestionTriggerSource::kOpenTextDataListChooser
++                ? "kOpenTextDataListChooser"
++                : "other")
++        << " trigger_source_int=" << static_cast<int>(trigger_source)
++        << " update_datalist=" << update_datalist
++        << " datalist_option_count=" << field.datalist_options().size()
++        << " field_bounds=" << field.bounds().ToString()
++        << " caret_bounds=" << caret_bounds.ToString();
++  }
+   query_form_ = form;
+   query_field_ = field;
+   caret_bounds_ = caret_bounds;
+diff --git a/content/shell/renderer/shell_content_renderer_client.cc b/content/shell/renderer/shell_content_renderer_client.cc
+index a8912c9362..7337d1f3be 100644
+--- a/content/shell/renderer/shell_content_renderer_client.cc
++++ b/content/shell/renderer/shell_content_renderer_client.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/shell/renderer/shell_content_renderer_client.h"
+ 
++#include <cstdlib>
+ #include <string>
+ 
+ #include "base/base_switches.h"
+@@ -12,6 +13,7 @@
+ #include "base/files/file.h"
+ #include "base/functional/bind.h"
+ #include "base/immediate_crash.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/strings/string_number_conversions.h"
+ #include "base/task/sequenced_task_runner.h"
+@@ -64,6 +66,20 @@ namespace content {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=shell-renderer";
++  }
++}
++
+ // A test service which can be driven by browser tests for various reasons.
+ class TestRendererServiceImpl : public mojom::TestService {
+  public:
+@@ -320,6 +336,14 @@ void ShellContentRendererClient::ExposeInterfacesToBrowser(
+ }
+ 
+ void ShellContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=ShellContentRendererClient::RenderFrameCreated"
++              << " render_frame=" << static_cast<void*>(render_frame)
++              << " web_frame="
++              << static_cast<void*>(render_frame->GetWebFrame());
++  }
+   // TODO(danakj): The ShellRenderFrameObserver is doing stuff only for
+   // browser tests. If we only create that for browser tests then the override
+   // of this method in WebTestContentRendererClient would not be needed.
+diff --git a/third_party/blink/renderer/core/page/chrome_client_impl.cc b/third_party/blink/renderer/core/page/chrome_client_impl.cc
+index b58921dd86..0f804648ff 100644
+--- a/third_party/blink/renderer/core/page/chrome_client_impl.cc
++++ b/third_party/blink/renderer/core/page/chrome_client_impl.cc
+@@ -31,11 +31,13 @@
+ 
+ #include "third_party/blink/renderer/core/page/chrome_client_impl.h"
+ 
++#include <cstdlib>
+ #include <memory>
+ #include <optional>
+ #include <utility>
+ 
+ #include "base/debug/alias.h"
++#include "base/logging.h"
+ #include "build/build_config.h"
+ #include "cc/animation/animation_host.h"
+ #include "cc/animation/animation_timeline.h"
+@@ -127,6 +129,21 @@ namespace blink {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO)
++        << "[issue-779-trace] trace_enabled component=blink-chrome-client";
++  }
++}
++
+ const char* UIElementTypeToString(ChromeClient::UIElementType ui_element_type) {
+   switch (ui_element_type) {
+     case ChromeClient::UIElementType::kAlertDialog:
+@@ -1365,15 +1382,41 @@ void ChromeClientImpl::DidEndEditingOnTextField(
+ 
+ void ChromeClientImpl::OpenTextDataListChooser(HTMLInputElement& input) {
+   NotifyPopupOpeningObservers();
+-  if (auto* fill_client =
+-          AutofillClientFromFrame(input.GetDocument().GetFrame())) {
++  auto* frame = input.GetDocument().GetFrame();
++  auto* fill_client = AutofillClientFromFrame(frame);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=ChromeClientImpl::OpenTextDataListChooser"
++              << " input=" << static_cast<void*>(&input)
++              << " document=" << static_cast<void*>(&input.GetDocument())
++              << " frame=" << static_cast<void*>(frame)
++              << " autofill_client_present=" << (fill_client != nullptr)
++              << " has_datalist=" << (input.DataList() != nullptr)
++              << " value_length=" << input.Value().length()
++              << " url=" << input.GetDocument().Url();
++  }
++  if (fill_client) {
+     fill_client->OpenTextDataListChooser(WebInputElement(&input));
+   }
+ }
+ 
+ void ChromeClientImpl::TextFieldDataListChanged(HTMLInputElement& input) {
+-  if (auto* fill_client =
+-          AutofillClientFromFrame(input.GetDocument().GetFrame())) {
++  auto* frame = input.GetDocument().GetFrame();
++  auto* fill_client = AutofillClientFromFrame(frame);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] datalist_autofill"
++              << " event=ChromeClientImpl::TextFieldDataListChanged"
++              << " input=" << static_cast<void*>(&input)
++              << " document=" << static_cast<void*>(&input.GetDocument())
++              << " frame=" << static_cast<void*>(frame)
++              << " autofill_client_present=" << (fill_client != nullptr)
++              << " has_datalist=" << (input.DataList() != nullptr)
++              << " value_length=" << input.Value().length()
++              << " url=" << input.GetDocument().Url();
++  }
++  if (fill_client) {
+     fill_client->DataListOptionsChanged(WebInputElement(&input));
+   }
+ }
+-- 
+2.50.1 (Apple Git-155)
+

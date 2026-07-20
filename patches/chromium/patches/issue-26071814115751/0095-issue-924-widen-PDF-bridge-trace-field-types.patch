@@ -1,0 +1,34 @@
+From 8afeeaa754feec34f0eae895aa05ba96c7490d61 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:03:41 -0500
+Subject: [PATCH 095/122] issue-924: widen PDF bridge trace field types
+
+---
+ chrome/browser/resources/pdf/controller.ts | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/chrome/browser/resources/pdf/controller.ts b/chrome/browser/resources/pdf/controller.ts
+index 5c9685349a..3be55eeabb 100644
+--- a/chrome/browser/resources/pdf/controller.ts
++++ b/chrome/browser/resources/pdf/controller.ts
+@@ -38,7 +38,7 @@ function shouldTraceTermSurfPdfMessage(type: string): boolean {
+ }
+ 
+ function traceTermSurfPdfPrintBridge(
+-    event: string, fields: Record<string, string|number|boolean|undefined|null> = {}) {
++    event: string, fields: Record<string, string|number|boolean|undefined|null|string[]> = {}) {
+   if (!termsurfPdfPrintBridgeTraceEnabled()) {
+     return;
+   }
+@@ -793,7 +793,7 @@ export class PluginController implements ContentController {
+     const delayedMessages = this.delayedMessages_;
+     traceTermSurfPdfPrintBridge('bind-message-handler', {
+       delayedCount: delayedMessages.length,
+-      delayedTypes: delayedMessages.map(({message}) => String((message as {type?: string})?.type)),
++      delayedTypes: delayedMessages.map(({message}) => String((message as {type?: string})?.type)).join(','),
+     });
+     this.delayedMessages_ = null;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

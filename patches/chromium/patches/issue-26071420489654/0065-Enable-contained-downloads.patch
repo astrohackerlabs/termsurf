@@ -1,0 +1,160 @@
+From 4be4a91c304f08fc624bfd6dab5cdf86fc34bf6a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 18:22:35 -0500
+Subject: [PATCH 065/119] Enable contained downloads
+
+The save path asked a native door,
+On macOS found an empty floor.
+Now files descend where tests can see,
+No prompt, no fuss, deterministically.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../ts_browser_main_parts.cc                  | 11 +++-
+ .../ts_download_support.cc                    | 55 +++++++++++++++++++
+ .../ts_download_support.h                     | 16 ++++++
+ 4 files changed, 81 insertions(+), 3 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_download_support.cc
+ create mode 100644 content/libtermsurf_chromium/ts_download_support.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index c09c75e084..432c55615c 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -51,6 +51,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_client.h",
+     "ts_content_renderer_client.cc",
+     "ts_content_renderer_client.h",
++    "ts_download_support.cc",
++    "ts_download_support.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
+     "ts_mime_handler_binders.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index d3aab68f92..1566dc5347 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -24,6 +24,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
++#include "content/libtermsurf_chromium/ts_download_support.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/devtools_agent_host.h"
+@@ -223,6 +224,9 @@ void TsBrowserMainParts::InitializeBrowserContexts() {
+   set_browser_context(new ShellBrowserContext(false, true));
+   set_off_the_record_browser_context(new ShellBrowserContext(true, true));
+ 
++  ConfigureTsDownloads(browser_context());
++  ConfigureTsDownloads(off_the_record_browser_context());
++
+   InitializeExtensionContext(browser_context(), false);
+   InitializeExtensionContext(off_the_record_browser_context(), true);
+   extensions_browser_client_->SetOffTheRecordContext(
+@@ -903,7 +907,8 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+       web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
+ 
+   if (Issue794InputTraceEnabled()) {
+-    LOG(INFO) << "[termsurf-pdf-input] wheel-received web_contents=" << web_contents
++    LOG(INFO) << "[termsurf-pdf-input] wheel-received web_contents="
++              << web_contents
+               << " url=" << web_contents->GetLastCommittedURL().spec()
+               << " view=" << view
+               << " rwh=" << (view ? view->GetRenderWidgetHost() : nullptr)
+@@ -1028,8 +1033,8 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+               << " focused_widget=" << target_widget;
+     LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, 0, 0);
+     if (target_widget) {
+-      LogIssue794KeyTarget("[termsurf-pdf-input]", web_contents, receiving_widget,
+-                           target_widget);
++      LogIssue794KeyTarget("[termsurf-pdf-input]", web_contents,
++                           receiving_widget, target_widget);
+     }
+   }
+ 
+diff --git a/content/libtermsurf_chromium/ts_download_support.cc b/content/libtermsurf_chromium/ts_download_support.cc
+new file mode 100644
+index 0000000000..48693925b7
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_download_support.cc
+@@ -0,0 +1,55 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_download_support.h"
++
++#include "base/command_line.h"
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "content/shell/browser/shell_browser_context.h"
++#include "content/shell/browser/shell_download_manager_delegate.h"
++
++namespace content {
++namespace {
++
++constexpr char kTermSurfDownloadDirSwitch[] = "termsurf-download-dir";
++
++base::FilePath DownloadDirectoryForContext(
++    ShellBrowserContext* browser_context) {
++  base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
++  if (command_line->HasSwitch(kTermSurfDownloadDirSwitch)) {
++    return command_line->GetSwitchValuePath(kTermSurfDownloadDirSwitch);
++  }
++  return browser_context->GetPath().Append(FILE_PATH_LITERAL("Downloads"));
++}
++
++}  // namespace
++
++void ConfigureTsDownloads(ShellBrowserContext* browser_context) {
++  if (!browser_context) {
++    return;
++  }
++
++  base::FilePath download_dir = DownloadDirectoryForContext(browser_context);
++  if (download_dir.empty()) {
++    LOG(WARNING) << "[termsurf-download] skipped reason=empty-path";
++    return;
++  }
++
++  if (!base::CreateDirectory(download_dir)) {
++    LOG(WARNING) << "[termsurf-download] skipped reason=create-failed path="
++                 << download_dir.AsUTF8Unsafe();
++    return;
++  }
++
++  auto* delegate = static_cast<ShellDownloadManagerDelegate*>(
++      browser_context->GetDownloadManagerDelegate());
++  delegate->SetDownloadBehaviorForTesting(download_dir);
++  LOG(INFO) << "[termsurf-download] configured path="
++            << download_dir.AsUTF8Unsafe() << " off_the_record="
++            << (browser_context->IsOffTheRecord() ? 1 : 0);
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_download_support.h b/content/libtermsurf_chromium/ts_download_support.h
+new file mode 100644
+index 0000000000..92fc35c219
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_download_support.h
+@@ -0,0 +1,16 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_SUPPORT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_SUPPORT_H_
++
++namespace content {
++
++class ShellBrowserContext;
++
++void ConfigureTsDownloads(ShellBrowserContext* browser_context);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_SUPPORT_H_
+-- 
+2.54.0
+

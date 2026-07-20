@@ -1,0 +1,46 @@
+From cc7434b884989123129c6b0ad3a4723889daed0d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:35:28 -0500
+Subject: [PATCH 103/119] issue-924: update RegisterNonNetworkWorker signature
+ for Chromium 150
+
+---
+ content/libtermsurf_chromium/ts_browser_client.cc | 7 ++++---
+ content/libtermsurf_chromium/ts_browser_client.h  | 2 ++
+ 2 files changed, 6 insertions(+), 3 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 4d946ada99..ef783aaedf 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -212,10 +212,11 @@ TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+ 
+ void TsBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+     BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator,
++    network::mojom::RequestDestination request_destination,
+     NonNetworkURLLoaderFactoryMap* factories) {
+-  ShellContentBrowserClient::
+-      RegisterNonNetworkWorkerMainResourceURLLoaderFactories(browser_context,
+-                                                             factories);
++  ContentBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
++      browser_context, request_initiator, request_destination, factories);
+   RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(browser_context,
+                                                            factories);
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 12f65f7ac1..67133a93ae 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -86,6 +86,8 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       FrameTreeNodeId frame_tree_node_id) override;
+   void RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+       BrowserContext* browser_context,
++      const std::optional<url::Origin>& request_initiator,
++      network::mojom::RequestDestination request_destination,
+       NonNetworkURLLoaderFactoryMap* factories) override;
+   void RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+       BrowserContext* browser_context,
+-- 
+2.54.0
+

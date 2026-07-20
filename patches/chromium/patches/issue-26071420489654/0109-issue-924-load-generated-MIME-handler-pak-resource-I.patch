@@ -1,0 +1,67 @@
+From 16f252bb665031ed4d2822b443c9b4e9d7572bf4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:47:10 -0500
+Subject: [PATCH 109/119] issue-924: load generated MIME-handler pak resource
+ IDs on 150
+
+MIME handler private/mojom JS IDs moved to
+extensions_renderer_generated_resources.
+---
+ .../extensions/ts_pdf_resource_bundle.cc         | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index 1385544001..c0dc48bd99 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/grit/pdf_resources.h"
+ #include "components/grit/components_resources.h"
+ #include "components/strings/grit/components_strings.h"
++#include "extensions/grit/extensions_renderer_generated_resources.h"
+ #include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -159,15 +160,16 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+             << common_pak_path.AsUTF8Unsafe() << " found=" << common_found
+             << " loaded=" << !api_features.empty();
+ 
+-  base::FilePath extensions_renderer_pak_path =
++  // Chromium 150 ships generated MIME-handler bindings in a separate pak.
++  base::FilePath extensions_renderer_generated_pak_path =
+       assets_path.AppendASCII("gen")
+           .AppendASCII("extensions")
+-          .AppendASCII("extensions_renderer_resources.pak");
++          .AppendASCII("extensions_renderer_generated_resources.pak");
+   const bool extensions_renderer_found =
+-      base::PathExists(extensions_renderer_pak_path);
++      base::PathExists(extensions_renderer_generated_pak_path);
+   if (extensions_renderer_found) {
+     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
+-        extensions_renderer_pak_path, ui::kScaleFactorNone);
++        extensions_renderer_generated_pak_path, ui::kScaleFactorNone);
+   }
+ 
+   std::string mime_handler_private;
+@@ -175,15 +177,15 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   if (extensions_renderer_found) {
+     mime_handler_private =
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+-            IDR_MIME_HANDLER_PRIVATE_CUSTOM_BINDINGS_JS);
++            IDR_EXTENSIONS_RENDERER_GENERATED_MIME_HANDLER_PRIVATE_CUSTOM_BINDINGS_JS);
+     mime_handler_mojom =
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+-            IDR_MIME_HANDLER_MOJOM_JS);
++            IDR_EXTENSIONS_RENDERER_GENERATED_EXTENSIONS_COMMON_API_MIME_HANDLER_MOJOM_JS);
+   }
+   const bool extensions_renderer_loaded =
+       !mime_handler_private.empty() && !mime_handler_mojom.empty();
+   LOG(INFO) << "[termsurf-pdf] extensions-renderer-pak path="
+-            << extensions_renderer_pak_path.AsUTF8Unsafe()
++            << extensions_renderer_generated_pak_path.AsUTF8Unsafe()
+             << " found=" << extensions_renderer_found
+             << " loaded=" << extensions_renderer_loaded
+             << " mimeHandlerPrivate_bytes=" << mime_handler_private.size()
+-- 
+2.54.0
+

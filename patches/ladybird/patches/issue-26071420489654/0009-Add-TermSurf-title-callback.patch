@@ -1,0 +1,116 @@
+From d3f672d2de8f670b9460ddcf7f1279afcc10f973 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 03:08:03 -0500
+Subject: [PATCH 09/18] Add TermSurf title callback
+
+A page found its name,
+And spoke before done came.
+The title took flight,
+Through Girlbat by night,
+With no phantom tab to blame.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 35 ++++++++++++++++++-
+ 1 file changed, 34 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 61e8f699ee..8e6bc4ff98 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -202,8 +202,10 @@ struct TsLadybirdView {
+     TsLadybirdRuntime* runtime { nullptr };
+     OwnPtr<TermSurfWebView> view;
+     ByteString last_url;
++    ByteString pending_title;
+     bool did_finish_load { false };
+     bool did_crash { false };
++    bool title_changed { false };
+     bool destroyed { false };
+ };
+ 
+@@ -221,6 +223,7 @@ extern "C" bool ts_ladybird_view_mouse_event(TsLadybirdView*, char const*, char
+ extern "C" bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
+ extern "C" bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
+ extern "C" bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
++extern "C" bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -271,6 +274,15 @@ static void set_runtime_error(TsLadybirdRuntime* runtime, ByteString error)
+         set_global_error(move(error));
+ }
+ 
++static void copy_c_string(char* out, size_t out_len, ByteString const& value)
++{
++    if (!out || out_len == 0)
++        return;
++    auto copy_len = min(out_len - 1, value.length());
++    memcpy(out, value.characters(), copy_len);
++    out[copy_len] = '\0';
++}
++
+ static bool validate_runtime(TsLadybirdRuntime* runtime)
+ {
+     if (!runtime) {
+@@ -528,6 +540,7 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_event(TsLadybirdView*, char
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, unsigned long long);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -540,7 +553,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-basic-input-forwarding";
++    return "ladybird-a80d01fc-issue-0884-title-changed-callback";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -634,8 +647,10 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+     wrapper->runtime = runtime;
+     wrapper->view = view_or_error.release_value();
+     wrapper->last_url = {};
++    wrapper->pending_title = {};
+     wrapper->did_finish_load = false;
+     wrapper->did_crash = false;
++    wrapper->title_changed = false;
+     wrapper->destroyed = false;
+ 
+     wrapper->view->on_load_finish = [wrapper](URL::URL const& url) {
+@@ -650,6 +665,11 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         wrapper->did_crash = true;
+         set_runtime_error(wrapper->runtime, "WebContent crashed");
+     };
++    wrapper->view->on_title_change = [wrapper](Utf16String const& title) {
++        wrapper->pending_title = title.to_utf8().to_byte_string();
++        wrapper->title_changed = true;
++        outln("PROBE: TermSurf Ladybird ABI title_change title={}", wrapper->pending_title);
++    };
+     wrapper->view->on_ready_to_paint = [wrapper] {
+         wrapper->view->note_ready_to_paint();
+         auto probe = wrapper->view->render_surface_probe();
+@@ -835,6 +855,19 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_key_event(TsLadybirdView* view, c
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_title_changed(TsLadybirdView* view, char* out_title, size_t out_title_len)
++{
++    if (!validate_view(view))
++        return false;
++    if (!view->title_changed)
++        return false;
++
++    copy_c_string(out_title, out_title_len, view->pending_title);
++    view->pending_title = {};
++    view->title_changed = false;
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

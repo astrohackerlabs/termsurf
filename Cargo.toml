@@ -1,14 +1,25 @@
 [workspace]
 members = [
-    "webtui",
-    "roamium",
-    "surfari",
-    "girlbat",
-    "gtui",
+    "rust/ahweb",
+    "rust/ah-chromiumd",
+    "rust/ah-webkitd",
+    "rust/ah-ladybirdd",
+    "rust/ah-geckod",
 ]
 exclude = [
+    "rust/ahsh",
     "vendor",
-    "chromium",
-    "proto/test-rust",
+    "rust/proto/test-rust",
+    "forks",
+    "patches",
+    "scripts",
+    "bun",
+    "docs",
+    "node_modules",
+    "target",
+    "dist",
+    "logs",
+    "assets",
+    "skills",
 ]
 resolver = "2"

@@ -1,0 +1,348 @@
+From a516394ec76edb2b2a0ebbab2f68df0d369d2dfd Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 11:48:13 -0500
+Subject: [PATCH 31/90] Register PDF viewer binders
+
+The viewer rang a Mojo bell,
+We answered softly: all is well.
+No Chrome UI came through the gate,
+Just stubs to learn the next bad fate.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  6 ++
+ .../libtermsurf_chromium/ts_browser_client.cc | 29 +++++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  3 +
+ .../ts_pdf_document_helper_client.cc          | 49 ++++++++++++
+ .../ts_pdf_document_helper_client.h           | 42 ++++++++++
+ .../ts_pdf_help_bubble_handler_factory.cc     | 77 +++++++++++++++++++
+ .../ts_pdf_help_bubble_handler_factory.h      | 24 ++++++
+ 7 files changed, 230 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_document_helper_client.h
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 05f2646fc4..7bee1fb9a8 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -43,6 +43,10 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_renderer_client.h",
+     "ts_main_delegate.cc",
+     "ts_main_delegate.h",
++    "ts_pdf_document_helper_client.cc",
++    "ts_pdf_document_helper_client.h",
++    "ts_pdf_help_bubble_handler_factory.cc",
++    "ts_pdf_help_bubble_handler_factory.h",
+     "ts_tab_observer.cc",
+     "ts_tab_observer.h",
+   ]
+@@ -66,6 +70,7 @@ shared_library("libtermsurf_chromium") {
+     "//components/custom_handlers",
+     "//components/keyed_service/content",
+     "//components/keyed_service/core",
++    "//components/pdf/browser",
+     "//components/pref_registry",
+     "//components/prefs",
+     "//components/user_prefs",
+@@ -81,6 +86,7 @@ shared_library("libtermsurf_chromium") {
+     "//extensions/common",
+     "//extensions/common:core_api_provider",
+     "//extensions/renderer",
++    "//ui/webui/resources/cr_components/help_bubble:mojo_bindings",
+   ]
+ 
+   if (is_mac) {
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 2ff19f8271..0b946a8a99 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -5,7 +5,10 @@
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
+ #include "base/logging.h"
++#include "components/pdf/browser/pdf_document_helper.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
++#include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/child_process_security_policy.h"
+ #include "content/public/browser/render_frame_host.h"
+@@ -26,12 +29,16 @@
+ #include "extensions/common/extension.h"
+ #include "extensions/common/manifest.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
++#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
++#include "pdf/mojom/pdf.mojom.h"
+ #include "services/network/public/mojom/network_context.mojom.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/badging/badging.mojom.h"
+ #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
++#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
+ 
+ namespace content {
+ namespace {
+@@ -115,6 +122,28 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+         self->stub_badge_service_->Bind(std::move(receiver));
+       },
+       base::Unretained(this)));
++
++  map->Add<help_bubble::mojom::PdfHelpBubbleHandlerFactory>(
++      base::BindRepeating(&pdf::BindTsPdfHelpBubbleHandlerFactory));
++}
++
++void TsBrowserClient::RegisterAssociatedInterfaceBindersForRenderFrameHost(
++    RenderFrameHost& render_frame_host,
++    blink::AssociatedInterfaceRegistry& associated_registry) {
++  ShellContentBrowserClient::
++      RegisterAssociatedInterfaceBindersForRenderFrameHost(render_frame_host,
++                                                           associated_registry);
++  associated_registry.AddInterface<pdf::mojom::PdfHost>(base::BindRepeating(
++      [](RenderFrameHost* render_frame_host,
++         mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
++        LOG(INFO) << "[issue-792-exp10] pdf-host-binder frame_url="
++                  << render_frame_host->GetLastCommittedURL() << " site_url="
++                  << render_frame_host->GetSiteInstance()->GetSiteURL();
++        pdf::PDFDocumentHelper::BindPdfHost(
++            std::move(receiver), render_frame_host,
++            std::make_unique<pdf::TsPDFDocumentHelperClient>());
++      },
++      &render_frame_host));
+ }
+ 
+ void TsBrowserClient::OverrideWebPreferences(
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 22b1157cd4..a5c963fd93 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -35,6 +35,9 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void RegisterBrowserInterfaceBindersForFrame(
+       RenderFrameHost* render_frame_host,
+       mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
++  void RegisterAssociatedInterfaceBindersForRenderFrameHost(
++      RenderFrameHost& render_frame_host,
++      blink::AssociatedInterfaceRegistry& associated_registry) override;
+   void OverrideWebPreferences(WebContents* web_contents,
+                               SiteInstance& main_frame_site,
+                               blink::web_pref::WebPreferences* prefs) override;
+diff --git a/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+new file mode 100644
+index 0000000000..48455ea205
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+@@ -0,0 +1,49 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
++
++#include "base/logging.h"
++#include "content/public/browser/render_frame_host.h"
++
++namespace pdf {
++
++TsPDFDocumentHelperClient::TsPDFDocumentHelperClient() = default;
++TsPDFDocumentHelperClient::~TsPDFDocumentHelperClient() = default;
++
++void TsPDFDocumentHelperClient::OnDocumentLoadComplete(
++    content::RenderFrameHost* render_frame_host) {
++  LOG(INFO) << "[issue-792-exp10] pdf-document-load-complete frame_url="
++            << render_frame_host->GetLastCommittedURL();
++}
++
++void TsPDFDocumentHelperClient::UpdateContentRestrictions(
++    content::RenderFrameHost* render_frame_host,
++    int content_restrictions) {
++  LOG(INFO) << "[issue-792-exp10] pdf-content-restrictions frame_url="
++            << render_frame_host->GetLastCommittedURL()
++            << " restrictions=" << content_restrictions;
++}
++
++void TsPDFDocumentHelperClient::OnSaveURL() {
++  LOG(INFO) << "[issue-792-exp10] pdf-save-url";
++}
++
++void TsPDFDocumentHelperClient::SetPluginCanSave(
++    content::RenderFrameHost* render_frame_host,
++    bool can_save) {
++  LOG(INFO) << "[issue-792-exp10] pdf-plugin-can-save frame_url="
++            << render_frame_host->GetLastCommittedURL()
++            << " can_save=" << can_save;
++}
++
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
++void TsPDFDocumentHelperClient::OnSearchifyStarted(
++    content::RenderFrameHost* render_frame_host) {
++  LOG(INFO) << "[issue-792-exp10] pdf-searchify-started frame_url="
++            << render_frame_host->GetLastCommittedURL();
++}
++#endif
++
++}  // namespace pdf
+diff --git a/content/libtermsurf_chromium/ts_pdf_document_helper_client.h b/content/libtermsurf_chromium/ts_pdf_document_helper_client.h
+new file mode 100644
+index 0000000000..1088fab617
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_document_helper_client.h
+@@ -0,0 +1,42 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_PDF_DOCUMENT_HELPER_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_PDF_DOCUMENT_HELPER_CLIENT_H_
++
++#include "components/pdf/browser/pdf_document_helper_client.h"
++#include "services/screen_ai/buildflags/buildflags.h"
++
++namespace content {
++class RenderFrameHost;
++}  // namespace content
++
++namespace pdf {
++
++class TsPDFDocumentHelperClient : public PDFDocumentHelperClient {
++ public:
++  TsPDFDocumentHelperClient();
++  ~TsPDFDocumentHelperClient() override;
++
++  TsPDFDocumentHelperClient(const TsPDFDocumentHelperClient&) = delete;
++  TsPDFDocumentHelperClient& operator=(const TsPDFDocumentHelperClient&) =
++      delete;
++
++ private:
++  // PDFDocumentHelperClient:
++  void OnDocumentLoadComplete(content::RenderFrameHost* render_frame_host)
++      override;
++  void UpdateContentRestrictions(content::RenderFrameHost* render_frame_host,
++                                 int content_restrictions) override;
++  void OnSaveURL() override;
++  void SetPluginCanSave(content::RenderFrameHost* render_frame_host,
++                        bool can_save) override;
++#if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
++  void OnSearchifyStarted(content::RenderFrameHost* render_frame_host) override;
++#endif
++};
++
++}  // namespace pdf
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_PDF_DOCUMENT_HELPER_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+new file mode 100644
+index 0000000000..f5ea3ecf71
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+@@ -0,0 +1,77 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++#include "base/logging.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/site_instance.h"
++#include "extensions/common/constants.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "url/gurl.h"
++
++namespace pdf {
++namespace {
++
++bool IsPdfExtensionFrame(content::RenderFrameHost* render_frame_host) {
++  const GURL& url = render_frame_host->GetLastCommittedURL();
++  return url.SchemeIs(extensions::kExtensionScheme) &&
++         url.host() == extension_misc::kPdfExtensionId;
++}
++
++class TsPdfHelpBubbleHandlerFactory
++    : public help_bubble::mojom::PdfHelpBubbleHandlerFactory {
++ public:
++  TsPdfHelpBubbleHandlerFactory(std::string frame_url, std::string site_url)
++      : frame_url_(std::move(frame_url)), site_url_(std::move(site_url)) {}
++
++  TsPdfHelpBubbleHandlerFactory(const TsPdfHelpBubbleHandlerFactory&) = delete;
++  TsPdfHelpBubbleHandlerFactory& operator=(
++      const TsPdfHelpBubbleHandlerFactory&) = delete;
++
++  ~TsPdfHelpBubbleHandlerFactory() override = default;
++
++  // help_bubble::mojom::PdfHelpBubbleHandlerFactory:
++  void CreateHelpBubbleHandler(
++      mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
++      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler)
++      override {
++    LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-create-handler frame_url="
++              << frame_url_ << " site_url=" << site_url_;
++  }
++
++ private:
++  std::string frame_url_;
++  std::string site_url_;
++};
++
++}  // namespace
++
++void BindTsPdfHelpBubbleHandlerFactory(
++    content::RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<help_bubble::mojom::PdfHelpBubbleHandlerFactory>
++        receiver) {
++  const std::string frame_url =
++      render_frame_host->GetLastCommittedURL().spec();
++  const std::string site_url =
++      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++
++  if (!IsPdfExtensionFrame(render_frame_host)) {
++    LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-binder-reject frame_url="
++              << frame_url << " site_url=" << site_url;
++    return;
++  }
++
++  LOG(INFO) << "[issue-792-exp10] pdf-help-bubble-binder frame_url="
++            << frame_url << " site_url=" << site_url;
++  mojo::MakeSelfOwnedReceiver(
++      std::make_unique<TsPdfHelpBubbleHandlerFactory>(frame_url, site_url),
++      std::move(receiver));
++}
++
++}  // namespace pdf
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h
+new file mode 100644
+index 0000000000..9d1610c74e
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h
+@@ -0,0 +1,24 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CONTENT_TS_PDF_HELP_BUBBLE_HANDLER_FACTORY_H_
++#define CONTENT_LIBTERMSURF_CONTENT_TS_PDF_HELP_BUBBLE_HANDLER_FACTORY_H_
++
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "ui/webui/resources/cr_components/help_bubble/help_bubble.mojom.h"
++
++namespace content {
++class RenderFrameHost;
++}  // namespace content
++
++namespace pdf {
++
++void BindTsPdfHelpBubbleHandlerFactory(
++    content::RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<help_bubble::mojom::PdfHelpBubbleHandlerFactory>
++        receiver);
++
++}  // namespace pdf
++
++#endif  // CONTENT_LIBTERMSURF_CONTENT_TS_PDF_HELP_BUBBLE_HANDLER_FACTORY_H_
+-- 
+2.54.0
+

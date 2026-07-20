@@ -1,0 +1,100 @@
+From b2932107d909ff5e39729bdcc2791f42f8fa607f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 02:01:14 -0500
+Subject: [PATCH] Scope command key-up ownership
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A key-up wandered pane to pane,
+A stale view caught it on the train.
+Now window, focus, responder agree—
+Only its rightful pane gets the key.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 24 ++++++++++++-----
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 26 +++++++++++++++++++
+ 2 files changed, 44 insertions(+), 6 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index e6873684a..98e91a560 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -1660,13 +1660,16 @@ extension Ghostty {
+     }
+ 
+     private func localEventKeyUp(_ event: NSEvent) -> NSEvent? {
+-      // We only care about events with "command" because all others will
+-      // trigger the normal responder chain.
+-      if !event.modifierFlags.contains(.command) { return event }
+-
+       // Command keyUp events are never sent to the normal responder chain
+-      // so we send them here.
+-      guard focused else { return event }
++      // so we send them here. Every SurfaceView owns a local monitor, including
++      // a recently detached view whose model focus can be briefly stale. Only
++      // the attached first responder for this event's window may claim the up.
++      guard Self.termSurfShouldClaimCommandKeyUp(
++        hasCommand: event.modifierFlags.contains(.command),
++        focused: focused,
++        windowMatches: window != nil && event.window === window,
++        firstResponder: window?.firstResponder === self)
++      else { return event }
+       self.keyUp(with: event)
+       return nil
+     }
+@@ -2669,6 +2672,15 @@ extension Ghostty {
+       !browserOwnsClick && appActive && windowKey
+     }
+ 
++    static func termSurfShouldClaimCommandKeyUp(
++      hasCommand: Bool,
++      focused: Bool,
++      windowMatches: Bool,
++      firstResponder: Bool
++    ) -> Bool {
++      hasCommand && focused && windowMatches && firstResponder
++    }
++
+     static func termSurfIsBrowserEditingKeyEquivalent(
+       keyCode: UInt16,
+       modifiers: UInt64,
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index ca1be7460..f0d0525f9 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -120,6 +120,32 @@ struct SurfaceViewAppKitTests {
+         )
+     }
+ 
++    @Test func commandKeyUpRequiresTheAttachedFocusedFirstResponder() {
++        #expect(
++            Ghostty.SurfaceView.termSurfShouldClaimCommandKeyUp(
++                hasCommand: true,
++                focused: true,
++                windowMatches: true,
++                firstResponder: true
++            )
++        )
++        for state in [
++            (false, true, true, true),
++            (true, false, true, true),
++            (true, true, false, true),
++            (true, true, true, false),
++        ] {
++            #expect(
++                Ghostty.SurfaceView.termSurfShouldClaimCommandKeyUp(
++                    hasCommand: state.0,
++                    focused: state.1,
++                    windowMatches: state.2,
++                    firstResponder: state.3
++                ) == false
++            )
++        }
++    }
++
+     @Test func browserMouseButtonsUseSharedProtocolModifierBits() {
+         #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 0) == 64)
+         #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 1) == 256)
+-- 
+2.54.0
+

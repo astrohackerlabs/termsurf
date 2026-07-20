@@ -1,0 +1,34 @@
+From 2a4957ebbe256930f4e19348fc8889f9f2fd38e5 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 13:38:41 -0500
+Subject: [PATCH 091/119] issue-924: fix libtermsurf_chromium GN deps for
+ Chromium 150
+
+extensions_renderer_resources moved under renderer/resources;
+mime_handler stream_info folded into mime_handler target.
+---
+ content/libtermsurf_chromium/BUILD.gn | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index c63b1f0d0b..4b9027e46f 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -129,12 +129,12 @@ shared_library("libtermsurf_chromium") {
+     "//content/public/common",
+     "//content/shell:content_shell_app",
+     "//content/shell:content_shell_lib",
+-    "//extensions:extensions_renderer_resources",
++    "//extensions/renderer/resources:extensions_renderer_resources",
+     "//extensions:extensions_resources",
+     "//extensions/browser",
+     "//extensions/browser/api:api_provider",
+     "//extensions/browser/mime_handler:stream_container",
+-    "//extensions/browser/mime_handler:stream_info",
++    "//extensions/browser/mime_handler:mime_handler",
+     "//extensions/common",
+     "//extensions/common:common_constants",
+     "//extensions/common:core_api_provider",
+-- 
+2.54.0
+

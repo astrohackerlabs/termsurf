@@ -1,0 +1,1196 @@
+From cc45eb2dc40a5fcd0c2d87320acd85fd4cf000e2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 05:13:03 -0500
+Subject: [PATCH] Make Gecko navigation lifecycle native
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The fox now journals every turn,
+No sampled tales or status urn.
+Each tab keeps sequence, truth, and track—
+Then native keys go forward, reload, and back.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 896 ++++++++++--------
+ 1 file changed, 481 insertions(+), 415 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index 91ece3dc0c0c..ca8b3b62ee8e 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -13,7 +13,11 @@ const progressListeners = new Set();
+ const delayTimers = new Set();
+ const inputControlTimers = new Set();
+ const surfaceControlTimers = new Set();
++const lifecycleObservers = new Set();
+ 
++/**
++ *
++ */
+ export class CommandLineHandler {
+   static classID = Components.ID("{a932e007-0932-4007-8000-000000000007}");
+   static contractID = "@astrohacker.org/visible-window-clh;1";
+@@ -201,7 +205,9 @@ async function runVisible(urlStr, headless, hold) {
+   let args = Cc["@mozilla.org/supports-string;1"].createInstance(
+     Ci.nsISupportsString
+   );
+-  args.data = urlStr;
++  // Hold-mode lifecycle observers must attach before the requested document
++  // starts. Open an uncommitted initial page, then load after bridge readiness.
++  args.data = hold ? "about:blank" : urlStr;
+   let win = await BrowserWindowTracker.promiseOpenWindow({
+     args,
+     features: "width=800,height=600,left=100,top=100",
+@@ -248,6 +254,35 @@ async function runVisible(urlStr, headless, hold) {
+     );
+   }
+ 
++  if (hold) {
++    const lifecycle = startLifecycleJournal(win, browser);
++    if (!lifecycle) {
++      dump("probe_error=lifecycle_journal_unavailable\n");
++      dump("visible_window_ok=0\n");
++      try {
++        win.close();
++      } catch (e) {}
++      return;
++    }
++    startSurfaceControlLoop(win, browser);
++    startInputControlLoop(win, browser);
++    dump("hold_mode=1\n");
++    dump("hold_ms=0\n");
++    dump("hold_retained=1\n");
++    dump("visible_window_ready=1\n");
++    dump("visible_window_ok=1\n");
++    try {
++      const principal = Services.scriptSecurityManager.getSystemPrincipal();
++      browser.loadURI(Services.io.newURI(urlStr), {
++        triggeringPrincipal: principal,
++      });
++      dump(`initial_navigation_accepted=1 url_len=${urlStr.length}\n`);
++    } catch (e) {
++      dump(`initial_navigation_accepted=0 error=${String(e)}\n`);
++    }
++    return;
++  }
++
+   let finalUri;
+   try {
+     // If openWindow already navigated, wait for stop; else load
+@@ -303,7 +338,7 @@ async function runVisible(urlStr, headless, hold) {
+   let outerOk = (win.outerWidth | 0) >= 100 && (win.outerHeight | 0) >= 100;
+   if (
+     !headless &&
+-    title.length > 0 &&
++    !!title.length &&
+     outerOk &&
+     finalUri &&
+     finalUri !== "about:blank"
+@@ -346,18 +381,6 @@ async function runVisible(urlStr, headless, hold) {
+     dump("surface_probe_resize=1\n");
+   }
+ 
+-  if (hold) {
+-    // Exp8: retain window; normal event loop continues (no nested busy loop).
+-    // Parent reaps via SIGTERM; do not claim teardown here.
+-    dump("hold_mode=1\n");
+-    dump("hold_ms=0\n");
+-    dump("hold_retained=1\n");
+-    startSurfaceControlLoop(win, browser);
+-    // Exp5: optional input control file → content windowUtils (native widget path).
+-    startInputControlLoop(win, browser);
+-    return;
+-  }
+-
+   dump("hold_ms=1500\n");
+   // Exp7: brief hold for CG observation, then quit.
+   let holdEnd = Date.now() + 1500;
+@@ -540,6 +563,9 @@ function startSurfaceControlLoop(win, browser) {
+  * Status file (same path + ".status") written after each command:
+  *   seq=<n> ok=1 title_enc=... status_enc=... input_value_enc=... pid=... content_w=... content_h=...
+  *   native_widget_path=1
++ *
++ * @param {Window} win
++ * @param {XULElement} browser
+  */
+ function startInputControlLoop(win, browser) {
+   let path = Services.env.get("ASTROHACKER_GECKO_INPUT_CONTROL_PATH") || "";
+@@ -614,6 +640,8 @@ function startInputControlLoop(win, browser) {
+ /**
+  * Frame script: dispatch real DOM mouse/key/wheel events in the content
+  * document (page-effect path). Complements chrome sendNativeMouseEvent.
++ *
++ * @param {XULElement} browser
+  */
+ function ensureSelectFrameScript(browser) {
+   if (browser._ahSelectScript) {
+@@ -1143,6 +1171,269 @@ function writeFileSync(path, body) {
+   }
+ }
+ 
++function appendFileSync(path, body) {
++  try {
++    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
++    file.initWithPath(path);
++    let fos = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(
++      Ci.nsIFileOutputStream
++    );
++    // PR_WRONLY | PR_CREATE_FILE | PR_APPEND. Never truncate an event journal.
++    fos.init(file, 0x02 | 0x08 | 0x10, 0o644, 0);
++    let converter = Cc[
++      "@mozilla.org/intl/converter-output-stream;1"
++    ].createInstance(Ci.nsIConverterOutputStream);
++    converter.init(fos, "UTF-8");
++    converter.writeString(body);
++    converter.close();
++    fos.close();
++    return true;
++  } catch (e) {
++    dump(`lifecycle_journal_write_error=${String(e)}\n`);
++    return false;
++  }
++}
++
++function startLifecycleJournal(win, browser) {
++  const path = Services.env.get("ASTROHACKER_GECKO_LIFECYCLE_PATH") || "";
++  if (!path) {
++    dump("lifecycle_journal=0 reason=no_path\n");
++    return null;
++  }
++  if (!writeFileSync(path, "")) {
++    dump("lifecycle_journal=0 reason=truncate_failed\n");
++    return null;
++  }
++
++  let sequence = 0;
++  let nextGeneration = 0;
++  let activeGeneration = 0;
++  let lastLocation = "";
++  let lastLocationGeneration = 0;
++  let lastTitle = "";
++  let lastTitleGeneration = 0;
++  let lastProgress = -1;
++  let closed = false;
++  const requestGenerations = new WeakMap();
++  let pendingTerminal = null;
++  let terminalTimer = null;
++
++  const emit = (kind, generation, options = {}) => {
++    if (closed) {
++      return false;
++    }
++    const url = options.url || "";
++    const title = options.title || "";
++    const progress = Number.isSafeInteger(options.progress)
++      ? Math.max(0, Math.min(100, options.progress))
++      : 0;
++    const status = Number.isSafeInteger(options.status) ? options.status : 0;
++    sequence++;
++    const line =
++      `seq=${sequence} gen=${generation} kind=${kind} progress=${progress} ` +
++      `status=${status} url_enc=${encodeURIComponent(url)} ` +
++      `title_enc=${encodeURIComponent(title)}\n`;
++    const ok = appendFileSync(path, line);
++    dump(
++      `lifecycle_event seq=${sequence} gen=${generation} kind=${kind} ` +
++        `progress=${progress} status=${status}\n`
++    );
++    return ok;
++  };
++
++  const generationForObservation = () => activeGeneration;
++  const finishTerminal = () => {
++    if (!pendingTerminal) {
++      return;
++    }
++    const terminal = pendingTerminal;
++    pendingTerminal = null;
++    if (terminal.generation !== activeGeneration) {
++      dump(
++        `lifecycle_late_drop gen=${terminal.generation} active=${activeGeneration} kind=terminal\n`
++      );
++      return;
++    }
++    emit(terminal.success ? "done" : "error", terminal.generation, {
++      progress: terminal.success ? 100 : Math.max(0, lastProgress),
++      status: terminal.status,
++    });
++    activeGeneration = 0;
++  };
++  const listener = {
++    QueryInterface: ChromeUtils.generateQI([
++      "nsIWebProgressListener",
++      "nsISupportsWeakReference",
++    ]),
++    onStateChange(progress, request, stateFlags, status) {
++      let requestUrl = "";
++      try {
++        requestUrl = request?.QueryInterface(Ci.nsIChannel).URI?.spec || "";
++      } catch (e) {}
++      dump(
++        `lifecycle_state_callback top=${progress?.isTopLevel ? 1 : 0} flags=${stateFlags} url=${requestUrl}\n`
++      );
++      if (!progress?.isTopLevel) {
++        return;
++      }
++      if (requestUrl === "about:blank") {
++        return;
++      }
++      const L = Ci.nsIWebProgressListener;
++      const isWindowNetwork =
++        stateFlags & L.STATE_IS_NETWORK && stateFlags & L.STATE_IS_WINDOW;
++      if (!isWindowNetwork) {
++        return;
++      }
++      if (stateFlags & L.STATE_START) {
++        finishTerminal();
++        if (!activeGeneration) {
++          activeGeneration = ++nextGeneration;
++          lastProgress = -1;
++          emit("start", activeGeneration, { progress: 0, status: 0 });
++        }
++        if (request) {
++          requestGenerations.set(request, activeGeneration);
++        }
++        return;
++      }
++      if (!(stateFlags & L.STATE_STOP) || !activeGeneration) {
++        return;
++      }
++      const requestGeneration = request
++        ? requestGenerations.get(request) || activeGeneration
++        : activeGeneration;
++      if (requestGeneration !== activeGeneration) {
++        dump(
++          `lifecycle_late_drop gen=${requestGeneration} active=${activeGeneration} kind=terminal\n`
++        );
++        return;
++      }
++      const numericStatus = Number(status) || 0;
++      const success = Components.isSuccessCode(numericStatus);
++      pendingTerminal = {
++        generation: activeGeneration,
++        success,
++        status: numericStatus,
++      };
++      terminalTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++      terminalTimer.initWithCallback(
++        () => {
++          terminalTimer = null;
++          finishTerminal();
++        },
++        25,
++        Ci.nsITimer.TYPE_ONE_SHOT
++      );
++    },
++    onProgressChange(progress, _request, curSelf, maxSelf, curTotal, maxTotal) {
++      if (!progress?.isTopLevel || !activeGeneration) {
++        return;
++      }
++      const current = maxTotal > 0 ? curTotal : curSelf;
++      const maximum = maxTotal > 0 ? maxTotal : maxSelf;
++      if (!(maximum > 0)) {
++        return;
++      }
++      const value = Math.max(
++        0,
++        Math.min(99, Math.floor((current * 100) / maximum))
++      );
++      if (value <= lastProgress) {
++        return;
++      }
++      lastProgress = value;
++      emit("progress", activeGeneration, { progress: value });
++    },
++    onLocationChange(progress, _request, location, _flags) {
++      dump(
++        `lifecycle_location_callback top=${progress?.isTopLevel ? 1 : 0} url=${location?.spec || ""}\n`
++      );
++      if (!progress?.isTopLevel) {
++        return;
++      }
++      const url = location?.spec || "";
++      const generation = _request
++        ? requestGenerations.get(_request) || generationForObservation()
++        : generationForObservation();
++      if (generation !== activeGeneration) {
++        return;
++      }
++      if (!generation || !url || url === "about:blank") {
++        return;
++      }
++      if (url === lastLocation && generation === lastLocationGeneration) {
++        return;
++      }
++      lastLocation = url;
++      lastLocationGeneration = generation;
++      emit("location", generation, { url });
++    },
++    onStatusChange() {},
++    onSecurityChange() {},
++    onContentBlockingEvent() {},
++  };
++
++  const titleListener = event => {
++    if (event.target !== browser) {
++      return;
++    }
++    dump("lifecycle_title_callback=1 source=pagetitlechanged\n");
++    const generation = generationForObservation();
++    const title = browser.contentTitle || "";
++    if (
++      !title ||
++      (title === lastTitle &&
++        (generation === lastTitleGeneration || generation === 0))
++    ) {
++      return;
++    }
++    lastTitle = title;
++    lastTitleGeneration = generation;
++    emit("title", generation, { title });
++  };
++
++  const flags =
++    Ci.nsIWebProgress.NOTIFY_STATE_ALL |
++    Ci.nsIWebProgress.NOTIFY_PROGRESS |
++    Ci.nsIWebProgress.NOTIFY_LOCATION;
++  browser.webProgress.addProgressListener(listener, flags);
++  browser.addEventListener("pagetitlechanged", titleListener);
++
++  const observer = {
++    close() {
++      if (closed) {
++        return;
++      }
++      closed = true;
++      try {
++        browser.webProgress.removeProgressListener(listener);
++      } catch (e) {}
++      try {
++        browser.removeEventListener("pagetitlechanged", titleListener);
++      } catch (e) {}
++      if (terminalTimer) {
++        try {
++          terminalTimer.cancel();
++        } catch (e) {}
++        terminalTimer = null;
++      }
++      pendingTerminal = null;
++      lifecycleObservers.delete(observer);
++    },
++  };
++  lifecycleObservers.add(observer);
++  emit("ready", 0);
++  dump(`lifecycle_journal=1 path=${path} ready=1\n`);
++  return observer;
++}
++
++function stopLifecycleObservers() {
++  for (const observer of Array.from(lifecycleObservers)) {
++    observer.close();
++  }
++}
++
+ function parseKvLine(text) {
+   let out = {};
+   if (!text) {
+@@ -1160,14 +1451,9 @@ function parseKvLine(text) {
+   return out;
+ }
+ 
+-function contentToScreenDevice(win, browser, x, y) {
+-  let rect = browser.getBoundingClientRect();
+-  let scale = win.devicePixelRatio || 1;
+-  let screenX = Math.round((win.mozInnerScreenX + rect.left + x) * scale);
+-  let screenY = Math.round((win.mozInnerScreenY + rect.top + y) * scale);
+-  return { screenX, screenY, scale, rect };
+-}
+-
++// This legacy control dispatcher intentionally keeps the closed set of probe
++// operations together so one sequence number owns each status response.
++// eslint-disable-next-line complexity
+ function processInputControlOnce(path, browser, win, state) {
+   let raw = readFileSync(path);
+   if (!raw) {
+@@ -1200,7 +1486,7 @@ function processInputControlOnce(path, browser, win, state) {
+     let title = result.title || "";
+     let status = result.status || "";
+     let inputValue = result.input_value || "";
+-    if (!title) {
++    if (!title && !result.suppress_snapshot) {
+       try {
+         title = browser.contentTitle || win.gBrowser?.contentTitle || "";
+       } catch (e) {}
+@@ -1239,6 +1525,7 @@ function processInputControlOnce(path, browser, win, state) {
+       error: "shutdown_acknowledged",
+     });
+     Services.tm.dispatchToMainThread(() => {
++      stopLifecycleObservers();
+       dump("surface_owner_shutdown=1 path=control_main_thread\n");
+       Services.startup.quit(
+         Ci.nsIAppStartup.eForceQuit | Ci.nsIAppStartup.eAttemptQuit
+@@ -1265,289 +1552,118 @@ function processInputControlOnce(path, browser, win, state) {
+         browser.docShellIsActive = true;
+       } catch (e) {}
+     }
+-    let completed = false;
+-    let listener = msg => {
+-      if (completed) return;
+-      completed = true;
+-      try {
+-        browser.messageManager.removeMessageListener(
+-          "astrohacker-text-input-result",
+-          listener
+-        );
+-      } catch (e) {}
+-      let result = msg.data || {};
++    dump(`input_focus focused=${state.focused ? 1 : 0} content_bridge=1\n`);
++  }
++
++  if (op === "navigate") {
++    let navUrl = "";
++    try {
++      navUrl = decodeURIComponent(cmd.url_enc || "");
++    } catch (e) {
+       writeStatus({
+-        ok: result.ok ? 1 : 0,
+-        title: result.title || "",
+-        status: result.status || "",
+-        input_value: result.input_value || "",
+-        error: result.error || "focus_no_result",
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: "invalid_url_encoding",
++        suppress_snapshot: true,
+       });
+-    };
++      return;
++    }
++    if (!navUrl) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: "empty_url",
++        suppress_snapshot: true,
++      });
++      return;
++    }
+     try {
+-      ensureGenericTextInputScript(browser);
+-      browser.messageManager.addMessageListener(
+-        "astrohacker-text-input-result",
+-        listener
+-      );
+-      browser.messageManager.sendAsyncMessage("astrohacker-text-input", {
+-        op: "focus",
+-        focused: state.focused,
++      const principal = Services.scriptSecurityManager.getSystemPrincipal();
++      browser.loadURI(Services.io.newURI(navUrl), {
++        triggeringPrincipal: principal,
++      });
++      dump(`navigation_accept op=navigate url_len=${navUrl.length}\n`);
++      writeStatus({
++        ok: 1,
++        title: "",
++        status: "",
++        input_value: "",
++        error: "accepted",
++        suppress_snapshot: true,
+       });
+     } catch (e) {
+-      completed = true;
+       writeStatus({
+         ok: 0,
+         title: "",
+         status: "",
+         input_value: "",
+-        error: String(e),
++        error: `navigate_rejected:${String(e)}`,
++        suppress_snapshot: true,
+       });
+     }
+-    dump(`input_focus focused=${state.focused ? 1 : 0} content_bridge=1\n`);
+     return;
+   }
+ 
+-  // Exp9: navigation / history on live visible browser (no process respawn).
+-  if (
+-    op === "navigate" ||
+-    op === "back" ||
+-    op === "forward" ||
+-    op === "reload" ||
+-    op === "stop" ||
+-    op === "navigate_then_stop"
+-  ) {
+-    let navUrl = (cmd.url || "").replace(/_/g, "/").replace(/\|/g, ":");
+-    // Allow file: and http: with percent-encoding already applied by parent.
+-    if (cmd.url_b64) {
+-      try {
+-        navUrl = atob(cmd.url_b64);
+-      } catch (e) {}
+-    }
+-    if (cmd.url_enc) {
+-      try {
+-        navUrl = decodeURIComponent(cmd.url_enc);
+-      } catch (e) {
+-        navUrl = cmd.url_enc;
+-      }
++  if (op === "key") {
++    const type = String(cmd.type || "");
++    const keyCode = Number(cmd.keyCode);
++    const modifiers = Number(cmd.modifiers);
++    const exactCommand = modifiers === 8;
++    let action = "";
++    if (exactCommand && keyCode === 0xdb) {
++      action = "back";
++    } else if (exactCommand && keyCode === 0xdd) {
++      action = "forward";
++    } else if (exactCommand && keyCode === 0x52) {
++      action = "reload";
++    } else if (
++      modifiers === 0 &&
++      keyCode === 0x1b &&
++      browser.webProgress?.isLoadingDocument
++    ) {
++      action = "stop";
+     }
+-    let wroteNav = false;
+-    const finishNav = (ok, err) => {
+-      if (wroteNav) return;
+-      wroteNav = true;
+-      let title = "";
+-      let curUrl = "";
+-      try {
+-        title = browser.contentTitle || "";
+-      } catch (e) {}
+-      try {
+-        curUrl =
+-          browser.currentURI?.spec || win.gBrowser?.currentURI?.spec || "";
+-      } catch (e) {}
+-      dump(`nav_done op=${op} ok=${ok ? 1 : 0} url=${curUrl} title=${title}\n`);
+-      dump(`loading_state=done\n`);
+-      writeStatus({
+-        ok: ok ? 1 : 0,
+-        title: title,
+-        status: curUrl,
+-        input_value: curUrl,
+-        error: err || `nav_ok op=${op}`,
+-      });
+-    };
+-    dump(`loading_state=loading op=${op}\n`);
+-    try {
+-      if (op === "stop") {
+-        try {
+-          browser.stop();
+-        } catch (e) {}
+-        try {
+-          win.gBrowser?.stop?.();
+-        } catch (e) {}
+-        dump("nav_api=stop\n");
+-        finishNav(1, "stopped");
+-        return;
+-      }
+-      if (op === "navigate_then_stop") {
+-        // Mid-load stop: start load, stop after short delay while in-flight.
+-        dump(`nav_api=loadURI_then_stop url_len=${(navUrl || "").length}\n`);
+-        if (!navUrl) {
+-          finishNav(0, "empty_url");
+-          return;
+-        }
+-        try {
+-          let uri = Services.io.newURI(navUrl);
+-          let principal = Services.scriptSecurityManager.getSystemPrincipal();
+-          browser.loadURI(uri, { triggeringPrincipal: principal });
+-        } catch (e) {
+-          finishNav(0, String(e));
+-          return;
+-        }
+-        let st = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+-        inputControlTimers.add(st);
+-        st.initWithCallback(
+-          () => {
+-            try {
+-              st.cancel();
+-            } catch (e) {}
+-            inputControlTimers.delete(st);
+-            try {
+-              browser.stop();
+-            } catch (e) {}
+-            try {
+-              win.gBrowser?.stop?.();
+-            } catch (e) {}
+-            dump("nav_api=stop mid_load=1\n");
+-            finishNav(1, "stopped_mid_load");
+-          },
+-          250,
+-          Ci.nsITimer.TYPE_ONE_SHOT
+-        );
+-        return;
+-      }
+-      if (op === "back") {
+-        dump("history_api=goBack\n");
++    if (action) {
++      let ok = type === "down" || type === "up";
++      let error = "accepted_key_up";
++      if (type === "down") {
+         try {
+-          browser.goBack();
+-        } catch (e) {
+-          try {
+-            win.gBrowser.goBack();
+-          } catch (e2) {
+-            finishNav(0, String(e2));
+-            return;
+-          }
+-        }
+-      } else if (op === "forward") {
+-        dump("history_api=goForward\n");
+-        try {
+-          browser.goForward();
+-        } catch (e) {
+-          try {
+-            win.gBrowser.goForward();
+-          } catch (e2) {
+-            finishNav(0, String(e2));
+-            return;
+-          }
+-        }
+-      } else if (op === "reload") {
+-        dump("nav_api=reload\n");
+-        try {
+-          browser.reload();
+-        } catch (e) {
+-          try {
+-            win.gBrowser.reload();
+-          } catch (e2) {
+-            finishNav(0, String(e2));
+-            return;
++          if (action === "back") {
++            if (!browser.canGoBack) {
++              throw new Error("cannot_go_back");
++            }
++            browser.goBack();
++          } else if (action === "forward") {
++            if (!browser.canGoForward) {
++              throw new Error("cannot_go_forward");
++            }
++            browser.goForward();
++          } else if (action === "reload") {
++            browser.reload();
++          } else {
++            browser.stop();
+           }
+-        }
+-      } else if (op === "navigate") {
+-        dump(`nav_api=loadURI url_len=${(navUrl || "").length}\n`);
+-        if (!navUrl) {
+-          finishNav(0, "empty_url");
+-          return;
+-        }
+-        try {
+-          let uri = Services.io.newURI(navUrl);
+-          let principal = Services.scriptSecurityManager.getSystemPrincipal();
+-          browser.loadURI(uri, { triggeringPrincipal: principal });
++          error = `accepted_${action}`;
++          dump(`physical_navigation_action=${action} type=down\n`);
+         } catch (e) {
+-          finishNav(0, String(e));
+-          return;
++          ok = false;
++          error = String(e);
+         }
+       }
+-    } catch (e) {
+-      finishNav(0, String(e));
++      writeStatus({
++        ok: ok ? 1 : 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error,
++        suppress_snapshot: true,
++      });
+       return;
+     }
+-    // Wait for load stop (progress) then write status.
+-    let polls = 0;
+-    let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+-    inputControlTimers.add(t);
+-    let sawStart = op === "stop";
+-    try {
+-      let webProgress = browser.webProgress;
+-      let flags =
+-        Ci.nsIWebProgress.NOTIFY_STATE_NETWORK |
+-        Ci.nsIWebProgress.NOTIFY_STATE_WINDOW;
+-      let listener = {
+-        QueryInterface: ChromeUtils.generateQI([
+-          "nsIWebProgressListener",
+-          "nsISupportsWeakReference",
+-        ]),
+-        onStateChange(aWebProgress, aRequest, aStateFlags, aStatus) {
+-          try {
+-            const isNetwork =
+-              aStateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+-            const isStart = aStateFlags & Ci.nsIWebProgressListener.STATE_START;
+-            const isStop = aStateFlags & Ci.nsIWebProgressListener.STATE_STOP;
+-            if (isNetwork && isStart) {
+-              sawStart = true;
+-              dump("loading_state=loading\n");
+-            }
+-            if (isNetwork && isStop) {
+-              dump("loading_state=done\n");
+-              // For redirect fixtures, do not finish yet — poll for final URL/title.
+-              let uriNow = "";
+-              try {
+-                uriNow = browser.currentURI?.spec || "";
+-              } catch (e) {}
+-              if (uriNow.indexOf("page-redirect") >= 0) {
+-                dump("nav_redirect_wait=1\n");
+-                return;
+-              }
+-              try {
+-                webProgress.removeProgressListener(listener);
+-              } catch (e) {}
+-              finishNav(1, "state_stop");
+-            }
+-          } catch (e) {}
+-        },
+-        onLocationChange() {},
+-        onProgressChange() {},
+-        onStatusChange() {},
+-        onSecurityChange() {},
+-        onContentBlockingEvent() {},
+-      };
+-      webProgress.addProgressListener(listener, flags);
+-    } catch (e) {
+-      dump(`nav_progress_error=${String(e)}\n`);
+-    }
+-    t.initWithCallback(
+-      () => {
+-        polls++;
+-        if (wroteNav) {
+-          try {
+-            t.cancel();
+-          } catch (e) {}
+-          inputControlTimers.delete(t);
+-          return;
+-        }
+-        // After state_stop, allow client redirects (meta refresh / location.replace)
+-        // a short settle window before finishing.
+-        let titleNow = "";
+-        let uriNow = "";
+-        try {
+-          titleNow = browser.contentTitle || "";
+-        } catch (e) {}
+-        try {
+-          uriNow = browser.currentURI?.spec || "";
+-        } catch (e) {}
+-        let redirected =
+-          titleNow.indexOf("NAV_PAGE_B") >= 0 ||
+-          (uriNow && uriNow.indexOf("page-b.html") >= 0);
+-        // Fallback: title/uri settled without progress events (file:// fast path).
+-        if (redirected || polls >= 25 || (op === "stop" && polls >= 2)) {
+-          try {
+-            t.cancel();
+-          } catch (e) {}
+-          inputControlTimers.delete(t);
+-          finishNav(1, sawStart ? "poll_done" : "poll_done_no_start");
+-        }
+-      },
+-      100,
+-      Ci.nsITimer.TYPE_REPEATING_SLACK
+-    );
+-    return;
+   }
+ 
+   // Exp10: browser workflow helpers (forms/CE/storage/deny surfaces).
+@@ -1560,7 +1676,7 @@ function processInputControlOnce(path, browser, win, state) {
+         win._ahPromptInstalled = true;
+         Services.obs.addObserver(
+           {
+-            observe(subject, topic, data) {
++            observe(subject, topic, _data) {
+               try {
+                 dump("dialog_attempt=1 topic=" + topic + "\n");
+                 let dw = subject;
+@@ -1578,8 +1694,7 @@ function processInputControlOnce(path, browser, win, state) {
+               }
+             },
+           },
+-          "common-dialog-loaded",
+-          false
++          "common-dialog-loaded"
+         );
+       }
+     } catch (e) {
+@@ -1591,15 +1706,14 @@ function processInputControlOnce(path, browser, win, state) {
+         win._ahDlObs = true;
+         Services.obs.addObserver(
+           {
+-            observe(subject, topic, data) {
++            observe(_subject, _topic, _data) {
+               try {
+                 dump("download_attempt=1\n");
+                 dump("download_denied=1 reason=no_product_download_path\n");
+               } catch (e) {}
+             },
+           },
+-          "quit-application-granted",
+-          false
++          "quit-application-granted"
+         );
+       }
+     } catch (e) {}
+@@ -1609,8 +1723,10 @@ function processInputControlOnce(path, browser, win, state) {
+       id: cmd.id || "",
+     };
+     let done = false;
+-    let listener = msg => {
+-      if (done) return;
++    let listener = _msg => {
++      if (done) {
++        return;
++      }
+       done = true;
+       try {
+         browser.messageManager.removeMessageListener(
+@@ -1618,7 +1734,6 @@ function processInputControlOnce(path, browser, win, state) {
+           listener
+         );
+       } catch (e) {}
+-      let d = msg.data || {};
+       // First frame result may race fixture oracles; final write uses poll below.
+       try {
+         if (phase === "hover") {
+@@ -1655,11 +1770,13 @@ function processInputControlOnce(path, browser, win, state) {
+         } catch (e) {}
+         let tokenReady =
+           title &&
+-          (title.indexOf("_OK") >= 0 || title.indexOf("OK") >= 0) &&
+-          title.indexOf("WORKFLOW_READY") < 0 &&
+-          title.indexOf("EXP3_FIXTURE") < 0;
++          (title.includes("_OK") || title.includes("OK")) &&
++          !title.includes("WORKFLOW_READY") &&
++          !title.includes("EXP3_FIXTURE");
+         if ((done && (tokenReady || polls >= 25)) || polls >= 40) {
+-          if (wrote) return;
++          if (wrote) {
++            return;
++          }
+           wrote = true;
+           try {
+             t.cancel();
+@@ -1668,19 +1785,19 @@ function processInputControlOnce(path, browser, win, state) {
+           // Late deny stamps after fixture oracles settle (fail-closed triggers).
+           let denyBits = "workflow_poll phase=" + phase;
+           try {
+-            if (phase === "file" && title.indexOf("FILE_CLICK_OK") >= 0) {
++            if (phase === "file" && title.includes("FILE_CLICK_OK")) {
+               dump("file_input_attempt=1\n");
+               dump("file_input_denied=1 reason=no_product_file_picker\n");
+               denyBits =
+                 "file_input_attempt=1 file_input_denied=1 workflow_poll";
+             } else if (
+               phase === "download" &&
+-              title.indexOf("DOWNLOAD_CLICK_OK") >= 0
++              title.includes("DOWNLOAD_CLICK_OK")
+             ) {
+               dump("download_attempt=1\n");
+               dump("download_denied=1 reason=no_product_download_path\n");
+               denyBits = "download_attempt=1 download_denied=1 workflow_poll";
+-            } else if (phase === "popup" && title.indexOf("POPUP_") >= 0) {
++            } else if (phase === "popup" && title.includes("POPUP_")) {
+               dump("popup_attempt=1\n");
+               dump("popup_denied=1 reason=blocked_or_single_tab\n");
+               denyBits = "popup_attempt=1 popup_denied=1 workflow_poll";
+@@ -1692,10 +1809,10 @@ function processInputControlOnce(path, browser, win, state) {
+                 "permission_attempt=1 permission_denied=1 workflow_poll";
+             } else if (phase === "dialog") {
+               dump("dialog_attempt=1\n");
+-              if (title.indexOf("DIALOG_OK") >= 0) {
++              if (title.includes("DIALOG_OK")) {
+                 // Real confirm returned after auto-accept observer.
+                 denyBits = "dialog_attempt=1 dialog_e2e=1 workflow_poll";
+-              } else if (title.indexOf("DIALOG_REQUESTED") >= 0) {
++              } else if (title.includes("DIALOG_REQUESTED")) {
+                 // Confirm hung or not dismissed; tested deny (no hang beyond poll).
+                 dump("dialog_denied=1 reason=confirm_not_dismissed\n");
+                 denyBits = "dialog_attempt=1 dialog_denied=1 workflow_poll";
+@@ -1705,7 +1822,7 @@ function processInputControlOnce(path, browser, win, state) {
+               try {
+                 u = browser.currentURI?.spec || "";
+               } catch (e) {}
+-              if (u.indexOf("/auth") >= 0) {
++              if (u.includes("/auth")) {
+                 dump("http_auth_challenge=1\n");
+                 dump("http_auth_denied=1 reason=no_product_auth_ui\n");
+                 denyBits =
+@@ -1718,7 +1835,7 @@ function processInputControlOnce(path, browser, win, state) {
+           } catch (e) {}
+           writeStatus({
+             ok: 1,
+-            title: title,
++            title,
+             status: title,
+             input_value: phase,
+             error: denyBits.replace(/\s+/g, "_"),
+@@ -1731,98 +1848,6 @@ function processInputControlOnce(path, browser, win, state) {
+     return;
+   }
+ 
+-  // Exp9: product click on element by id (link navigation honesty).
+-  if (op === "click_id") {
+-    let id = cmd.id || cmd.expect || "";
+-    try {
+-      if (!browser._ahClickScript) {
+-        const cscript =
+-          'addMessageListener("ah-click",function(msg){' +
+-          'var id=(msg.data&&msg.data.id)||"";' +
+-          "var doc=content.document;" +
+-          "var el=doc.getElementById(id);" +
+-          'var result={ok:0,title:"",url:"",error:""};' +
+-          "try{" +
+-          'if(el){el.click();result.ok=1;result.error="clicked";}' +
+-          'else{result.error="no_el";}' +
+-          'result.title=doc.title||"";' +
+-          'try{result.url=content.location.href||"";}catch(e){}' +
+-          "}catch(e){result.error=String(e);}" +
+-          'sendAsyncMessage("ah-click-result",result);' +
+-          "});";
+-        browser.messageManager.loadFrameScript(
+-          "data:," + encodeURIComponent(cscript),
+-          true
+-        );
+-        browser._ahClickScript = true;
+-      }
+-      let done = false;
+-      let listener = msg => {
+-        if (done) return;
+-        done = true;
+-        try {
+-          browser.messageManager.removeMessageListener(
+-            "ah-click-result",
+-            listener
+-          );
+-        } catch (e) {}
+-        dump(
+-          "click_id_frame=1 id=" +
+-            id +
+-            " ok=" +
+-            (msg.data && msg.data.ok ? 1 : 0) +
+-            "\n"
+-        );
+-      };
+-      browser.messageManager.addMessageListener("ah-click-result", listener);
+-      browser.messageManager.sendAsyncMessage("ah-click", { id });
+-      // Wait for navigation after click (link → page B).
+-      let t = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+-      inputControlTimers.add(t);
+-      let polls = 0;
+-      t.initWithCallback(
+-        () => {
+-          polls++;
+-          let title = "";
+-          let curUrl = "";
+-          try {
+-            title = browser.contentTitle || "";
+-          } catch (e) {}
+-          try {
+-            curUrl = browser.currentURI?.spec || "";
+-          } catch (e) {}
+-          let navOk =
+-            title.indexOf("NAV_PAGE_B") >= 0 ||
+-            (curUrl && curUrl.indexOf("page-b.html") >= 0);
+-          if (navOk || polls >= 40) {
+-            try {
+-              t.cancel();
+-            } catch (e) {}
+-            inputControlTimers.delete(t);
+-            writeStatus({
+-              ok: navOk ? 1 : 0,
+-              title,
+-              status: curUrl,
+-              input_value: id,
+-              error: navOk ? "click_id_nav" : "click_id_no_nav",
+-            });
+-          }
+-        },
+-        100,
+-        Ci.nsITimer.TYPE_REPEATING_SLACK
+-      );
+-    } catch (e) {
+-      writeStatus({
+-        ok: 0,
+-        title: "",
+-        status: "",
+-        input_value: "",
+-        error: String(e),
+-      });
+-    }
+-    return;
+-  }
+-
+   // Exp7: dedicated small frame script for select/edit/clipboard (avoid huge data: URL).
+   if (op === "select") {
+     ensureSelectFrameScript(browser);
+@@ -1844,7 +1869,9 @@ function processInputControlOnce(path, browser, win, state) {
+       error: "",
+     };
+     let listener = msg => {
+-      if (frameDone) return;
++      if (frameDone) {
++        return;
++      }
+       frameDone = true;
+       try {
+         browser.messageManager.removeMessageListener(
+@@ -1903,11 +1930,13 @@ function processInputControlOnce(path, browser, win, state) {
+         let tokenReady =
+           title &&
+           title !== prevTitle &&
+-          (title.indexOf("_OK") >= 0 || title.indexOf("OK") >= 0) &&
+-          title.indexOf("SELECT_CLIP_READY") < 0 &&
+-          title.indexOf("EXP3_FIXTURE") < 0;
++          (title.includes("_OK") || title.includes("OK")) &&
++          !title.includes("SELECT_CLIP_READY") &&
++          !title.includes("EXP3_FIXTURE");
+         if ((frameDone && (tokenReady || polls >= 20)) || polls >= 35) {
+-          if (wrote) return;
++          if (wrote) {
++            return;
++          }
+           wrote = true;
+           try {
+             t.cancel();
+@@ -1929,7 +1958,7 @@ function processInputControlOnce(path, browser, win, state) {
+   }
+ 
+   const pointerOp = op === "mousemove" || op === "mouse" || op === "wheel";
+-  if (!state.focused && op !== "query" && !pointerOp) {
++  if (!state.focused && op !== "query" && op !== "focus" && !pointerOp) {
+     writeStatus({
+       ok: 0,
+       title: "",
+@@ -1979,7 +2008,8 @@ function processInputControlOnce(path, browser, win, state) {
+   let start = cmd.start || "";
+   let end = cmd.end || "";
+   let expect = cmd.expect || "";
+-  let textPath = op === "key" || op === "text_input" || op === "query";
++  let textPath =
++    op === "key" || op === "text_input" || op === "query" || op === "focus";
+   let pointerPath = op === "mouse" || op === "mousemove" || op === "wheel";
+   let scrollPhase = parseInt(cmd.phase || "0", 10);
+   let momentumPhase = parseInt(cmd.momentum_phase || "0", 10);
+@@ -2000,6 +2030,7 @@ function processInputControlOnce(path, browser, win, state) {
+   // dedicated widget bridges; never use owner-window screen coordinates.
+   let payload = {
+     op,
++    focused: state.focused,
+     type,
+     phase,
+     data,
+@@ -2030,6 +2061,8 @@ function processInputControlOnce(path, browser, win, state) {
+   };
+ 
+   let got = false;
++  let attempts = 0;
++  let retryPending = false;
+   let best = {
+     ok: textPath || pointerPath ? 0 : 1,
+     title: "",
+@@ -2060,11 +2093,20 @@ function processInputControlOnce(path, browser, win, state) {
+     } catch (e) {}
+   };
+ 
+-  try {
+-    if (textPath) ensureGenericTextInputScript(browser);
+-    if (pointerPath) ensureGenericPointerInputScript(browser);
++  const sendInputAttempt = () => {
++    attempts++;
++    if (textPath) {
++      ensureGenericTextInputScript(browser);
++    }
++    if (pointerPath) {
++      ensureGenericPointerInputScript(browser);
++    }
+     browser.messageManager.addMessageListener(resultName, listener);
+     browser.messageManager.sendAsyncMessage(messageName, payload);
++  };
++
++  try {
++    sendInputAttempt();
+   } catch (e) {
+     writeStatus({
+       ok: 0,
+@@ -2083,6 +2125,19 @@ function processInputControlOnce(path, browser, win, state) {
+   inputControlTimers.add(pollTimer);
+   pollTimer.initWithCallback(
+     () => {
++      if (retryPending) {
++        retryPending = false;
++        polls = 0;
++        try {
++          sendInputAttempt();
++          dump(
++            `input_frame_retry_sent=1 seq=${seq} op=${op} attempt=${attempts}\n`
++          );
++          return;
++        } catch (e) {
++          best.error = String(e);
++        }
++      }
+       polls++;
+       try {
+         let t = browser.contentTitle || "";
+@@ -2090,6 +2145,27 @@ function processInputControlOnce(path, browser, win, state) {
+           best.title = t;
+         }
+       } catch (e) {}
++      if (!got && polls >= 40 && attempts < 2) {
++        try {
++          browser.messageManager.removeMessageListener(resultName, listener);
++        } catch (e) {}
++        try {
++          if (textPath) {
++            browser._astrohackerTextInput = false;
++            ensureGenericTextInputScript(browser);
++          } else if (pointerPath) {
++            browser._astrohackerPointerInput = false;
++            ensureGenericPointerInputScript(browser);
++          }
++          retryPending = true;
++          polls = 0;
++          best.error = "";
++          dump(`input_frame_retry_armed=1 seq=${seq} op=${op}\n`);
++          return;
++        } catch (e) {
++          best.error = String(e);
++        }
++      }
+       if (got || polls >= 40) {
+         // ~40 * 40ms = 1600ms — frame script may need a beat after load
+         try {
+@@ -2106,16 +2182,6 @@ function processInputControlOnce(path, browser, win, state) {
+         }
+         if (!got) {
+           best.error = (best.error || "") + "no_frame_reply";
+-          // Allow one re-inject if frame script never answered (late load).
+-          try {
+-            if (textPath) {
+-              browser._astrohackerTextInput = false;
+-              ensureGenericTextInputScript(browser);
+-            } else if (pointerPath) {
+-              browser._astrohackerPointerInput = false;
+-              ensureGenericPointerInputScript(browser);
+-            }
+-          } catch (e) {}
+         } else if (!best.error) {
+           best.error = "got_frame";
+         }
+-- 
+2.54.0
+

@@ -1,0 +1,78 @@
+From 91f93dc9587ef1ce6f5ac68ec151486a1b192306 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:18:53 -0500
+Subject: [PATCH 101/119] issue-924: TermSurf CALayerParams callback on clean
+ 150 Mac view
+
+---
+ .../renderer_host/render_widget_host_view_mac.h | 17 +++++++++--------
+ .../render_widget_host_view_mac.mm              |  3 ++-
+ 2 files changed, 11 insertions(+), 9 deletions(-)
+
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index b3cc4757f8..00ca626af3 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -126,6 +126,12 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   CONTENT_EXPORT void SetDelegate(
+     NSObject<RenderWidgetHostViewMacDelegate>* delegate);
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++
++
+   // RenderWidgetHostViewBase implementation.
+   ui::Compositor* GetCompositor() override;
+   void InitAsChild(gfx::NativeView parent_view) override;
+@@ -325,9 +331,6 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // needs access to them and can't be made a friend.
+ 
+   // Delegated frame management and compositor interface.
+-  // CALayerParams change callback for out-of-process embedders (TermSurf).
+-  CALayerParamsCallback ca_layer_params_callback_;
+-
+   std::unique_ptr<BrowserCompositorMac> browser_compositor_;
+   BrowserCompositorMac* BrowserCompositor() const {
+     return browser_compositor_.get();
+@@ -457,11 +460,6 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   void SetCurrentDeviceScaleFactor(float device_scale_factor) override;
+   bool ShouldUseDefaultDeadlineOnResize() const override;
+ 
+-  // CALayerParams change callback for out-of-process embedders (TermSurf).
+-  using CALayerParamsCallback =
+-      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
+-  void SetCALayerParamsCallback(CALayerParamsCallback callback);
+-
+   // AcceleratedWidgetMacNSView implementation.
+   void AcceleratedWidgetCALayerParamsUpdated(
+       gfx::CALayerParams params) override;
+@@ -751,6 +749,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // details.
+   base::OneShotTimer update_windows_timer_;
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  CALayerParamsCallback ca_layer_params_callback_;
++
+   // Factory used to safely scope delayed calls to ShutdownHost().
+   base::WeakPtrFactory<RenderWidgetHostViewMac> weak_factory_;
+ };
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index dc320e2454..9e6d8a20c8 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -179,8 +179,9 @@ void RenderWidgetHostViewMac::AcceleratedWidgetCALayerParamsUpdated(
+ 
+   // Update the contents that the NSView is displaying. Notify TermSurf embedders
+   // before moving params into the NSView.
+-  if (ca_layer_params_callback_)
++  if (ca_layer_params_callback_) {
+     ca_layer_params_callback_.Run(ca_layer_params);
++  }
+   ns_view_->SetCALayerParams(std::move(ca_layer_params));
+ }
+ 
+-- 
+2.54.0
+

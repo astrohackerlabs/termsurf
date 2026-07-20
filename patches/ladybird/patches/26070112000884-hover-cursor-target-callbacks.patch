@@ -1,0 +1,173 @@
+From d89eaf992a3b37cfc9bf44d9e600400426adace8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 03:45:41 -0500
+Subject: [PATCH] Add TermSurf hover callbacks
+
+A hand appeared above a link,
+A target URL gave a wink.
+Girlbat mapped the cursor right,
+And kept the hover path in sight.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 90 ++++++++++++++++++-
+ 1 file changed, 89 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index f15c629b2e..bac8c914ca 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -13,6 +13,7 @@
+ #include <LibCore/AnonymousBuffer.h>
+ #include <LibCore/EventLoop.h>
+ #include <LibCore/System.h>
++#include <LibGfx/Cursor.h>
+ #include <LibGfx/SharedImageBuffer.h>
+ #include <LibGfx/SystemTheme.h>
+ #include <LibMain/Main.h>
+@@ -214,6 +215,8 @@ struct TsLadybirdView {
+     ByteString last_url;
+     ByteString pending_title;
+     Vector<ConsoleMessage> pending_console_messages;
++    Vector<int> pending_cursor_changes;
++    Vector<ByteString> pending_target_urls;
+     bool did_finish_load { false };
+     bool did_crash { false };
+     bool title_changed { false };
+@@ -243,6 +246,8 @@ extern "C" bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, d
+ extern "C" bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
+ extern "C" bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
+ extern "C" bool ts_ladybird_view_take_console_message(TsLadybirdView*, TsLadybirdConsoleMessage*);
++extern "C" bool ts_ladybird_view_take_cursor_changed(TsLadybirdView*, int*);
++extern "C" bool ts_ladybird_view_take_target_url_changed(TsLadybirdView*, char*, size_t);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -530,6 +535,24 @@ static ConsoleMessage console_message_from_output(WebView::ConsoleOutput const&
+     return message;
+ }
+ 
++static int termsurf_cursor_type(Gfx::Cursor const& cursor)
++{
++    return cursor.visit(
++        [](Gfx::StandardCursor standard_cursor) -> int {
++            switch (standard_cursor) {
++            case Gfx::StandardCursor::Hand:
++                return 2;
++            case Gfx::StandardCursor::IBeam:
++                return 3;
++            default:
++                return 0;
++            }
++        },
++        [](Gfx::ImageCursor const&) -> int {
++            return 0;
++        });
++}
++
+ static ErrorOr<OwnPtr<TermSurfLadybirdApplication>> create_application()
+ {
+     tzset();
+@@ -647,6 +670,8 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView co
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_render_surface_probe(TsLadybirdView*, TsLadybirdRenderSurfaceProbe*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_console_message(TsLadybirdView*, TsLadybirdConsoleMessage*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_cursor_changed(TsLadybirdView*, int*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_target_url_changed(TsLadybirdView*, char*, size_t);
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ {
+@@ -655,7 +680,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-console-message-callback";
++    return "ladybird-a80d01fc-issue-0884-hover-cursor-target-callbacks";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -751,6 +776,8 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+     wrapper->last_url = {};
+     wrapper->pending_title = {};
+     wrapper->pending_console_messages.clear();
++    wrapper->pending_cursor_changes.clear();
++    wrapper->pending_target_urls.clear();
+     wrapper->did_finish_load = false;
+     wrapper->did_crash = false;
+     wrapper->title_changed = false;
+@@ -784,6 +811,32 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         }
+         wrapper->pending_console_messages.append(move(message));
+     };
++    wrapper->view->on_cursor_change = [wrapper](Gfx::Cursor const& cursor) {
++        auto cursor_type = termsurf_cursor_type(cursor);
++        outln("PROBE: TermSurf Ladybird ABI cursor_change cursor_type={}", cursor_type);
++        if (wrapper->pending_cursor_changes.size() >= 16) {
++            warnln("TermSurf Ladybird ABI cursor change queue full; dropping cursor_type={}", cursor_type);
++            return;
++        }
++        wrapper->pending_cursor_changes.append(cursor_type);
++    };
++    wrapper->view->on_link_hover = [wrapper](URL::URL const& url) {
++        auto target_url = url.to_byte_string();
++        outln("PROBE: TermSurf Ladybird ABI link_hover url={}", target_url);
++        if (wrapper->pending_target_urls.size() >= 16) {
++            warnln("TermSurf Ladybird ABI target URL queue full; dropping url={}", target_url);
++            return;
++        }
++        wrapper->pending_target_urls.append(move(target_url));
++    };
++    wrapper->view->on_link_unhover = [wrapper] {
++        outln("PROBE: TermSurf Ladybird ABI link_unhover");
++        if (wrapper->pending_target_urls.size() >= 16) {
++            warnln("TermSurf Ladybird ABI target URL queue full; dropping unhover");
++            return;
++        }
++        wrapper->pending_target_urls.append({});
++    };
+     wrapper->view->on_ready_to_paint = [wrapper] {
+         wrapper->view->note_ready_to_paint();
+         auto probe = wrapper->view->render_surface_probe();
+@@ -1003,6 +1056,41 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_console_message(TsLadybirdVi
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_cursor_changed(TsLadybirdView* view, int* out_cursor_type)
++{
++    if (!out_cursor_type) {
++        set_runtime_error(view ? view->runtime : nullptr, "cursor change output is null");
++        return false;
++    }
++
++    *out_cursor_type = 0;
++    if (!validate_view(view))
++        return false;
++    if (view->pending_cursor_changes.is_empty())
++        return false;
++
++    *out_cursor_type = view->pending_cursor_changes.take_first();
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_target_url_changed(TsLadybirdView* view, char* out_url, size_t out_url_len)
++{
++    if (!out_url || out_url_len == 0) {
++        set_runtime_error(view ? view->runtime : nullptr, "target URL output is null");
++        return false;
++    }
++
++    out_url[0] = '\0';
++    if (!validate_view(view))
++        return false;
++    if (view->pending_target_urls.is_empty())
++        return false;
++
++    auto target_url = view->pending_target_urls.take_first();
++    copy_c_string(out_url, out_url_len, target_url);
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

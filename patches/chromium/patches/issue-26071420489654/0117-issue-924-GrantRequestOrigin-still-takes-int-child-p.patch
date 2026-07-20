@@ -1,0 +1,33 @@
+From e30fe9157a42df2f23c879fece53808ec8d5375e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:57:56 -0500
+Subject: [PATCH 117/119] issue-924: GrantRequestOrigin still takes int child
+ process id
+
+---
+ content/libtermsurf_chromium/ts_pdf_browser_support.cc | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+index 0f2aa5f98b..d91a42fcfc 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -467,10 +467,12 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+   // This grant is process-scoped. It is safe only because the process policy
+   // above is restricted to the PDF component extension's site URL.
+   ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
+-      process_id, url::Origin::CreateFromNormalizedTuple(
+-                      kChromeUIScheme, kChromeUIResourcesHost, 0));
++      process_id.GetUnsafeValue(),
++      url::Origin::CreateFromNormalizedTuple(kChromeUIScheme,
++                                             kChromeUIResourcesHost, 0));
+   LOG(INFO) << "[termsurf-pdf] chrome-resources-grant extension_id="
+-            << extension->id() << " process_id=" << process_id;
++            << extension->id()
++            << " process_id=" << process_id.GetUnsafeValue();
+ }
+ 
+ }  // namespace content
+-- 
+2.54.0
+

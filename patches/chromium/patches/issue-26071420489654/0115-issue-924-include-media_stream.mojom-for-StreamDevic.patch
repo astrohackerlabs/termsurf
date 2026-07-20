@@ -1,0 +1,25 @@
+From 38642c451256c86234879ccdd85055617d2cd6f2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:54:46 -0500
+Subject: [PATCH 115/119] issue-924: include media_stream.mojom for
+ StreamDevicesSet
+
+---
+ .../extensions/ts_extensions_browser_client.cc                   | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 49941f9c0c..6f22c58963 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -23,6 +23,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/media_stream_request.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/security_principal.h"
+ #include "content/public/browser/web_contents.h"
+-- 
+2.54.0
+

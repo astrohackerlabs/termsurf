@@ -1,0 +1,1148 @@
+From ebab5ab770f8d6c3abf2c4dfd480895461c8db91 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 23:58:34 -0500
+Subject: [PATCH 3/3] Capture shared browser pointer streams
+
+A drag may wander, a wheel may roam,
+but captured gestures still know home.
+Miss the pane and terminals reply;
+hit the browser and no bytes slip by.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 407 +++++++++++++++---
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 105 +++++
+ src/apprt/termsurf.zig                        | 270 +++++++++++-
+ 3 files changed, 723 insertions(+), 59 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index cd22a96d6..39bc29ed3 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -6,6 +6,12 @@ import IOSurface
+ import SwiftUI
+ import UserNotifications
+ 
++private final class TermSurfScrollCaptureRegistry {
++  weak var owner: Ghostty.SurfaceView?
++}
++
++private let termSurfScrollCaptureRegistry = TermSurfScrollCaptureRegistry()
++
+ extension Ghostty {
+   /// The NSView implementation for a terminal surface.
+   class SurfaceView: OSSurfaceView, Codable, Identifiable {
+@@ -263,6 +269,8 @@ extension Ghostty {
+     private var termsurfActiveOverlay: TermSurfOverlayRequest?
+     private var termsurfDeferredOverlay: TermSurfOverlayRequest?
+     private var termsurfPressedBrowserKeys: Set<UInt16> = []
++    private var termsurfPointerCapture = TermSurfPointerCapture()
++    private var termsurfScrollCapturePoint: TermSurfOverlayPoint?
+     private var termsurfCursorType: Int64 = 0
+     private var termsurfMouseOverOverlay: Bool = false
+     /// Exp4: Gecko multi-tile layers keyed by compositor layer_id.
+@@ -563,6 +571,9 @@ extension Ghostty {
+       geckoMultiTileGenerations.removeAll()
+       geckoMultiTileRoot?.removeFromSuperlayer()
+       geckoMultiTileRoot = nil
++      if termSurfScrollCaptureRegistry.owner === self {
++        termSurfScrollCaptureRegistry.owner = nil
++      }
+ 
+       // Remove all of our notificationcenter subscriptions
+       let center = NotificationCenter.default
+@@ -593,12 +604,58 @@ extension Ghostty {
+       clearTermSurfOverlay()
+     }
+ 
+-    // swiftlint:disable:next function_parameter_count
+     /// Last external-window geometry grid (Gecko); re-reported on window move/resize/timer.
+     private var termsurfExternalGeometryGrid: (col: UInt64, row: UInt64, width: UInt64, height: UInt64)?
+     private var termsurfExternalGeometryObservers: [NSObjectProtocol] = []
+     private var termsurfExternalGeometryTimer: Timer?
+ 
++    // swiftlint:disable:next function_parameter_count
++    static func termSurfGridFrame(
++      col: UInt64,
++      row: UInt64,
++      width: UInt64,
++      height: UInt64,
++      cellWidth: CGFloat,
++      cellHeight: CGFloat,
++      paddingLeft: CGFloat,
++      paddingTop: CGFloat
++    ) -> CGRect {
++      CGRect(
++        x: paddingLeft + CGFloat(col) * cellWidth,
++        y: paddingTop + CGFloat(row) * cellHeight,
++        width: CGFloat(width) * cellWidth,
++        height: CGFloat(height) * cellHeight)
++    }
++
++    static func termSurfBottomOriginFrame(
++      fromTopOrigin frame: CGRect,
++      boundsHeight: CGFloat
++    ) -> CGRect {
++      CGRect(
++        x: frame.minX,
++        y: boundsHeight - frame.maxY,
++        width: frame.width,
++        height: frame.height)
++    }
++
++    private func termSurfExternalOverlayFrame() -> CGRect? {
++      guard let grid = termsurfExternalGeometryGrid else { return nil }
++      let backingScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
++      let cellWidth = cellSize.width > 0 ? cellSize.width : 10
++      let cellHeight = cellSize.height > 0 ? cellSize.height : 20
++      let paddingLeft = surfaceSize.map { CGFloat($0.padding_left_px) / backingScale } ?? 0
++      let paddingTop = surfaceSize.map { CGFloat($0.padding_top_px) / backingScale } ?? 0
++      return Self.termSurfGridFrame(
++        col: grid.col,
++        row: grid.row,
++        width: grid.width,
++        height: grid.height,
++        cellWidth: cellWidth,
++        cellHeight: cellHeight,
++        paddingLeft: paddingLeft,
++        paddingTop: paddingTop)
++    }
++
+     /// Report pane screen DIP (top-left) for process-chrome engines (Gecko) without CALayerHost.
+     func reportTermSurfExternalWindowGeometry(
+       col: UInt64,
+@@ -654,20 +711,15 @@ extension Ghostty {
+         AppDelegate.logger.warning("TermSurf external geometry rejected: no screens")
+         return
+       }
+-      let cellWidth = cellSize.width > 0 ? cellSize.width : 10
+-      let cellHeight = cellSize.height > 0 ? cellSize.height : 20
+       let backingScale = window.backingScaleFactor
+-      let paddingLeft = surfaceSize.map { CGFloat($0.padding_left_px) / backingScale } ?? 0
+-      let paddingTop = surfaceSize.map { CGFloat($0.padding_top_px) / backingScale } ?? 0
+-      let viewFrame = CGRect(
+-        x: paddingLeft + CGFloat(col) * cellWidth,
+-        y: paddingTop + CGFloat(row) * cellHeight,
+-        width: CGFloat(width) * cellWidth,
+-        height: CGFloat(height) * cellHeight)
+-      guard viewFrame.width > 0, viewFrame.height > 0 else {
++      guard let topOriginFrame = termSurfExternalOverlayFrame() else { return }
++      guard topOriginFrame.width > 0, topOriginFrame.height > 0 else {
+         AppDelegate.logger.warning("TermSurf external geometry rejected: empty frame grid=\(gridLabel)")
+         return
+       }
++      let viewFrame = Self.termSurfBottomOriginFrame(
++        fromTopOrigin: topOriginFrame,
++        boundsHeight: bounds.height)
+       let windowRect = convert(viewFrame, to: nil)
+       let screenBottomLeft = window.convertToScreen(windowRect)
+       // Menu-bar display is screens[0]; global AppKit flip reference (not NSScreen.main).
+@@ -871,6 +923,33 @@ extension Ghostty {
+         termsurf_pane_focus_changed(paneIDPointer, focused ? 1 : 0)
+       }
+ 
++      if let window, let mainScreen = NSScreen.screens.first {
++        let appKitFrame = CGRect(
++          x: frame.minX,
++          y: bounds.height - frame.maxY,
++          width: frame.width,
++          height: frame.height)
++        let windowRect = convert(appKitFrame, to: nil)
++        let screenBottomLeft = window.convertToScreen(windowRect)
++        let topLeft = termsurfAppKitBottomLeftToTopLeftDIP(
++          originX: screenBottomLeft.origin.x,
++          originY: screenBottomLeft.origin.y,
++          height: screenBottomLeft.size.height,
++          mainMaxY: mainScreen.frame.maxY)
++        id.uuidString.withCString { paneIDPointer in
++          termsurf_overlay_presented_screen_rect(
++            paneIDPointer,
++            Double(topLeft.x),
++            Double(topLeft.y),
++            Double(screenBottomLeft.size.width),
++            Double(screenBottomLeft.size.height),
++            Double(backingScale))
++        }
++        fputs(
++          "TermSurf overlay screen geometry reported pane_id=\(id.uuidString) screen=\(topLeft.x),\(topLeft.y),\(screenBottomLeft.size.width),\(screenBottomLeft.size.height) scale=\(backingScale)\n",
++          stderr)
++      }
++
+       AppDelegate.logger.info(
+         "TermSurf overlay presented pane_id=\(self.id.uuidString) context_id=\(request.contextID) frame=\(NSStringFromRect(frame)) pixel=\(request.pixelWidth)x\(request.pixelHeight)"
+       )
+@@ -1207,6 +1286,11 @@ extension Ghostty {
+       termSurfLogGeometry(event: "clear", note: "clearing-overlay")
+       removeTermSurfOverlayLayers(resetDeferred: true)
+       termsurfPressedBrowserKeys.removeAll()
++      termsurfPointerCapture.reset()
++      termsurfScrollCapturePoint = nil
++      if termSurfScrollCaptureRegistry.owner === self {
++        termSurfScrollCaptureRegistry.owner = nil
++      }
+       termsurfCursorType = 0
+       termsurfMouseOverOverlay = false
+       NSCursor.arrow.set()
+@@ -1555,7 +1639,12 @@ extension Ghostty {
+       // If our window/app is already focused, then this click is only
+       // being used to transfer split focus. Consume it so it does not
+       // get forwarded to the terminal as a mouse click.
+-      if NSApp.isActive && window.isKeyWindow {
++      let browserOwnsClick = termSurfOverlayPoint(for: event) != nil
++      if Self.termSurfShouldConsumeFocusTransferClick(
++        browserOwnsClick: browserOwnsClick,
++        appActive: NSApp.isActive,
++        windowKey: window.isKeyWindow)
++      {
+         Ghostty.moveFocus(to: self)
+         suppressNextLeftMouseUp = true
+         return nil
+@@ -1804,15 +1893,14 @@ extension Ghostty {
+     }
+ 
+     override func mouseDown(with event: NSEvent) {
+-      if let point = termSurfOverlayPoint(for: event) {
+-        if forwardTermSurfMouseEvent(event, type: "down", button: "left", point: point) {
+-          Ghostty.moveFocus(to: self)
+-        }
++      if beginTermSurfMouseSequence(event, button: "left", buttonNumber: 0) {
++        Ghostty.moveFocus(to: self)
+         return
+       } else {
+         notifyTermSurfOverlayMissedLeftClick()
+       }
+ 
++      recordTermSurfTerminalInput("mouse-down")
+       guard let surface = self.surface else { return }
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+       ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, mods)
+@@ -1829,10 +1917,11 @@ extension Ghostty {
+       // Always reset our pressure when the mouse goes up
+       prevPressureStage = 0
+ 
+-      if forwardTermSurfMouseEvent(event, type: "up", button: "left") {
++      if endTermSurfMouseSequence(event, button: "left", buttonNumber: 0) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("mouse-up")
+       // If we have an active surface, report the event
+       guard let surface = self.surface else { return }
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+@@ -1843,10 +1932,12 @@ extension Ghostty {
+     }
+ 
+     override func otherMouseDown(with event: NSEvent) {
+-      if forwardTermSurfMouseEvent(event, type: "down", button: termSurfMouseButton(event)) {
++      if beginTermSurfMouseSequence(
++        event, button: termSurfMouseButton(event), buttonNumber: event.buttonNumber) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("other-mouse-down")
+       guard let surface = self.surface else { return }
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+       let button = Ghostty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
+@@ -1854,10 +1945,12 @@ extension Ghostty {
+     }
+ 
+     override func otherMouseUp(with event: NSEvent) {
+-      if forwardTermSurfMouseEvent(event, type: "up", button: termSurfMouseButton(event)) {
++      if endTermSurfMouseSequence(
++        event, button: termSurfMouseButton(event), buttonNumber: event.buttonNumber) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("other-mouse-up")
+       guard let surface = self.surface else { return }
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+       let button = Ghostty.Input.MouseButton(fromNSEventButtonNumber: event.buttonNumber)
+@@ -1865,10 +1958,11 @@ extension Ghostty {
+     }
+ 
+     override func rightMouseDown(with event: NSEvent) {
+-      if forwardTermSurfMouseEvent(event, type: "down", button: "right") {
++      if beginTermSurfMouseSequence(event, button: "right", buttonNumber: 1) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("right-mouse-down")
+       guard let surface = self.surface else { return super.rightMouseDown(with: event) }
+ 
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+@@ -1887,10 +1981,11 @@ extension Ghostty {
+     }
+ 
+     override func rightMouseUp(with event: NSEvent) {
+-      if forwardTermSurfMouseEvent(event, type: "up", button: "right") {
++      if endTermSurfMouseSequence(event, button: "right", buttonNumber: 1) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("right-mouse-up")
+       guard let surface = self.surface else { return super.rightMouseUp(with: event) }
+ 
+       let mods = Ghostty.ghosttyMods(event.modifierFlags)
+@@ -1915,6 +2010,10 @@ extension Ghostty {
+       let pos = self.convert(event.locationInWindow, from: nil)
+       mouseLocationInSurface = pos
+ 
++      if forwardTermSurfMouseMove(event) {
++        return
++      }
++
+       guard let surfaceModel else { return }
+ 
+       // On mouse enter we need to reset our cursor position. This is
+@@ -1956,10 +2055,12 @@ extension Ghostty {
+       let pos = self.convert(event.locationInWindow, from: nil)
+       mouseLocationInSurface = pos
+ 
+-      if forwardTermSurfMouseMove(event) {
++      if forwardTermSurfMouseMove(
++        event, allowOutside: termsurfPointerCapture.ownsMouseSequence) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("mouse-move")
+       guard let surfaceModel else { return }
+ 
+       // Convert window position to view position. Note (0, 0) is bottom left.
+@@ -1993,10 +2094,17 @@ extension Ghostty {
+     }
+ 
+     override func scrollWheel(with event: NSEvent) {
++      if let owner = termSurfScrollCaptureRegistry.owner, owner !== self,
++        owner.forwardTermSurfScrollEvent(event)
++      {
++        return
++      }
++
+       if forwardTermSurfScrollEvent(event) {
+         return
+       }
+ 
++      recordTermSurfTerminalInput("scroll")
+       guard let surfaceModel else { return }
+ 
+       var x = event.scrollingDeltaX
+@@ -2474,9 +2582,88 @@ extension Ghostty {
+       _ = keyAction(action, event: event)
+     }
+ 
++    struct TermSurfPointerCapture {
++      private(set) var mouseButtons: Set<Int> = []
++      private(set) var scrollOwned = false
++      private(set) var awaitingMomentum = false
++
++      var ownsMouseSequence: Bool { !mouseButtons.isEmpty }
++
++      mutating func beginMouse(button: Int, hit: Bool) -> Bool {
++        guard hit else { return false }
++        mouseButtons.insert(button)
++        return true
++      }
++
++      func ownsMouse(button: Int) -> Bool {
++        mouseButtons.contains(button)
++      }
++
++      mutating func endMouse(button: Int) {
++        mouseButtons.remove(button)
++      }
++
++      mutating func ownsScroll(hit: Bool, phase: UInt64, momentumPhase: UInt64) -> Bool {
++        if awaitingMomentum {
++          awaitingMomentum = false
++          if momentumPhase != 0 {
++            scrollOwned = true
++          } else {
++            scrollOwned = hit
++          }
++        }
++
++        let owned: Bool
++        if scrollOwned {
++          owned = true
++        } else if hit {
++          owned = true
++          scrollOwned = phase != 0 || momentumPhase != 0
++        } else {
++          owned = false
++        }
++
++        if owned {
++          if phase & (8 | 16) != 0 {
++            scrollOwned = false
++            awaitingMomentum = phase & 8 != 0
++          }
++          if momentumPhase & (8 | 16) != 0 {
++            scrollOwned = false
++            awaitingMomentum = false
++          }
++        }
++        return owned
++      }
++
++      mutating func reset() {
++        mouseButtons.removeAll()
++        scrollOwned = false
++        awaitingMomentum = false
++      }
++    }
++
++    static func termSurfShouldConsumeFocusTransferClick(
++      browserOwnsClick: Bool,
++      appActive: Bool,
++      windowKey: Bool
++    ) -> Bool {
++      !browserOwnsClick && appActive && windowKey
++    }
++
++    static func termSurfMouseButtonModifier(buttonNumber: Int) -> UInt64 {
++      switch buttonNumber {
++      case 0: return 64
++      case 1: return 256
++      case 2: return 128
++      default: return 0
++      }
++    }
++
+     private struct TermSurfOverlayPoint {
+       let x: Double
+       let y: Double
++      let hit: Bool
+     }
+ 
+     enum TermSurfScriptInputError: LocalizedError {
+@@ -2609,8 +2796,14 @@ extension Ghostty {
+         || geckoMultiTileRoot != nil
+     }
+ 
++    private var termSurfBrowserInputFrame: CGRect? {
++      if let frame = termsurfOverlayFrame { return frame }
++      guard geckoMultiTileRoot != nil else { return nil }
++      return termSurfExternalOverlayFrame()
++    }
++
+     private func termSurfScriptValidateOverlayPoint(x: Double, y: Double) throws {
+-      guard termSurfScriptHasActiveOverlay, let overlayFrame = termsurfOverlayFrame else {
++      guard termSurfScriptHasActiveOverlay, let overlayFrame = termSurfBrowserInputFrame else {
+         throw TermSurfScriptInputError.noActiveBrowser
+       }
+ 
+@@ -2619,8 +2812,11 @@ extension Ghostty {
+       }
+     }
+ 
+-    private func termSurfOverlayPoint(for event: NSEvent) -> TermSurfOverlayPoint? {
+-      guard let overlayFrame = termsurfOverlayFrame else { return nil }
++    private func termSurfOverlayPoint(
++      for event: NSEvent,
++      allowOutside: Bool = false
++    ) -> TermSurfOverlayPoint? {
++      guard let overlayFrame = termSurfBrowserInputFrame else { return nil }
+ 
+       let viewPoint = convert(event.locationInWindow, from: nil)
+       let topOriginPoint = CGPoint(x: viewPoint.x, y: bounds.height - viewPoint.y)
+@@ -2639,11 +2835,12 @@ extension Ghostty {
+           "TermSurf input hit_test pane_id=\(id.uuidString) event=\(event.type.rawValue) view=\(NSStringFromPoint(viewPoint)) top=\(NSStringFromPoint(topOriginPoint)) overlay=\(NSStringFromRect(overlayFrame)) hit=\(hit)\n",
+           stderr)
+       }
+-      guard hit else { return nil }
++      guard hit || allowOutside else { return nil }
+ 
+       return TermSurfOverlayPoint(
+         x: Double(webPoint.x),
+-        y: Double(webPoint.y))
++        y: Double(webPoint.y),
++        hit: hit)
+     }
+ 
+     private func termSurfCursor() -> NSCursor {
+@@ -2840,6 +3037,60 @@ extension Ghostty {
+       )
+     }
+ 
++    private func beginTermSurfMouseSequence(
++      _ event: NSEvent,
++      button: String,
++      buttonNumber: Int
++    ) -> Bool {
++      guard let point = termSurfOverlayPoint(for: event) else { return false }
++      _ = termsurfPointerCapture.beginMouse(button: buttonNumber, hit: point.hit)
++      let forwarded = forwardTermSurfMouseEvent(
++        event, type: "down", button: button, point: point)
++      termSurfLogGeometry(
++        event: "mouse_capture_begin",
++        hit: point.hit,
++        webPoint: CGPoint(x: point.x, y: point.y),
++        note:
++          "button=\(button) button_number=\(buttonNumber) forwarded=\(forwarded) terminal_fallback=false"
++      )
++      return true
++    }
++
++    private func endTermSurfMouseSequence(
++      _ event: NSEvent,
++      button: String,
++      buttonNumber: Int
++    ) -> Bool {
++      let captured = termsurfPointerCapture.ownsMouse(button: buttonNumber)
++      guard let point = termSurfOverlayPoint(for: event, allowOutside: captured) else {
++        if captured {
++          termsurfPointerCapture.endMouse(button: buttonNumber)
++          termSurfLogGeometry(
++            event: "mouse_capture_end",
++            hit: false,
++            note:
++              "button=\(button) button_number=\(buttonNumber) forwarded=false reason=overlay-gone terminal_fallback=false"
++          )
++          return true
++        }
++        return false
++      }
++
++      let forwarded = forwardTermSurfMouseEvent(
++        event, type: "up", button: button, point: point)
++      if captured {
++        termsurfPointerCapture.endMouse(button: buttonNumber)
++      }
++      termSurfLogGeometry(
++        event: "mouse_capture_end",
++        hit: point.hit,
++        webPoint: CGPoint(x: point.x, y: point.y),
++        note:
++          "button=\(button) button_number=\(buttonNumber) captured=\(captured) forwarded=\(forwarded) terminal_fallback=false"
++      )
++      return true
++    }
++
+     private func forwardTermSurfMouseEvent(
+       _ event: NSEvent,
+       type: String,
+@@ -2849,7 +3100,13 @@ extension Ghostty {
+       guard let point = providedPoint ?? termSurfOverlayPoint(for: event) else { return false }
+ 
+       let paneID = id.uuidString
+-      let modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
++      var modifiers = termSurfModifiers(event.modifierFlags, pressedButtons: true)
++      let buttonModifier = Self.termSurfMouseButtonModifier(buttonNumber: event.buttonNumber)
++      if type == "down" {
++        modifiers |= buttonModifier
++      } else if type == "up" {
++        modifiers &= ~buttonModifier
++      }
+       let forwarded: Int32 = paneID.withCString { paneIDPointer in
+         type.withCString { typePointer in
+           button.withCString { buttonPointer in
+@@ -2865,15 +3122,13 @@ extension Ghostty {
+         }
+       }
+ 
+-      if forwarded != 0 {
+-        termSurfLogGeometry(
+-          event: "mouse_forwarded",
+-          hit: true,
+-          webPoint: CGPoint(x: point.x, y: point.y),
+-          note:
+-            "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) terminal_fallback=false"
+-        )
+-      }
++      termSurfLogGeometry(
++        event: "mouse_forwarded",
++        hit: point.hit,
++        webPoint: CGPoint(x: point.x, y: point.y),
++        note:
++          "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) forwarded=\(forwarded != 0) terminal_fallback=false"
++      )
+       return forwarded != 0
+     }
+ 
+@@ -2884,12 +3139,23 @@ extension Ghostty {
+       }
+     }
+ 
+-    private func forwardTermSurfMouseMove(_ event: NSEvent) -> Bool {
+-      guard let point = termSurfOverlayPoint(for: event) else {
++    private func forwardTermSurfMouseMove(
++      _ event: NSEvent,
++      allowOutside: Bool = false
++    ) -> Bool {
++      guard let point = termSurfOverlayPoint(for: event, allowOutside: allowOutside) else {
+         if termsurfMouseOverOverlay {
+           termsurfMouseOverOverlay = false
+           NSCursor.arrow.set()
+         }
++        if allowOutside {
++          termSurfLogGeometry(
++            event: "mouse_capture_move",
++            hit: false,
++            note: "forwarded=false reason=overlay-gone terminal_fallback=false"
++          )
++          return true
++        }
+         return false
+       }
+ 
+@@ -2913,18 +3179,21 @@ extension Ghostty {
+           modifiers)
+       }
+ 
+-      if forwarded != 0 {
++      if point.hit && forwarded != 0 {
+         termsurfMouseOverOverlay = true
+         applyTermSurfCursorIfNeeded()
+-        termSurfLogGeometry(
+-          event: "mouse_forwarded",
+-          hit: true,
+-          webPoint: CGPoint(x: point.x, y: point.y),
+-          note:
+-            "kind=move ns_event=\(event.type.rawValue) modifiers=\(modifiers) terminal_fallback=false"
+-        )
++      } else if !point.hit && termsurfMouseOverOverlay {
++        termsurfMouseOverOverlay = false
++        NSCursor.arrow.set()
+       }
+-      return forwarded != 0
++      termSurfLogGeometry(
++        event: "mouse_forwarded",
++        hit: point.hit,
++        webPoint: CGPoint(x: point.x, y: point.y),
++        note:
++          "kind=move ns_event=\(event.type.rawValue) modifiers=\(modifiers) forwarded=\(forwarded != 0) terminal_fallback=false"
++      )
++      return true
+     }
+ 
+     private func forwardTermSurfScrollEvent(_ event: NSEvent) -> Bool {
+@@ -2935,7 +3204,23 @@ extension Ghostty {
+       let momentumPhase = UInt64(event.momentumPhase.rawValue)
+       let modifiers = termSurfModifiers(event.modifierFlags)
+ 
+-      guard let point = termSurfOverlayPoint(for: event) else {
++      let hitPoint = termSurfOverlayPoint(for: event)
++      let browserOwned = termsurfPointerCapture.ownsScroll(
++        hit: hitPoint != nil,
++        phase: phase,
++        momentumPhase: momentumPhase)
++      if browserOwned, let hitPoint {
++        termsurfScrollCapturePoint = hitPoint
++      }
++      let captureActive =
++        termsurfPointerCapture.scrollOwned || termsurfPointerCapture.awaitingMomentum
++      if captureActive {
++        termSurfScrollCaptureRegistry.owner = self
++      } else if termSurfScrollCaptureRegistry.owner === self {
++        termSurfScrollCaptureRegistry.owner = nil
++      }
++      guard browserOwned else {
++        termsurfScrollCapturePoint = nil
+         let viewPoint = convert(event.locationInWindow, from: nil)
+         termSurfLogScroll(
+           "event=appkit-scroll pane_id=\(id.uuidString) native_type=\(event.type.rawValue) hit=false raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=0 forwarded_delta_y=0 precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) location_view=\(NSStringFromPoint(viewPoint)) forwarded=false fallback=terminal"
+@@ -2943,11 +3228,16 @@ extension Ghostty {
+         return false
+       }
+ 
+-      var deltaX = rawDeltaX
+-      var deltaY = rawDeltaY
+-      if precise {
+-        deltaX *= 2
+-        deltaY *= 2
++      guard
++        termSurfBrowserInputFrame != nil,
++        let point = hitPoint ?? termsurfScrollCapturePoint
++          ?? termSurfOverlayPoint(for: event, allowOutside: true)
++      else {
++        if !captureActive { termsurfScrollCapturePoint = nil }
++        termSurfLogScroll(
++          "event=appkit-scroll pane_id=\(id.uuidString) native_type=\(event.type.rawValue) hit=false raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=0 forwarded_delta_y=0 precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) forwarded=false fallback=none reason=overlay-gone"
++        )
++        return true
+       }
+ 
+       let paneID = id.uuidString
+@@ -2956,8 +3246,8 @@ extension Ghostty {
+           paneIDPointer,
+           point.x,
+           point.y,
+-          deltaX,
+-          deltaY,
++          rawDeltaX,
++          rawDeltaY,
+           phase,
+           momentumPhase,
+           precise,
+@@ -2965,9 +3255,10 @@ extension Ghostty {
+       }
+ 
+       termSurfLogScroll(
+-        "event=appkit-scroll pane_id=\(paneID) native_type=\(event.type.rawValue) hit=true web_x=\(point.x) web_y=\(point.y) raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=\(deltaX) forwarded_delta_y=\(deltaY) precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) forwarded=\(forwarded != 0) fallback=\(forwarded == 0 ? "terminal" : "none")"
++        "event=appkit-scroll pane_id=\(paneID) native_type=\(event.type.rawValue) hit=\(hitPoint != nil) web_x=\(point.x) web_y=\(point.y) raw_delta_x=\(rawDeltaX) raw_delta_y=\(rawDeltaY) forwarded_delta_x=\(rawDeltaX) forwarded_delta_y=\(rawDeltaY) precise=\(precise) phase=\(phase) momentum_phase=\(momentumPhase) modifiers=\(modifiers) forwarded=\(forwarded != 0) fallback=none"
+       )
+-      return forwarded != 0
++      if !captureActive { termsurfScrollCapturePoint = nil }
++      return true
+     }
+ 
+     private func termSurfMouseButton(_ event: NSEvent) -> String {
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 03ad63539..71b01cbcd 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -41,4 +41,109 @@ struct SurfaceViewAppKitTests {
+             ) == false
+         )
+     }
++
++    @Test func pointerCaptureOwnsMouseThroughOutsideRelease() {
++        var capture = Ghostty.SurfaceView.TermSurfPointerCapture()
++
++        let missed = capture.beginMouse(button: 0, hit: false)
++        #expect(missed == false)
++        #expect(capture.ownsMouseSequence == false)
++        let began = capture.beginMouse(button: 0, hit: true)
++        #expect(began)
++        #expect(capture.ownsMouse(button: 0))
++        #expect(capture.ownsMouseSequence)
++
++        capture.endMouse(button: 0)
++        #expect(capture.ownsMouse(button: 0) == false)
++        #expect(capture.ownsMouseSequence == false)
++    }
++
++    @Test func pointerCaptureOwnsScrollThroughMomentumEnd() {
++        var capture = Ghostty.SurfaceView.TermSurfPointerCapture()
++
++        let outsideBegan = capture.ownsScroll(hit: false, phase: 1, momentumPhase: 0)
++        #expect(outsideBegan == false)
++        let began = capture.ownsScroll(hit: true, phase: 1, momentumPhase: 0)
++        #expect(began)
++        let changed = capture.ownsScroll(hit: false, phase: 4, momentumPhase: 0)
++        #expect(changed)
++        let ended = capture.ownsScroll(hit: false, phase: 8, momentumPhase: 0)
++        #expect(ended)
++        #expect(capture.awaitingMomentum)
++        let momentumBegan = capture.ownsScroll(hit: false, phase: 0, momentumPhase: 1)
++        #expect(momentumBegan)
++        let momentumChanged = capture.ownsScroll(hit: false, phase: 0, momentumPhase: 4)
++        #expect(momentumChanged)
++        let momentumEnded = capture.ownsScroll(hit: false, phase: 0, momentumPhase: 8)
++        #expect(momentumEnded)
++        #expect(capture.scrollOwned == false)
++        #expect(capture.awaitingMomentum == false)
++        let laterOutside = capture.ownsScroll(hit: false, phase: 0, momentumPhase: 0)
++        #expect(laterOutside == false)
++    }
++
++    @Test func pointerCaptureDoesNotLeakEndedGestureIntoLaterWheel() {
++        var capture = Ghostty.SurfaceView.TermSurfPointerCapture()
++
++        let began = capture.ownsScroll(hit: true, phase: 1, momentumPhase: 0)
++        #expect(began)
++        let ended = capture.ownsScroll(hit: false, phase: 8, momentumPhase: 0)
++        #expect(ended)
++        let laterOutside = capture.ownsScroll(hit: false, phase: 0, momentumPhase: 0)
++        #expect(laterOutside == false)
++        let laterHit = capture.ownsScroll(hit: true, phase: 0, momentumPhase: 0)
++        #expect(laterHit)
++        #expect(capture.scrollOwned == false)
++    }
++
++    @Test func browserClickIsNotConsumedWhenTransferringSplitFocus() {
++        #expect(
++            Ghostty.SurfaceView.termSurfShouldConsumeFocusTransferClick(
++                browserOwnsClick: true,
++                appActive: true,
++                windowKey: true
++            ) == false
++        )
++        #expect(
++            Ghostty.SurfaceView.termSurfShouldConsumeFocusTransferClick(
++                browserOwnsClick: false,
++                appActive: true,
++                windowKey: true
++            )
++        )
++        #expect(
++            Ghostty.SurfaceView.termSurfShouldConsumeFocusTransferClick(
++                browserOwnsClick: false,
++                appActive: false,
++                windowKey: true
++            ) == false
++        )
++    }
++
++    @Test func browserMouseButtonsUseSharedProtocolModifierBits() {
++        #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 0) == 64)
++        #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 1) == 256)
++        #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 2) == 128)
++        #expect(Ghostty.SurfaceView.termSurfMouseButtonModifier(buttonNumber: 3) == 0)
++    }
++
++    @Test func geckoExternalGridUsesTopOriginForInputAndBottomOriginForAppKit() {
++        let topOrigin = Ghostty.SurfaceView.termSurfGridFrame(
++            col: 1,
++            row: 5,
++            width: 50,
++            height: 20,
++            cellWidth: 8,
++            cellHeight: 15,
++            paddingLeft: 2,
++            paddingTop: 2
++        )
++        #expect(topOrigin == CGRect(x: 10, y: 77, width: 400, height: 300))
++
++        let bottomOrigin = Ghostty.SurfaceView.termSurfBottomOriginFrame(
++            fromTopOrigin: topOrigin,
++            boundsHeight: 405
++        )
++        #expect(bottomOrigin == CGRect(x: 10, y: 28, width: 400, height: 300))
++    }
+ }
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index fa44de2ac..af8da8fbc 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -372,6 +372,8 @@ const PaneState = struct {
+     screen_height: f64 = 0,
+     screen_scale: f64 = 0,
+     cursor_type: i64 = 0,
++    target_url: [max_url_len]u8 = undefined,
++    target_url_len: usize = 0,
+     tui_fd: std.posix.fd_t = -1,
+ 
+     fn paneId(self: *const PaneState) []const u8 {
+@@ -1300,6 +1302,9 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => {
+                     handleCursorChanged(fd, msg.*.unnamed_0.cursor_changed);
+                 },
++                c.TERMSURF__TERM_SURF_MESSAGE__MSG_TARGET_URL_CHANGED => {
++                    handleTargetUrlChanged(fd, msg.*.unnamed_0.target_url_changed);
++                },
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_TITLE_CHANGED => {
+                     handleTitleChanged(fd, msg.*.unnamed_0.title_changed);
+                 },
+@@ -3111,6 +3116,51 @@ fn closeAppFrontendForPaneShortcut(pane_id: []const u8) bool {
+     return false;
+ }
+ 
++const pointer_modifier_mask: u64 = 1 | 2 | 4 | 8 | 64 | 128 | 256;
++const scroll_modifier_mask: u64 = 1 | 2 | 4 | 8;
++const scroll_phase_mask: u64 = 1 | 2 | 4 | 8 | 16 | 32;
++
++fn validMouseEventInput(
++    event_type: []const u8,
++    button: []const u8,
++    x: f64,
++    y: f64,
++    click_count: i64,
++    modifiers: u64,
++) bool {
++    const valid_type = std.mem.eql(u8, event_type, "down") or
++        std.mem.eql(u8, event_type, "up");
++    const valid_button = std.mem.eql(u8, button, "left") or
++        std.mem.eql(u8, button, "middle") or
++        std.mem.eql(u8, button, "right");
++    return valid_type and valid_button and
++        std.math.isFinite(x) and std.math.isFinite(y) and
++        click_count > 0 and click_count <= std.math.maxInt(i32) and
++        modifiers & ~pointer_modifier_mask == 0;
++}
++
++fn validMouseMoveInput(x: f64, y: f64, modifiers: u64) bool {
++    return std.math.isFinite(x) and std.math.isFinite(y) and
++        modifiers & ~pointer_modifier_mask == 0;
++}
++
++fn validScrollEventInput(
++    x: f64,
++    y: f64,
++    delta_x: f64,
++    delta_y: f64,
++    phase: u64,
++    momentum_phase: u64,
++    modifiers: u64,
++) bool {
++    return std.math.isFinite(x) and std.math.isFinite(y) and
++        std.math.isFinite(delta_x) and std.math.isFinite(delta_y) and
++        phase & ~scroll_phase_mask == 0 and
++        momentum_phase & ~scroll_phase_mask == 0 and
++        modifiers & ~scroll_modifier_mask == 0 and
++        (delta_x != 0 or delta_y != 0 or phase != 0 or momentum_phase != 0);
++}
++
+ pub fn forwardMouseEvent(
+     pane_id: []const u8,
+     event_type: []const u8,
+@@ -3120,6 +3170,13 @@ pub fn forwardMouseEvent(
+     click_count: i64,
+     modifiers: u64,
+ ) bool {
++    if (!validMouseEventInput(event_type, button, x, y, click_count, modifiers)) {
++        log.warn(
++            "MouseEvent rejected: pane_id={s} type={s} button={s} x={} y={} click_count={} modifiers={}",
++            .{ pane_id, event_type, button, x, y, click_count, modifiers },
++        );
++        return false;
++    }
+     if (std.mem.eql(u8, event_type, "down") and std.mem.eql(u8, button, "left")) {
+         enterBrowseFromOverlayClick(pane_id);
+     }
+@@ -3234,6 +3291,13 @@ pub fn forwardMouseMove(
+     y: f64,
+     modifiers: u64,
+ ) bool {
++    if (!validMouseMoveInput(x, y, modifiers)) {
++        log.warn(
++            "MouseMove rejected: pane_id={s} x={} y={} modifiers={}",
++            .{ pane_id, x, y, modifiers },
++        );
++        return false;
++    }
+     const snapshot = snapshotBrowserInput(pane_id, false) orelse return false;
+ 
+     var mouse_move: c.Termsurf__MouseMove = undefined;
+@@ -3270,6 +3334,21 @@ pub fn forwardScrollEvent(
+     precise: bool,
+     modifiers: u64,
+ ) bool {
++    if (!validScrollEventInput(
++        x,
++        y,
++        delta_x,
++        delta_y,
++        phase,
++        momentum_phase,
++        modifiers,
++    )) {
++        log.warn(
++            "ScrollEvent rejected: pane_id={s} x={} y={} delta_x={} delta_y={} phase={} momentum_phase={} modifiers={}",
++            .{ pane_id, x, y, delta_x, delta_y, phase, momentum_phase, modifiers },
++        );
++        return false;
++    }
+     const snapshot = snapshotBrowserInput(pane_id, false) orelse return false;
+ 
+     var scroll_event: c.Termsurf__ScrollEvent = undefined;
+@@ -3307,7 +3386,7 @@ fn snapshotBrowserInput(pane_id: []const u8, require_browsing: bool) ?BrowserInp
+     const pane_index = findPane(pane_id) orelse return null;
+     const pane = &panes[pane_index];
+     if (require_browsing and !pane.browsing) return null;
+-    if (pane.tab_id == 0) return null;
++    if (pane.tab_id <= 0) return null;
+     const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
+     if (servers[server_index].attached_fd < 0) return null;
+ 
+@@ -3922,6 +4001,47 @@ fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) voi
+     if (cursor_snapshot) |cursor_snapshot_value| setCursor(&cursor_snapshot_value);
+ }
+ 
++fn handleTargetUrlChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TargetUrlChanged) void {
++    const target = req orelse {
++        log.warn("TargetUrlChanged: missing payload", .{});
++        return;
++    };
++    const url = cString(target.*.url);
++
++    state_mutex.lock();
++    defer state_mutex.unlock();
++
++    const server_index = findServerByFd(fd) orelse {
++        log.warn("TargetUrlChanged: unknown browser fd={} tab_id={}", .{ fd, target.*.tab_id });
++        return;
++    };
++    const profile = servers[server_index].profileName();
++    const browser = servers[server_index].browserName();
++    const lookup_index = findTabLookup(profile, browser, target.*.tab_id) orelse {
++        log.warn(
++            "TargetUrlChanged: unknown tab key={s}/{s} tab_id={} url={s}",
++            .{ profile, browser, target.*.tab_id, url },
++        );
++        return;
++    };
++    const pane_id = tab_lookups[lookup_index].paneId();
++    const pane_index = findPane(pane_id) orelse {
++        log.warn("TargetUrlChanged: tab maps to missing pane_id={s}", .{pane_id});
++        return;
++    };
++    if (!copyText(&panes[pane_index].target_url, &panes[pane_index].target_url_len, url)) {
++        log.warn(
++            "TargetUrlChanged: URL too long pane_id={s} tab_id={} len={}",
++            .{ panes[pane_index].paneId(), target.*.tab_id, url.len },
++        );
++        return;
++    }
++    log.info(
++        "TargetUrlChanged: pane_id={s} tab_id={} url={s}",
++        .{ panes[pane_index].paneId(), target.*.tab_id, url },
++    );
++}
++
+ fn handleTitleChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TitleChanged) void {
+     const title_changed = req orelse {
+         log.warn("TitleChanged: missing payload", .{});
+@@ -6488,6 +6608,122 @@ test "termsurf escape exits browse and snapshots mode and browser focus" {
+     try testing.expect(!exitBrowse("missing-pane"));
+ }
+ 
++test "termsurf pointer input validates shared contract and tab ownership" {
++    const testing = std.testing;
++
++    for ([_][]const u8{ "down", "up" }) |event_type| {
++        for ([_][]const u8{ "left", "middle", "right" }) |button| {
++            for ([_]u64{ 0, 1, 2, 4, 8, 64, 128, 256, pointer_modifier_mask }) |modifiers| {
++                try testing.expect(validMouseEventInput(
++                    event_type,
++                    button,
++                    10.5,
++                    20.5,
++                    1,
++                    modifiers,
++                ));
++            }
++        }
++    }
++    try testing.expect(validMouseEventInput("down", "left", 1, 1, std.math.maxInt(i32), 0));
++    try testing.expect(!validMouseEventInput("press", "left", 1, 1, 1, 0));
++    try testing.expect(!validMouseEventInput("down", "primary", 1, 1, 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", std.math.nan(f64), 1, 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", std.math.inf(f64), 1, 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", -std.math.inf(f64), 1, 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, std.math.nan(f64), 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, std.math.inf(f64), 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, 0, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, -1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, @as(i64, std.math.maxInt(i32)) + 1, 0));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, 1, 16));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, 1, 32));
++    try testing.expect(!validMouseEventInput("down", "left", 1, 1, 1, 512));
++
++    for ([_]u64{ 0, 1, 2, 4, 8, 64, 128, 256, pointer_modifier_mask }) |modifiers| {
++        try testing.expect(validMouseMoveInput(10.25, 20.75, modifiers));
++    }
++    try testing.expect(!validMouseMoveInput(std.math.nan(f64), 1, 0));
++    try testing.expect(!validMouseMoveInput(std.math.inf(f64), 1, 0));
++    try testing.expect(!validMouseMoveInput(-std.math.inf(f64), 1, 0));
++    try testing.expect(!validMouseMoveInput(1, std.math.nan(f64), 0));
++    try testing.expect(!validMouseMoveInput(1, std.math.inf(f64), 0));
++    try testing.expect(!validMouseMoveInput(1, 1, 16));
++    try testing.expect(!validMouseMoveInput(1, 1, 32));
++    try testing.expect(!validMouseMoveInput(1, 1, 512));
++
++    for ([_]u64{ 1, 2, 4, 8, 16, 32, scroll_phase_mask }) |phase| {
++        try testing.expect(validScrollEventInput(
++            10.5,
++            20.5,
++            0,
++            0,
++            phase,
++            0,
++            scroll_modifier_mask,
++        ));
++        try testing.expect(validScrollEventInput(
++            10.5,
++            20.5,
++            0,
++            0,
++            0,
++            phase,
++            scroll_modifier_mask,
++        ));
++    }
++    for ([_]u64{ 0, 1, 2, 4, 8, scroll_modifier_mask }) |modifiers| {
++        try testing.expect(validScrollEventInput(1, 2, 0.5, -0.25, 0, 0, modifiers));
++    }
++    try testing.expect(!validScrollEventInput(1, 2, 0, 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(std.math.nan(f64), 2, 1, 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(std.math.inf(f64), 2, 1, 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, std.math.nan(f64), 1, 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, std.math.inf(f64), 1, 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, std.math.nan(f64), 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, std.math.inf(f64), 0, 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, 0, std.math.nan(f64), 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, 0, std.math.inf(f64), 0, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, 1, 0, 64, 0, 0));
++    try testing.expect(!validScrollEventInput(1, 2, 1, 0, 0, 64, 0));
++    try testing.expect(!validScrollEventInput(1, 2, 1, 0, 0, 0, 16));
++    try testing.expect(!validScrollEventInput(1, 2, 1, 0, 0, 0, 32));
++    try testing.expect(!validScrollEventInput(1, 2, 1, 0, 0, 0, 64));
++
++    resetTermsurfStateForTest();
++    defer resetTermsurfStateForTest();
++    var browser = try testSocketPair();
++    defer testCloseSocketPair(&browser);
++    try testSetPendingServer(0, "default", "gecko");
++    servers[0].attached_fd = browser[0];
++    try testSetPane(0, "pointer-pane", "default", "gecko", "about:blank", -1);
++    panes[0].tab_id = 42;
++
++    try testing.expect(forwardMouseEvent("pointer-pane", "down", "left", 10.5, 20.5, 1, 64));
++    const mouse = try readTestMessage(browser[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(mouse, null);
++    try testing.expectEqual(@as(i64, 42), mouse.*.unnamed_0.mouse_event.*.tab_id);
++    try testing.expectEqual(@as(f64, 10.5), mouse.*.unnamed_0.mouse_event.*.x);
++
++    try testing.expect(forwardMouseMove("pointer-pane", 11.5, 21.5, 64));
++    const move = try readTestMessage(browser[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(move, null);
++    try testing.expectEqual(@as(i64, 42), move.*.unnamed_0.mouse_move.*.tab_id);
++
++    try testing.expect(forwardScrollEvent("pointer-pane", 12.5, 22.5, 1.5, 2.5, 4, 0, true, 1));
++    const scroll = try readTestMessage(browser[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(scroll, null);
++    try testing.expectEqual(@as(i64, 42), scroll.*.unnamed_0.scroll_event.*.tab_id);
++    try testing.expectEqual(@as(f64, 2.5), scroll.*.unnamed_0.scroll_event.*.delta_y);
++
++    try testing.expect(!forwardMouseMove("wrong-pane", 1, 1, 0));
++    try testing.expect(!forwardScrollEvent("wrong-pane", 1, 1, 1, 0, 0, 0, true, 0));
++    panes[0].tab_id = 0;
++    try testing.expect(!forwardMouseEvent("pointer-pane", "down", "left", 1, 1, 1, 0));
++    panes[0].tab_id = -1;
++    try testing.expect(!forwardMouseMove("pointer-pane", 1, 1, 0));
++}
++
+ test "termsurf text input is exhaustive and tab owned" {
+     const testing = std.testing;
+ 
+@@ -7430,6 +7666,38 @@ test "termsurf TUI navigate resolves pane to owning browser tab" {
+     try testing.expectEqualStrings("", cString(forwarded.*.unnamed_0.navigate.*.pane_id));
+ }
+ 
++test "termsurf target URL feedback preserves browser tab ownership and clear" {
++    const testing = std.testing;
++
++    resetTermsurfStateForTest();
++    defer resetTermsurfStateForTest();
++
++    var browser = try testSocketPair();
++    defer testCloseSocketPair(&browser);
++    var tui = try testSocketPair();
++    defer testCloseSocketPair(&tui);
++
++    try testSetPendingServer(0, "default", "gecko");
++    servers[0].attached_fd = browser[0];
++    try testSetPane(0, "pane-target", "default", "gecko", "https://fixture.test/", tui[0]);
++    panes[0].tab_id = 42;
++    _ = upsertTabLookup(&panes[0], 42);
++
++    var target: c.Termsurf__TargetUrlChanged = undefined;
++    c.termsurf__target_url_changed__init(&target);
++    target.tab_id = 42;
++    target.url = @constCast("https://example.test/pointer-target");
++    handleTargetUrlChanged(browser[0], &target);
++    try testing.expectEqualStrings(
++        "https://example.test/pointer-target",
++        panes[0].target_url[0..panes[0].target_url_len],
++    );
++
++    target.url = @constCast("");
++    handleTargetUrlChanged(browser[0], &target);
++    try testing.expectEqual(@as(usize, 0), panes[0].target_url_len);
++}
++
+ test "termsurf open app messages are tui connections" {
+     const testing = std.testing;
+ 
+-- 
+2.54.0
+

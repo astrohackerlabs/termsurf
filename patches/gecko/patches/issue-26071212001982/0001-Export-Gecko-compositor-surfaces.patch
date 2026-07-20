@@ -1,0 +1,683 @@
+From a84ffb1e8199faec6db1719ff11cdfea591f39ba Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 12 Jul 2026 17:36:28 -0500
+Subject: [PATCH] Export Gecko compositor surfaces
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+WebRender panes cross Mach’s bright stream,
+Acknowledgements guard each borrowed gleam.
+No screenshot cart, no pixel toll—
+Measured rights return the whole.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          |  72 ++-
+ gfx/layers/AstrohackerSurfaceExporterMac.h    |  27 ++
+ gfx/layers/AstrohackerSurfaceExporterMac.mm   | 419 ++++++++++++++++++
+ gfx/layers/NativeLayerCA.h                    |   1 +
+ gfx/layers/NativeLayerCA.mm                   |   5 +
+ gfx/layers/NativeLayerRootRemoteMacParent.mm  |   9 +
+ gfx/layers/moz.build                          |   2 +
+ 7 files changed, 531 insertions(+), 4 deletions(-)
+ create mode 100644 gfx/layers/AstrohackerSurfaceExporterMac.h
+ create mode 100644 gfx/layers/AstrohackerSurfaceExporterMac.mm
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index a2bf55fcdf3a..08b4010d60fc 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -10,6 +10,7 @@
+ import { BrowserWindowTracker } from "resource:///modules/BrowserWindowTracker.sys.mjs";
+ 
+ const progressListeners = new Set();
++const delayTimers = new Set();
+ 
+ export class CommandLineHandler {
+   static classID = Components.ID("{a932e007-0932-4007-8000-000000000007}");
+@@ -51,8 +52,7 @@ export class CommandLineHandler {
+ 
+     // HOLD mode (Exp8): leave the normal event loop running after load so
+     // the parent can AX-resize the window; do not force-quit.
+-    let hold =
+-      Services.env.get("ASTROHACKER_GECKO_HOLD") === "1" && !headless;
++    let hold = Services.env.get("ASTROHACKER_GECKO_HOLD") === "1" && !headless;
+ 
+     runVisible(urlParam, headless, hold)
+       .catch(err => {
+@@ -80,7 +80,15 @@ export class CommandLineHandler {
+ function delay(ms) {
+   return new Promise(resolve => {
+     let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+-    timer.initWithCallback(() => resolve(), ms, Ci.nsITimer.TYPE_ONE_SHOT);
++    delayTimers.add(timer);
++    timer.initWithCallback(
++      () => {
++        delayTimers.delete(timer);
++        resolve();
++      },
++      ms,
++      Ci.nsITimer.TYPE_ONE_SHOT
++    );
+   });
+ }
+ 
+@@ -213,6 +221,23 @@ async function runVisible(urlStr, headless, hold) {
+     return;
+   }
+ 
++  if (Services.env.get("ASTROHACKER_GECKO_SURFACE_PROBE") === "1") {
++    const scale = win.devicePixelRatio || 1;
++    const initialRect = browser.getBoundingClientRect();
++    Services.env.set(
++      "ASTROHACKER_GECKO_SURFACE_EXPECTED_WIDTH",
++      String(Math.round(initialRect.width * scale))
++    );
++    Services.env.set(
++      "ASTROHACKER_GECKO_SURFACE_EXPECTED_HEIGHT",
++      String(Math.round(initialRect.height * scale))
++    );
++    Services.env.set("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "1");
++    dump(
++      `surface_probe_expected_initial=${Math.round(initialRect.width * scale)}x${Math.round(initialRect.height * scale)} scale=${scale}\n`
++    );
++  }
++
+   let finalUri;
+   try {
+     // If openWindow already navigated, wait for stop; else load
+@@ -266,12 +291,51 @@ async function runVisible(urlStr, headless, hold) {
+   }
+ 
+   let outerOk = (win.outerWidth | 0) >= 100 && (win.outerHeight | 0) >= 100;
+-  if (!headless && marker && outerOk && finalUri && finalUri !== "about:blank") {
++  if (
++    !headless &&
++    marker &&
++    outerOk &&
++    finalUri &&
++    finalUri !== "about:blank"
++  ) {
+     dump("visible_window_ok=1\n");
+   } else {
+     dump("visible_window_ok=0\n");
+   }
+ 
++  if (Services.env.get("ASTROHACKER_GECKO_SURFACE_PROBE") === "1") {
++    await delay(900);
++    Services.env.set("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "0");
++    win.resizeTo(400, 300);
++    await delay(700);
++    const principal = Services.scriptSecurityManager.getSystemPrincipal();
++    browser.loadURI(Services.io.newURI("about:blank"), {
++      triggeringPrincipal: principal,
++    });
++    await delay(300);
++    const resizedRect = browser.getBoundingClientRect();
++    const scale = win.devicePixelRatio || 1;
++    Services.env.set(
++      "ASTROHACKER_GECKO_SURFACE_EXPECTED_WIDTH",
++      String(Math.round(resizedRect.width * scale))
++    );
++    Services.env.set(
++      "ASTROHACKER_GECKO_SURFACE_EXPECTED_HEIGHT",
++      String(Math.round(resizedRect.height * scale))
++    );
++    Services.env.set("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "2");
++    const resizedLoadDone = waitTabLoad(browser, urlStr);
++    browser.loadURI(Services.io.newURI(urlStr), {
++      triggeringPrincipal: principal,
++    });
++    await resizedLoadDone;
++    await delay(300);
++    dump(
++      `surface_probe_expected_resized=${Math.round(resizedRect.width * scale)}x${Math.round(resizedRect.height * scale)} scale=${scale}\n`
++    );
++    dump("surface_probe_resize=1\n");
++  }
++
+   if (hold) {
+     // Exp8: retain window; normal event loop continues (no nested busy loop).
+     // Parent reaps via SIGTERM; do not claim teardown here.
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.h b/gfx/layers/AstrohackerSurfaceExporterMac.h
+new file mode 100644
+index 000000000000..ffe0bcd25361
+--- /dev/null
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.h
+@@ -0,0 +1,27 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#ifndef mozilla_layers_AstrohackerSurfaceExporterMac_h
++#define mozilla_layers_AstrohackerSurfaceExporterMac_h
++
++#include "mozilla/gfx/Point.h"
++#include "mozilla/gfx/Rect.h"
++
++struct __IOSurface;
++typedef __IOSurface* IOSurfaceRef;
++
++namespace mozilla::layers {
++
++// Issue 26071212001982 Exp1: export an existing compositor-owned IOSurface to
++// the separately launched, read-only Astrohacker probe receiver. This function
++// is inert unless ASTROHACKER_GECKO_SURFACE_SERVICE names a bootstrap service.
++void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
++                                   const gfx::IntSize& aSize, uint64_t aLayerId,
++                                   bool aIsOpaque,
++                                   const gfx::IntPoint& aPosition,
++                                   const gfx::IntRect& aDisplayRect);
++
++}  // namespace mozilla::layers
++
++#endif  // mozilla_layers_AstrohackerSurfaceExporterMac_h
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.mm b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+new file mode 100644
+index 000000000000..0c54dad1be48
+--- /dev/null
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+@@ -0,0 +1,419 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++#include "AstrohackerSurfaceExporterMac.h"
++
++#import <AppKit/AppKit.h>
++#include <IOSurface/IOSurface.h>
++#include <mach/mach.h>
++#include <servers/bootstrap.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <atomic>
++#include <chrono>
++#include <cstddef>
++#include <unordered_map>
++#include <vector>
++
++namespace mozilla::layers {
++
++namespace {
++
++constexpr mach_msg_id_t kAstrohackerSurfaceMessageId = 0x41534847;
++constexpr mach_msg_id_t kAstrohackerSurfaceAckMessageId = 0x41534841;
++constexpr auto kTokenTimeout = std::chrono::seconds(5);
++
++struct AstrohackerSurfaceMessage {
++  mach_msg_header_t header;
++  mach_msg_body_t body;
++  mach_msg_port_descriptor_t surfacePort;
++  uint64_t generation;
++  uint64_t token;
++  uint32_t surfaceId;
++  uint32_t width;
++  uint32_t height;
++  uint32_t pixelFormat;
++  uint32_t opaque;
++  double deviceScale;
++  int32_t exporterPid;
++  char exporterRole[16];
++  uint64_t layerId;
++  int32_t positionX;
++  int32_t positionY;
++  int32_t displayX;
++  int32_t displayY;
++  int32_t displayWidth;
++  int32_t displayHeight;
++  uint32_t resizeEpoch;
++  uint32_t expectedWidth;
++  uint32_t expectedHeight;
++};
++
++struct AstrohackerSurfaceAckMessage {
++  mach_msg_header_t header;
++  uint64_t generation;
++  uint64_t token;
++  uint32_t surfaceId;
++  int32_t receiverPid;
++  mach_msg_trailer_t trailer;
++};
++
++struct LiveSurface {
++  IOSurfaceRef surface;
++  uint64_t generation;
++  uint32_t surfaceId;
++  std::chrono::steady_clock::time_point deadline;
++};
++
++std::atomic<uint64_t> sGeneration{0};
++mach_port_t sReceiverPort = MACH_PORT_NULL;
++mach_port_t sAckPort = MACH_PORT_NULL;
++bool sLookupAttempted = false;
++bool sSummaryLogged = false;
++uint64_t sTokenAcquired = 0;
++uint64_t sTokenReleased = 0;
++uint64_t sTokenSent = 0;
++uint64_t sTokenAcked = 0;
++std::unordered_map<uint64_t, LiveSurface> sLiveSurfaces;
++
++uint64_t ExportTarget() {
++  static uint64_t target = [] {
++    const char* value = getenv("ASTROHACKER_GECKO_SURFACE_TARGET");
++    return value ? strtoull(value, nullptr, 10) : 0;
++  }();
++  return target;
++}
++
++uint64_t InitialExportTarget() {
++  static uint64_t target = [] {
++    const char* value =
++        getenv("ASTROHACKER_GECKO_SURFACE_INITIAL_TARGET");
++    return value ? strtoull(value, nullptr, 10) : 300;
++  }();
++  return target;
++}
++
++mach_port_t AckPort() {
++  if (sAckPort != MACH_PORT_NULL) {
++    return sAckPort;
++  }
++  if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &sAckPort) !=
++      KERN_SUCCESS) {
++    sAckPort = MACH_PORT_NULL;
++    return MACH_PORT_NULL;
++  }
++  mach_port_limits_t limits = {};
++  limits.mpl_qlimit = MACH_PORT_QLIMIT_LARGE;
++  mach_port_set_attributes(mach_task_self(), sAckPort, MACH_PORT_LIMITS_INFO,
++                           reinterpret_cast<mach_port_info_t>(&limits),
++                           MACH_PORT_LIMITS_INFO_COUNT);
++  fprintf(stderr, "AstrohackerSurface ack_port=1 role=parent pid=%d\n",
++          getpid());
++  return sAckPort;
++}
++
++void ReleaseToken(uint64_t aToken, const char* aReason, int32_t aReceiverPid) {
++  auto found = sLiveSurfaces.find(aToken);
++  if (found == sLiveSurfaces.end()) {
++    fprintf(stderr,
++            "AstrohackerSurface producer_token_release=0 reason=unknown "
++            "token=%llu receiver_pid=%d\n",
++            static_cast<unsigned long long>(aToken), aReceiverPid);
++    return;
++  }
++  const auto generation = found->second.generation;
++  const auto surfaceId = found->second.surfaceId;
++  CFRelease(found->second.surface);
++  sLiveSurfaces.erase(found);
++  ++sTokenReleased;
++  if (!strcmp(aReason, "ack")) {
++    ++sTokenAcked;
++  }
++  fprintf(stderr,
++          "AstrohackerSurface producer_token_release=1 reason=%s pid=%d "
++          "receiver_pid=%d generation=%llu token=%llu surface_id=%u live=%zu "
++          "acquired=%llu released=%llu acked=%llu\n",
++          aReason, getpid(), aReceiverPid,
++          static_cast<unsigned long long>(generation),
++          static_cast<unsigned long long>(aToken), surfaceId,
++          sLiveSurfaces.size(),
++          static_cast<unsigned long long>(sTokenAcquired),
++          static_cast<unsigned long long>(sTokenReleased),
++          static_cast<unsigned long long>(sTokenAcked));
++}
++
++void MaybeLogSummary() {
++  uint64_t target = ExportTarget();
++  if (!sSummaryLogged && target && sTokenSent >= target &&
++      sLiveSurfaces.empty()) {
++    sSummaryLogged = true;
++    fprintf(stderr,
++            "AstrohackerSurface producer_token_summary=1 acquired=%llu "
++            "sent=%llu acked=%llu released=%llu live=%zu\n",
++            static_cast<unsigned long long>(sTokenAcquired),
++            static_cast<unsigned long long>(sTokenSent),
++            static_cast<unsigned long long>(sTokenAcked),
++            static_cast<unsigned long long>(sTokenReleased),
++            sLiveSurfaces.size());
++  }
++}
++
++void DrainAcknowledgements() {
++  mach_port_t ackPort = AckPort();
++  if (ackPort == MACH_PORT_NULL) {
++    return;
++  }
++  while (true) {
++    AstrohackerSurfaceAckMessage ack = {};
++    ack.header.msgh_local_port = ackPort;
++    ack.header.msgh_size = sizeof(ack);
++    kern_return_t kr = mach_msg(&ack.header,
++                                MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
++                                sizeof(ack), ackPort, 0, MACH_PORT_NULL);
++    if (kr == MACH_RCV_TIMED_OUT) {
++      break;
++    }
++    if (kr != KERN_SUCCESS ||
++        ack.header.msgh_id != kAstrohackerSurfaceAckMessageId) {
++      fprintf(stderr,
++              "AstrohackerSurface producer_ack=0 role=parent pid=%d kr=%d\n",
++              getpid(), kr);
++      continue;
++    }
++    auto found = sLiveSurfaces.find(ack.token);
++    if (found == sLiveSurfaces.end() ||
++        found->second.generation != ack.generation ||
++        found->second.surfaceId != ack.surfaceId || ack.receiverPid <= 0) {
++      fprintf(stderr,
++              "AstrohackerSurface producer_ack=0 reason=identity token=%llu "
++              "generation=%llu surface_id=%u receiver_pid=%d\n",
++              static_cast<unsigned long long>(ack.token),
++              static_cast<unsigned long long>(ack.generation), ack.surfaceId,
++              ack.receiverPid);
++      continue;
++    }
++    ReleaseToken(ack.token, "ack", ack.receiverPid);
++  }
++
++  const auto now = std::chrono::steady_clock::now();
++  std::vector<uint64_t> expired;
++  for (const auto& [token, live] : sLiveSurfaces) {
++    if (live.deadline <= now) {
++      expired.push_back(token);
++    }
++  }
++  for (uint64_t token : expired) {
++    ReleaseToken(token, "timeout", 0);
++  }
++  MaybeLogSummary();
++}
++
++mach_port_t ReceiverPort() {
++  if (sLookupAttempted) {
++    return sReceiverPort;
++  }
++  sLookupAttempted = true;
++
++  const char* service = getenv("ASTROHACKER_GECKO_SURFACE_SERVICE");
++  if (!service || !service[0] || strlen(service) >= BOOTSTRAP_MAX_NAME_LEN) {
++    return MACH_PORT_NULL;
++  }
++
++  name_t serviceName = {};
++  strncpy(serviceName, service, sizeof(serviceName) - 1);
++  kern_return_t kr = bootstrap_look_up(bootstrap_port, serviceName,
++                                      &sReceiverPort);
++  if (kr != KERN_SUCCESS) {
++    fprintf(stderr,
++            "AstrohackerSurface export_lookup=0 role=parent pid=%d kr=%d\n",
++            getpid(), kr);
++    sReceiverPort = MACH_PORT_NULL;
++    return MACH_PORT_NULL;
++  }
++
++  fprintf(stderr,
++          "AstrohackerSurface export_lookup=1 role=parent pid=%d service=%s\n",
++          getpid(), service);
++  return sReceiverPort;
++}
++
++double DeviceScale() {
++  NSScreen* screen = [NSScreen mainScreen];
++  return screen ? screen.backingScaleFactor : 1.0;
++}
++
++size_t PortNameCount() {
++  mach_port_name_array_t names = nullptr;
++  mach_msg_type_number_t nameCount = 0;
++  mach_port_type_array_t types = nullptr;
++  mach_msg_type_number_t typeCount = 0;
++  kern_return_t kr = mach_port_names(mach_task_self(), &names, &nameCount,
++                                    &types, &typeCount);
++  if (kr != KERN_SUCCESS) {
++    return 0;
++  }
++  if (names) {
++    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(names),
++                  nameCount * sizeof(mach_port_name_t));
++  }
++  if (types) {
++    vm_deallocate(mach_task_self(), reinterpret_cast<vm_address_t>(types),
++                  typeCount * sizeof(mach_port_type_t));
++  }
++  return nameCount;
++}
++
++}  // namespace
++
++void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
++                                   const gfx::IntSize& aSize, uint64_t aLayerId,
++                                   bool aIsOpaque,
++                                   const gfx::IntPoint& aPosition,
++                                   const gfx::IntRect& aDisplayRect) {
++  if (!aSurface) {
++    return;
++  }
++
++  mach_port_t receiver = ReceiverPort();
++  if (receiver == MACH_PORT_NULL) {
++    return;
++  }
++
++  DrainAcknowledgements();
++  const char* epochValue =
++      getenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH");
++  uint32_t resizeEpoch = epochValue ? strtoul(epochValue, nullptr, 10) : 0;
++  if (!resizeEpoch ||
++      (resizeEpoch == 1 && sTokenSent >= InitialExportTarget())) {
++    return;
++  }
++  uint64_t target = ExportTarget();
++  if (target && sTokenSent >= target) {
++    MaybeLogSummary();
++    return;
++  }
++
++  mach_port_t ackPort = AckPort();
++  if (ackPort == MACH_PORT_NULL) {
++    fprintf(stderr,
++            "AstrohackerSurface export=0 reason=ack_port role=parent pid=%d\n",
++            getpid());
++    return;
++  }
++
++  mach_port_t surfacePort = IOSurfaceCreateMachPort(aSurface);
++  if (surfacePort == MACH_PORT_NULL) {
++    fprintf(stderr,
++            "AstrohackerSurface export=0 reason=surface_port role=parent "
++            "pid=%d\n",
++            getpid());
++    return;
++  }
++
++  uint64_t generation = ++sGeneration;
++  uint32_t surfaceId = IOSurfaceGetID(aSurface);
++  uint64_t token = generation;
++
++  CFRetain(aSurface);
++  sLiveSurfaces.emplace(
++      token, LiveSurface{aSurface, generation, surfaceId,
++                         std::chrono::steady_clock::now() + kTokenTimeout});
++  ++sTokenAcquired;
++  fprintf(stderr,
++          "AstrohackerSurface producer_token_acquire=1 pid=%d "
++          "generation=%llu token=%llu surface_id=%u live=%zu acquired=%llu\n",
++          getpid(), static_cast<unsigned long long>(generation),
++          static_cast<unsigned long long>(token), surfaceId,
++          sLiveSurfaces.size(),
++          static_cast<unsigned long long>(sTokenAcquired));
++
++  AstrohackerSurfaceMessage message = {};
++  message.header.msgh_bits =
++      MACH_MSGH_BITS_COMPLEX |
++      MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND_ONCE);
++  message.header.msgh_size = sizeof(message);
++  message.header.msgh_remote_port = receiver;
++  message.header.msgh_local_port = ackPort;
++  message.header.msgh_id = kAstrohackerSurfaceMessageId;
++  message.body.msgh_descriptor_count = 1;
++  message.surfacePort.name = surfacePort;
++  message.surfacePort.disposition = MACH_MSG_TYPE_MOVE_SEND;
++  message.surfacePort.type = MACH_MSG_PORT_DESCRIPTOR;
++  message.generation = generation;
++  message.token = token;
++  message.surfaceId = surfaceId;
++  message.width = IOSurfaceGetWidth(aSurface);
++  message.height = IOSurfaceGetHeight(aSurface);
++  message.pixelFormat = IOSurfaceGetPixelFormat(aSurface);
++  message.opaque = aIsOpaque ? 1 : 0;
++  message.deviceScale = DeviceScale();
++  message.exporterPid = getpid();
++  strncpy(message.exporterRole, "parent", sizeof(message.exporterRole) - 1);
++  message.layerId = aLayerId;
++  message.positionX = aPosition.x;
++  message.positionY = aPosition.y;
++  message.displayX = aDisplayRect.x;
++  message.displayY = aDisplayRect.y;
++  message.displayWidth = aDisplayRect.width;
++  message.displayHeight = aDisplayRect.height;
++  const char* expectedWidth =
++      getenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_WIDTH");
++  const char* expectedHeight =
++      getenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_HEIGHT");
++  message.resizeEpoch = resizeEpoch;
++  message.expectedWidth =
++      expectedWidth ? strtoul(expectedWidth, nullptr, 10) : 0;
++  message.expectedHeight =
++      expectedHeight ? strtoul(expectedHeight, nullptr, 10) : 0;
++
++  kern_return_t kr = mach_msg(&message.header,
++                              MACH_SEND_MSG | MACH_SEND_TIMEOUT,
++                              message.header.msgh_size, 0, MACH_PORT_NULL,
++                              0, MACH_PORT_NULL);
++  if (kr != KERN_SUCCESS) {
++    // MOVE_SEND consumes the right only on successful delivery.
++    mach_port_deallocate(mach_task_self(), surfacePort);
++    ReleaseToken(token, "mach_send", 0);
++    fprintf(stderr,
++            "AstrohackerSurface export=0 reason=mach_send role=parent pid=%d "
++            "generation=%llu token=%llu surface_id=%u kr=%d "
++            "handoff_release=1\n",
++            getpid(), static_cast<unsigned long long>(generation),
++            static_cast<unsigned long long>(token), surfaceId, kr);
++    return;
++  }
++
++  ++sTokenSent;
++
++  fprintf(stderr,
++          "AstrohackerSurface export=1 export_site="
++          "NativeLayerRootRemoteMacParent::HandleChangedSurface role=parent "
++          "pid=%d generation=%llu token=%llu surface_id=%u width=%u "
++          "height=%u scale=%.1f pixel_format=0x%08x layer_id=%llu "
++          "position=%d,%d display=%d,%d,%d,%d resize_epoch=%u "
++          "expected=%ux%u handoff_release=1 sent=%llu\n",
++          getpid(), static_cast<unsigned long long>(generation),
++          static_cast<unsigned long long>(token), surfaceId, message.width,
++          message.height, message.deviceScale, message.pixelFormat,
++          static_cast<unsigned long long>(message.layerId), message.positionX,
++          message.positionY, message.displayX, message.displayY,
++          message.displayWidth, message.displayHeight, message.resizeEpoch,
++          message.expectedWidth, message.expectedHeight,
++          static_cast<unsigned long long>(sTokenSent));
++  if (sTokenSent == 500 || sTokenSent == 900) {
++    fprintf(stderr,
++            "AstrohackerSurface producer_port_count sent=%llu generation=%llu "
++            "count=%zu token_surfaces_live=%zu acquired=%llu released=%llu\n",
++            static_cast<unsigned long long>(sTokenSent),
++            static_cast<unsigned long long>(generation), PortNameCount(),
++            sLiveSurfaces.size(),
++            static_cast<unsigned long long>(sTokenAcquired),
++            static_cast<unsigned long long>(sTokenReleased));
++  }
++}
++
++}  // namespace mozilla::layers
+diff --git a/gfx/layers/NativeLayerCA.h b/gfx/layers/NativeLayerCA.h
+index 4714b8a15791..5c3611f61627 100644
+--- a/gfx/layers/NativeLayerCA.h
++++ b/gfx/layers/NativeLayerCA.h
+@@ -397,6 +397,7 @@ class NativeLayerCA : public NativeLayer {
+   // Used to force a specific IOSurfaceRef to be used.
+   void SetSurfaceToPresent(CFTypeRefPtr<IOSurfaceRef> aSurfaceRef,
+                            gfx::IntSize& aSize, bool aIsDRM, bool aIsHDR);
++  CFTypeRefPtr<IOSurfaceRef> SurfaceToPresent();
+ 
+   void DumpLayer(std::ostream& aOutputStream);
+ 
+diff --git a/gfx/layers/NativeLayerCA.mm b/gfx/layers/NativeLayerCA.mm
+index 94efd9b6c370..e158bbb1a4ae 100644
+--- a/gfx/layers/NativeLayerCA.mm
++++ b/gfx/layers/NativeLayerCA.mm
+@@ -1253,6 +1253,11 @@ void NativeLayerCA::SetDisplayRect(const gfx::IntRect& aDisplayRect) {
+   }
+ }
+ 
++CFTypeRefPtr<IOSurfaceRef> NativeLayerCA::SurfaceToPresent() {
++  MutexAutoLock lock(mMutex);
++  return mSurfaceToPresent;
++}
++
+ void NativeLayerCA::SetSurfaceToPresent(CFTypeRefPtr<IOSurfaceRef> aSurfaceRef,
+                                         gfx::IntSize& aSize, bool aIsDRM,
+                                         bool aIsHDR) {
+diff --git a/gfx/layers/NativeLayerRootRemoteMacParent.mm b/gfx/layers/NativeLayerRootRemoteMacParent.mm
+index 731551b96d9f..653e4412e873 100644
+--- a/gfx/layers/NativeLayerRootRemoteMacParent.mm
++++ b/gfx/layers/NativeLayerRootRemoteMacParent.mm
+@@ -3,6 +3,7 @@
+  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+ 
+ #include "mozilla/CheckedInt.h"
++#include "mozilla/layers/AstrohackerSurfaceExporterMac.h"
+ #include "mozilla/layers/NativeLayerRootRemoteMacParent.h"
+ #include "xpcpublic.h"
+ 
+@@ -192,6 +193,11 @@ void NativeLayerRootRemoteMacParent::HandleLayerInfo(
+   layer->SetTransform(aTransform);
+   layer->SetSamplingFilter(aSamplingFilter);
+   layer->SetSurfaceIsFlipped(aSurfaceIsFlipped);
++  if (auto surface = layer->SurfaceToPresent()) {
++    AstrohackerMaybeExportSurface(surface.get(), layer->GetSize(), aID,
++                                 layer->IsOpaque(), layer->GetPosition(),
++                                 layer->CurrentSurfaceDisplayRect());
++  }
+ }
+ 
+ void NativeLayerRootRemoteMacParent::HandleChangedSurface(
+@@ -208,6 +214,9 @@ void NativeLayerRootRemoteMacParent::HandleChangedSurface(
+ 
+   if (auto surface = aSurfacePort.GetSurface()) {
+     layer->SetSurfaceToPresent(surface, aSize, aIsDRM, aIsHDR);
++    AstrohackerMaybeExportSurface(surface.get(), aSize, aID, layer->IsOpaque(),
++                                 layer->GetPosition(),
++                                 layer->CurrentSurfaceDisplayRect());
+   }
+ }
+ 
+diff --git a/gfx/layers/moz.build b/gfx/layers/moz.build
+index 5c22be217f56..3f32a0acc9c1 100644
+--- a/gfx/layers/moz.build
++++ b/gfx/layers/moz.build
+@@ -266,6 +266,7 @@ if CONFIG["MOZ_WAYLAND"]:
+ 
+ if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("cocoa", "uikit"):
+     EXPORTS.mozilla.layers += [
++        "AstrohackerSurfaceExporterMac.h",
+         "GpuFenceMTLSharedEvent.h",
+         "NativeLayerCA.h",
+         "NativeLayerMacSurfaceHandler.h",
+@@ -279,6 +280,7 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("cocoa", "uikit"):
+         "MacIOSurfaceImage.h",
+     ]
+     UNIFIED_SOURCES += [
++        "AstrohackerSurfaceExporterMac.mm",
+         "NativeLayerCA.mm",
+         "NativeLayerMacSurfaceHandler.mm",
+         "NativeLayerRemoteMac.mm",
+-- 
+2.54.0
+

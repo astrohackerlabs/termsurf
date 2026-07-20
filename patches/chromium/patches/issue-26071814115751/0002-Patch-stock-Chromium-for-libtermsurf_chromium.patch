@@ -1,0 +1,225 @@
+From fc762cd4605bad4f86880592f203ad1d052ee93f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 5 Mar 2026 06:52:41 -0600
+Subject: [PATCH 002/122] Patch stock Chromium for libtermsurf_chromium
+
+Eight patches, surgical and tight:
+A hidden window, a constructor's right,
+CALayer callbacks, cursor hooks too,
+The minimum Chromium needs to do.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+---
+ BUILD.gn                                         |  1 +
+ .../renderer_host/render_widget_host_impl.cc     |  7 +++++++
+ .../renderer_host/render_widget_host_impl.h      |  9 +++++++++
+ .../renderer_host/render_widget_host_view_mac.h  |  9 +++++++++
+ .../renderer_host/render_widget_host_view_mac.mm | 10 +++++++++-
+ content/shell/browser/shell_devtools_frontend.h  |  7 +++++--
+ .../shell/browser/shell_platform_delegate_mac.mm | 16 ++++++++++++++--
+ content/shell/common/shell_switches.h            |  5 +++++
+ 8 files changed, 59 insertions(+), 5 deletions(-)
+
+diff --git a/BUILD.gn b/BUILD.gn
+index 6fb9996541..3a96fbb25f 100644
+--- a/BUILD.gn
++++ b/BUILD.gn
+@@ -194,6 +194,7 @@ group("gn_all") {
+         "//components/viz:viz_perftests",
+         "//components/viz:viz_unittests",
+         "//content/browser/interest_group/tools:adjustable_auction",
++        "//content/libtermsurf_chromium:libtermsurf_chromium",
+         "//content/shell:content_shell",
+         "//content/test:content_browsertests",
+         "//content/test:content_unittests",
+diff --git a/content/browser/renderer_host/render_widget_host_impl.cc b/content/browser/renderer_host/render_widget_host_impl.cc
+index acebec7332..f9dd79c743 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.cc
++++ b/content/browser/renderer_host/render_widget_host_impl.cc
+@@ -2094,7 +2094,14 @@ void RenderWidgetHostImpl::FilterDropData(DropData* drop_data) {
+   }
+ }
+ 
++void RenderWidgetHostImpl::SetCursorChangedCallback(
++    CursorChangedCallback callback) {
++  cursor_changed_callback_ = std::move(callback);
++}
++
+ void RenderWidgetHostImpl::SetCursor(const ui::Cursor& cursor) {
++  if (cursor_changed_callback_)
++    cursor_changed_callback_.Run(cursor);
+   if (view_) {
+     view_->UpdateCursor(cursor);
+   }
+diff --git a/content/browser/renderer_host/render_widget_host_impl.h b/content/browser/renderer_host/render_widget_host_impl.h
+index 8674f11f01..fbdeef5d76 100644
+--- a/content/browser/renderer_host/render_widget_host_impl.h
++++ b/content/browser/renderer_host/render_widget_host_impl.h
+@@ -328,6 +328,12 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   void DragSourceSystemDragEnded() override;
+   void FilterDropData(DropData* drop_data) override;
+   void SetCursor(const ui::Cursor& cursor) override;
++
++  // Cursor change callback for out-of-process embedders (TermSurf).
++  using CursorChangedCallback =
++      base::RepeatingCallback<void(const ui::Cursor&)>;
++  void SetCursorChangedCallback(CursorChangedCallback callback);
++
+   void ShowContextMenuAtPoint(
+       const gfx::Point& point,
+       const ui::mojom::MenuSourceType source_type) override;
+@@ -1519,6 +1525,9 @@ class CONTENT_EXPORT RenderWidgetHostImpl
+   // to ESC being pressed by the user, this will be false.
+   bool is_last_unlocked_by_target_ = false;
+ 
++  // Cursor change callback for out-of-process embedders (TermSurf).
++  CursorChangedCallback cursor_changed_callback_;
++
+   // True when the cursor has entered the autoscroll mode. A GSB is not
+   // necessarily sent yet.
+   bool autoscroll_in_progress_ = false;
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.h b/content/browser/renderer_host/render_widget_host_view_mac.h
+index b4c218b9ec..a7d0ea1822 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.h
++++ b/content/browser/renderer_host/render_widget_host_view_mac.h
+@@ -35,6 +35,7 @@
+ #include "ui/base/mojom/attributed_string.mojom-forward.h"
+ #include "ui/display/display_list.h"
+ #include "ui/events/gesture_detection/filtered_gesture_provider.h"
++#include "ui/gfx/ca_layer_params.h"
+ 
+ namespace remote_cocoa {
+ namespace mojom {
+@@ -120,6 +121,11 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+     return ns_view_;
+   }
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  using CALayerParamsCallback =
++      base::RepeatingCallback<void(const gfx::CALayerParams&)>;
++  void SetCALayerParamsCallback(CALayerParamsCallback callback);
++
+   // |delegate| is used to separate out the logic from the NSResponder delegate.
+   // |delegate| is retained by this class.
+   // |delegate| should be set at most once.
+@@ -743,6 +749,9 @@ class CONTENT_EXPORT RenderWidgetHostViewMac
+   // details.
+   base::OneShotTimer update_windows_timer_;
+ 
++  // CALayerParams change callback for out-of-process embedders (TermSurf).
++  CALayerParamsCallback ca_layer_params_callback_;
++
+   // Factory used to safely scope delayed calls to ShutdownHost().
+   base::WeakPtrFactory<RenderWidgetHostViewMac> weak_factory_;
+ };
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 319b54e28f..dc320e2454 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -164,6 +164,11 @@
+ ////////////////////////////////////////////////////////////////////////////////
+ // AcceleratedWidgetMacNSView, public:
+ 
++void RenderWidgetHostViewMac::SetCALayerParamsCallback(
++    CALayerParamsCallback callback) {
++  ca_layer_params_callback_ = std::move(callback);
++}
++
+ void RenderWidgetHostViewMac::AcceleratedWidgetCALayerParamsUpdated(
+     gfx::CALayerParams ca_layer_params) {
+   // Set the background color for the root layer from the frame that just
+@@ -172,7 +177,10 @@
+   // before the frame is up.
+   SetBackgroundLayerColor(last_frame_root_background_color_);
+ 
+-  // Update the contents that the NSView is displaying.
++  // Update the contents that the NSView is displaying. Notify TermSurf embedders
++  // before moving params into the NSView.
++  if (ca_layer_params_callback_)
++    ca_layer_params_callback_.Run(ca_layer_params);
+   ns_view_->SetCALayerParams(std::move(ca_layer_params));
+ }
+ 
+diff --git a/content/shell/browser/shell_devtools_frontend.h b/content/shell/browser/shell_devtools_frontend.h
+index 820aa06e4a..14d878c0f3 100644
+--- a/content/shell/browser/shell_devtools_frontend.h
++++ b/content/shell/browser/shell_devtools_frontend.h
+@@ -33,13 +33,16 @@ class ShellDevToolsFrontend : public ShellDevToolsDelegate,
+ 
+   base::WeakPtr<ShellDevToolsFrontend> GetWeakPtr();
+ 
++  // Construct with an existing Shell. The frontend observes the Shell's
++  // WebContents and attaches DevTools bindings when the DOM loads.
++  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
++  ~ShellDevToolsFrontend() override;
++
+  private:
+   // WebContentsObserver overrides
+   void PrimaryMainDocumentElementAvailable() override;
+   void WebContentsDestroyed() override;
+ 
+-  ShellDevToolsFrontend(Shell* frontend_shell, WebContents* inspected_contents);
+-  ~ShellDevToolsFrontend() override;
+   raw_ptr<Shell> frontend_shell_;
+   std::unique_ptr<ShellDevToolsBindings> devtools_bindings_;
+ 
+diff --git a/content/shell/browser/shell_platform_delegate_mac.mm b/content/shell/browser/shell_platform_delegate_mac.mm
+index 274dffa179..7997fb8925 100644
+--- a/content/shell/browser/shell_platform_delegate_mac.mm
++++ b/content/shell/browser/shell_platform_delegate_mac.mm
+@@ -9,6 +9,7 @@
+ #include <algorithm>
+ 
+ #import "base/apple/foundation_util.h"
++#include "base/command_line.h"
+ #include "base/check_op.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/notreached.h"
+@@ -20,6 +21,7 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/app/resource.h"
+ #include "content/shell/browser/shell.h"
++#include "content/shell/common/shell_switches.h"
+ #include "ui/gfx/native_ui_types.h"
+ #include "url/gurl.h"
+ 
+@@ -201,8 +203,18 @@ void MakeShellButton(NSRect* rect,
+     shell_data.url_edit_view = url_edit_view;
+   }
+ 
+-  // Show the new window.
+-  [window makeKeyAndOrderFront:nil];
++  // Show the new window (unless --hidden).
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(switches::kHidden)) {
++    // Make the window fully transparent instead of ordering it out.
++    // orderOut: triggers NSWindowDidChangeOcclusionStateNotification which
++    // sets render_widget_host_is_hidden_ = true, detaching the compositor.
++    // setAlphaValue:0 keeps the window in the window list so the compositor
++    // stays active and CAContext survives navigation.
++    [window setAlphaValue:0.0];
++    [window orderWindow:NSWindowBelow relativeTo:0];
++  } else {
++    [window makeKeyAndOrderFront:nil];
++  }
+ 
+   shell_data.delegate = delegate;
+ }
+diff --git a/content/shell/common/shell_switches.h b/content/shell/common/shell_switches.h
+index 8757fa418d..8f3fd4b3e0 100644
+--- a/content/shell/common/shell_switches.h
++++ b/content/shell/common/shell_switches.h
+@@ -50,6 +50,11 @@ inline constexpr char kIsolatedContextOrigins[] = "isolated-context-origins";
+ // risk.
+ inline constexpr char kRemoteDebuggingAddress[] = "remote-debugging-address";
+ 
++// Hide the Content Shell window (make it transparent and order it behind
++// all other windows). Used by TermSurf browser binaries that render via
++// CALayerHost compositing instead of a native window.
++inline constexpr char kHidden[] = "hidden";
++
+ // Runs Content Shell in web test mode, injecting test-only behaviour for
+ // blink web tests.
+ inline constexpr char kRunWebTests[] = "run-web-tests";
+-- 
+2.50.1 (Apple Git-155)
+

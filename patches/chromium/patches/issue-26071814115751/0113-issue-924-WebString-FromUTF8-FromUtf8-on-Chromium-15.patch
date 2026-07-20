@@ -1,0 +1,37 @@
+From 19ce880582888e08259acd9498409945f84401c1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:51:25 -0500
+Subject: [PATCH 113/122] issue-924: WebString::FromUTF8 -> FromUtf8 on
+ Chromium 150
+
+---
+ content/libtermsurf_chromium/ts_pdf_renderer_support.cc | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+index 206bc8fdaf..9f50ba8de6 100644
+--- a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+@@ -55,7 +55,7 @@ class TsPrintRenderFrameHelperDelegate
+ #endif  // BUILDFLAG(ENABLE_PRINTING)
+ 
+ bool HasInternalId(const blink::WebElement& plugin_element) {
+-  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
++  return plugin_element.HasAttribute(blink::WebString::FromUtf8("internalid"));
+ }
+ 
+ }  // namespace
+@@ -67,8 +67,8 @@ void AllowTsPdfViewerChromeResources() {
+       GURL(std::string(extensions::kExtensionScheme) + "://" +
+            extension_misc::kPdfExtensionId);
+   blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
+-      pdf_viewer_origin, blink::WebString::FromUTF8(kChromeUIScheme),
+-      blink::WebString::FromUTF8(kChromeUIResourcesHost), /*port=*/0,
++      pdf_viewer_origin, blink::WebString::FromUtf8(kChromeUIScheme),
++      blink::WebString::FromUtf8(kChromeUIResourcesHost), /*port=*/0,
+       network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
+       network::mojom::CorsPortMatchMode::kAllowAnyPort,
+       network::mojom::CorsOriginAccessMatchPriority::kMaxPriority);
+-- 
+2.50.1 (Apple Git-155)
+

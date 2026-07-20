@@ -1,0 +1,47 @@
+From 8759c1bad417024f968f979ae1a5782090036981 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:41:36 -0500
+Subject: [PATCH 105/119] issue-924: CALayerParamsUpdated takes params on
+ Chromium 150
+
+---
+ content/libtermsurf_chromium/ts_compositor_bridge_mac.h  | 2 +-
+ content/libtermsurf_chromium/ts_compositor_bridge_mac.mm | 9 +++++----
+ 2 files changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_compositor_bridge_mac.h b/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
+index eb503b139f..49703bf344 100644
+--- a/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
++++ b/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
+@@ -35,7 +35,7 @@ class PersistentCompositorBridge : public ui::AcceleratedWidgetMacNSView {
+   void SetCallback(CALayerParamsCallback callback);
+ 
+   // ui::AcceleratedWidgetMacNSView:
+-  void AcceleratedWidgetCALayerParamsUpdated() override;
++  void AcceleratedWidgetCALayerParamsUpdated(gfx::CALayerParams params) override;
+ 
+  private:
+   raw_ptr<ui::AcceleratedWidgetMac> widget_;
+diff --git a/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm b/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
+index f8a5d5e72e..51d855fbce 100644
+--- a/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
++++ b/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
+@@ -26,10 +26,11 @@ void PersistentCompositorBridge::SetCallback(CALayerParamsCallback callback) {
+   callback_ = std::move(callback);
+ }
+ 
+-void PersistentCompositorBridge::AcceleratedWidgetCALayerParamsUpdated() {
+-  const auto* params = widget_->GetCALayerParams();
+-  if (params && callback_)
+-    callback_.Run(*params);
++void PersistentCompositorBridge::AcceleratedWidgetCALayerParamsUpdated(
++    gfx::CALayerParams params) {
++  if (callback_) {
++    callback_.Run(params);
++  }
+ }
+ 
+ }  // namespace content
+-- 
+2.54.0
+

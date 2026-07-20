@@ -1,0 +1,27 @@
+From 54407f03847f2140d228b113c600cd754639a196 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 16:01:38 -0500
+Subject: [PATCH 119/122] issue-924: link AVFoundation for system media capture
+ permissions
+
+---
+ content/libtermsurf_chromium/BUILD.gn | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d6f073118c..01278ce254 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -147,6 +147,9 @@ shared_library("libtermsurf_chromium") {
+       "//ui/accelerated_widget_mac",
+       "//ui/compositor",
+     ]
++    # system_media_capture_permissions_mac (pulled via chrome permissions)
++    # references AVCaptureDevice.
++    frameworks = [ "AVFoundation.framework" ]
+   }
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

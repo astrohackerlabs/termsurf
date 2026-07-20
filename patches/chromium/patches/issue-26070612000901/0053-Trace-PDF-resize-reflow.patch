@@ -1,0 +1,106 @@
+From aa2729158fcf54ecd6463a01a615929855a5c098 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 09:45:44 -0500
+Subject: [PATCH 53/90] Trace PDF resize reflow
+
+---
+ .../ts_browser_main_parts.cc                  | 11 ++++++++
+ pdf/pdf_view_web_plugin.cc                    | 28 +++++++++++++++++++
+ pdf/pdfium/pdfium_engine.cc                   |  9 ++++++
+ 3 files changed, 48 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index c6bee9b889..d466917950 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -677,6 +677,17 @@ void TsBrowserMainParts::ResizeTab(void* wc_handle,
+     float scale = view->GetDeviceScaleFactor();
+     gfx::Size logical(static_cast<int>(std::ceil(width / scale)),
+                       static_cast<int>(std::ceil(height / scale)));
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp8] resize-tab requested_width=" << width
++                << " requested_height=" << height
++                << " logical_width=" << logical.width()
++                << " logical_height=" << logical.height()
++                << " screen_x=" << screen_x << " screen_y=" << screen_y
++                << " screen_width=" << screen_width
++                << " screen_height=" << screen_height
++                << " screen_scale=" << screen_scale << " device_scale=" << scale
++                << " url=" << tab->shell->web_contents()->GetLastCommittedURL();
++    }
+ #if BUILDFLAG(IS_MAC)
+     MoveShellWindowToTermSurfScreenRect(tab->shell, screen_x, screen_y,
+                                         screen_width, screen_height,
+diff --git a/pdf/pdf_view_web_plugin.cc b/pdf/pdf_view_web_plugin.cc
+index becb9b627b..33c43b8a78 100644
+--- a/pdf/pdf_view_web_plugin.cc
++++ b/pdf/pdf_view_web_plugin.cc
+@@ -753,6 +753,20 @@ void PdfViewWebPlugin::UpdateGeometry(const gfx::Rect& window_rect,
+                                       const gfx::Rect& clip_rect,
+                                       const gfx::Rect& unobscured_rect,
+                                       bool is_visible) {
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp8] plugin-update-geometry window_x="
++              << window_rect.x() << " window_y=" << window_rect.y()
++              << " window_width=" << window_rect.width()
++              << " window_height=" << window_rect.height()
++              << " clip_x=" << clip_rect.x() << " clip_y=" << clip_rect.y()
++              << " clip_width=" << clip_rect.width()
++              << " clip_height=" << clip_rect.height()
++              << " unobscured_x=" << unobscured_rect.x()
++              << " unobscured_y=" << unobscured_rect.y()
++              << " unobscured_width=" << unobscured_rect.width()
++              << " unobscured_height=" << unobscured_rect.height()
++              << " is_visible=" << is_visible;
++  }
+   // An empty `window_rect` can be received here in the following cases:
+   // - If the embedded plugin size is 0.
+   // - If the embedded plugin size is not 0, it can come from re-layouts during
+@@ -2507,6 +2521,20 @@ void PdfViewWebPlugin::OnGeometryChanged(double old_zoom,
+                                          float old_device_scale) {
+   RecalculateAreas(old_zoom, old_device_scale);
+ 
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp8] plugin-geometry-changed plugin_width="
++              << plugin_rect_.width()
++              << " plugin_height=" << plugin_rect_.height()
++              << " available_x=" << available_area_.x()
++              << " available_y=" << available_area_.y()
++              << " available_width=" << available_area_.width()
++              << " available_height=" << available_area_.height()
++              << " old_zoom=" << old_zoom << " zoom=" << zoom_
++              << " old_device_scale=" << old_device_scale
++              << " device_scale=" << device_scale_
++              << " viewport_to_dip_scale=" << viewport_to_dip_scale_;
++  }
++
+   if (accessibility_state_ == AccessibilityState::kLoaded) {
+     PrepareAndSetAccessibilityViewportInfo();
+   }
+diff --git a/pdf/pdfium/pdfium_engine.cc b/pdf/pdfium/pdfium_engine.cc
+index 6a54f354ce..0f51267f23 100644
+--- a/pdf/pdfium/pdfium_engine.cc
++++ b/pdf/pdfium/pdfium_engine.cc
+@@ -776,10 +776,19 @@ void PDFiumEngine::PageOffsetUpdated(const gfx::Vector2d& page_offset) {
+ void PDFiumEngine::PluginSizeUpdated(const gfx::Size& size) {
+   CancelPaints();
+ 
++  const gfx::Size old_size = plugin_size_.value_or(gfx::Size());
+   plugin_size_ = size;
+   CalculateVisiblePages();
+   OnSelectionPositionChanged();
+ 
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp8] pdfium-plugin-size-updated old_width="
++              << old_size.width() << " old_height=" << old_size.height()
++              << " new_width=" << size.width()
++              << " new_height=" << size.height()
++              << " visible_pages=" << visible_pages_.size();
++  }
++
+   if (caret_) {
+     caret_->OnGeometryChanged();
+   }
+-- 
+2.54.0
+

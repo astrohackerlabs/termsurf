@@ -1,0 +1,43 @@
+From 8b882bca8e1ab5d35c5c594c0eab779485bcf282 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 18 May 2026 08:38:27 -0500
+Subject: [PATCH 008/119] Adapt Shell popup hook for Chromium 148
+
+Two new args knocked at Shell,
+Old override lost its hat.
+We let them pass unused,
+And sent popups to the mat.
+---
+ content/shell/browser/shell.cc | 2 ++
+ content/shell/browser/shell.h  | 2 ++
+ 2 files changed, 4 insertions(+)
+
+diff --git a/content/shell/browser/shell.cc b/content/shell/browser/shell.cc
+index 9e91ec368f..41798560ab 100644
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -373,6 +373,8 @@ WebContents* Shell::CreateCustomWebContents(
+     const GURL& opener_url,
+     const std::string& frame_name,
+     const GURL& target_url,
++    WindowOpenDisposition disposition,
++    const blink::mojom::WindowFeatures& window_features,
+     const StoragePartitionConfig& partition_config,
+     SessionStorageNamespace* session_storage_namespace) {
+   // Issue 750: No custom WebContents — creation is fully suppressed.
+diff --git a/content/shell/browser/shell.h b/content/shell/browser/shell.h
+index 4edb2c4dcc..83c0df7f00 100644
+--- a/content/shell/browser/shell.h
++++ b/content/shell/browser/shell.h
+@@ -137,6 +137,8 @@ class Shell : public WebContentsDelegate, public WebContentsObserver {
+       const GURL& opener_url,
+       const std::string& frame_name,
+       const GURL& target_url,
++      WindowOpenDisposition disposition,
++      const blink::mojom::WindowFeatures& window_features,
+       const StoragePartitionConfig& partition_config,
+       SessionStorageNamespace* session_storage_namespace) override;
+   void LoadingStateChanged(WebContents* source,
+-- 
+2.54.0
+

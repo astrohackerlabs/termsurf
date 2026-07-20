@@ -1,0 +1,60 @@
+From 5f030b508a334d29657e543eddd2c558b8002725 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:43:08 -0500
+Subject: [PATCH 106/122] issue-924: port MimeTypesHandler
+ Get/GetSupportedMimeTypes for Chromium 150
+
+GetHandler/mime_type_set/handler_url were removed; use Get(*ext),
+GetSupportedMimeTypes, and GetHandlerUrl(mime).
+---
+ ..._plugin_response_interceptor_url_loader_throttle.cc | 10 ++++++----
+ content/libtermsurf_chromium/ts_plugin_utils.cc        |  4 ++--
+ 2 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 8bc1e21673..867293a993 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -114,14 +114,16 @@ bool AddPdfStreamContainer(
+     return false;
+   }
+ 
+-  auto* handler = MimeTypesHandler::GetHandler(extension);
++  const MimeTypesHandler* handler = MimeTypesHandler::Get(*extension);
+   if (!handler || !handler->HasPlugin()) {
+     return false;
+   }
+ 
+-  GURL handler_url(
+-      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec() +
+-      handler->handler_url());
++  // Chromium 150 resolves the handler URL per MIME type.
++  const GURL handler_url = handler->GetHandlerUrl(pdf::kPDFMimeType);
++  if (!handler_url.is_valid()) {
++    return false;
++  }
+   auto stream_container = std::make_unique<extensions::StreamContainer>(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+diff --git a/content/libtermsurf_chromium/ts_plugin_utils.cc b/content/libtermsurf_chromium/ts_plugin_utils.cc
+index 45c8077605..2a86146445 100644
+--- a/content/libtermsurf_chromium/ts_plugin_utils.cc
++++ b/content/libtermsurf_chromium/ts_plugin_utils.cc
+@@ -28,12 +28,12 @@ base::flat_map<std::string, std::string> GetTsPluginMimeTypeToExtensionIdMap(
+     return result;
+   }
+ 
+-  const auto* handler = MimeTypesHandler::GetHandler(extension);
++  const auto* handler = MimeTypesHandler::Get(*extension);
+   if (!handler) {
+     return result;
+   }
+ 
+-  for (const auto& mime_type : handler->mime_type_set()) {
++  for (const auto& mime_type : handler->GetSupportedMimeTypes()) {
+     if (mime_type == pdf::kPDFMimeType) {
+       result[mime_type] = extension_misc::kPdfExtensionId;
+     }
+-- 
+2.50.1 (Apple Git-155)
+

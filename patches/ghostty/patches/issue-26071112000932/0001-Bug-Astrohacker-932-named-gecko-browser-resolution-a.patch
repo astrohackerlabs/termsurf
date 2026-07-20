@@ -1,0 +1,166 @@
+From 5b46a9844662ac7ec751362a5e675b85ca07dd70 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 22:03:13 -0500
+Subject: [PATCH] Bug Astrohacker 932: named gecko browser resolution and safe
+ argv (Exp9)
+
+Resolve ASTROHACKER_GECKO_PATH / reserved installed path; spawn ah-geckod
+without Chromium-only flags; unit test browser resolution named gecko.
+---
+ src/apprt/termsurf.zig | 112 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 112 insertions(+)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 00e3099ff..918855b6d 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -50,6 +50,7 @@ const default_devtools_reservation_timeout_ms: i64 = 15_000;
+ const chromium_path_env = "ASTROHACKER_CHROMIUM_PATH";
+ const webkit_path_env = "ASTROHACKER_WEBKIT_PATH";
+ const ladybird_path_env = "ASTROHACKER_LADYBIRD_PATH";
++const gecko_path_env = "ASTROHACKER_GECKO_PATH";
+ // Legacy dual-read aliases (deprecated codenames; still accepted one cycle).
+ const chromium_path_env_legacy = "TERMSURF_ROAMIUM_PATH";
+ const webkit_path_env_legacy = "TERMSURF_SURFARI_PATH";
+@@ -60,6 +61,8 @@ const ladybird_path_env_legacy_installed = "TERMSURF_INSTALLED_GIRLBAT_PATH";
+ const installed_chromium_path = "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd";
+ const installed_webkit_path = "/opt/homebrew/opt/astrohacker-terminal-ah-webkitd/ah-webkitd";
+ const installed_ladybird_path = "/opt/homebrew/opt/astrohacker-terminal-ah-ladybirdd/bin/ah-ladybirdd";
++// Reserved packaging path only — not a Homebrew ship claim for Exp9.
++const installed_gecko_path = "/opt/homebrew/opt/astrohacker-terminal-ah-geckod/ah-geckod";
+ // Compat names used by older test helpers (same values as installed_*).
+ const installed_roamium_path = installed_chromium_path;
+ const installed_surfari_path = installed_webkit_path;
+@@ -2096,6 +2099,29 @@ fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]cons
+         );
+     }
+ 
++    if (std.mem.eql(u8, browser, "gecko")) {
++        // No legacy aliases for gecko — primary env or reserved installed default only.
++        if (absoluteEnvPath(gecko_path_env)) |resolved| {
++            log.info(
++                "SetOverlay: named browser resolved browser={s} env={s} path={s}",
++                .{ browser, gecko_path_env, resolved },
++            );
++            return resolved;
++        }
++        if (is_debug) {
++            log.warn(
++                "SetOverlay: named browser unresolved browser={s} primary_env={s}",
++                .{ browser, gecko_path_env },
++            );
++            return null;
++        }
++        log.info(
++            "SetOverlay: named browser resolved browser={s} installed_path={s}",
++            .{ browser, installed_gecko_path },
++        );
++        return installed_gecko_path;
++    }
++
+     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
+     return null;
+ }
+@@ -4437,6 +4463,26 @@ fn buildBrowserSpawnArgv(
+         log.warn("browser spawn skipped: user-data-dir arg too long", .{});
+         return null;
+     };
++    // Gecko-safe argv: ah-geckod rejects Chromium-only flags.
++    const gecko_safe = std.mem.eql(u8, browser_name, "gecko") or
++        std.mem.endsWith(u8, browser_executable, "ah-geckod");
++    if (gecko_safe) {
++        if (!out.push(browser_executable) or
++            !out.push(ipc_arg) or
++            !out.push(browser_name_arg) or
++            !out.push(data_arg) or
++            !out.push(listen_arg))
++        {
++            log.warn("browser spawn skipped: gecko argv overflow", .{});
++            return null;
++        }
++        log.info(
++            "browser spawn argv gecko-safe browser={s} path={s}",
++            .{ browser_name, browser_executable },
++        );
++        return out.slice();
++    }
++
+     const log_file = buildBrowserLogFile(&out.log_file_buf) orelse return null;
+     const log_arg = std.fmt.bufPrint(&out.log_arg_buf, "--log-file={s}", .{log_file}) catch {
+         log.warn("browser spawn skipped: log-file arg too long", .{});
+@@ -6203,6 +6249,72 @@ fn testBrowserResolution() !void {
+     try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
+ }
+ 
++test "browser resolution named gecko" {
++    const testing = std.testing;
++    const gecko: [:0]const u8 = "gecko";
++    const fake_primary: [:0]const u8 = "/tmp/astrohacker-primary-gecko";
++    const invalid: [:0]const u8 = "relative-gecko";
++
++    _ = c.unsetenv(gecko_path_env);
++
++    // debug unset → unresolved
++    try testing.expect(resolveBrowserExecutableForBuild(gecko, true) == null);
++    // release unset → reserved installed path string
++    try testing.expectEqualStrings(installed_gecko_path, resolveBrowserExecutableForBuild(gecko, false).?);
++
++    // absolute path passthrough keeps identity path separate from name
++    try testing.expectEqualStrings(
++        "/tmp/absolute-ah-geckod",
++        resolveBrowserExecutableForBuild("/tmp/absolute-ah-geckod", true).?,
++    );
++
++    // primary absolute wins
++    if (c.setenv(gecko_path_env, fake_primary, 1) != 0) return error.SetenvFailed;
++    try testing.expectEqualStrings(fake_primary, resolveBrowserExecutableForBuild(gecko, true).?);
++    try testing.expectEqualStrings(fake_primary, resolveBrowserExecutableForBuild(gecko, false).?);
++
++    // empty/relative primary → debug unresolved; release falls to installed default
++    if (c.setenv(gecko_path_env, "", 1) != 0) return error.SetenvFailed;
++    try testing.expect(resolveBrowserExecutableForBuild(gecko, true) == null);
++    try testing.expectEqualStrings(installed_gecko_path, resolveBrowserExecutableForBuild(gecko, false).?);
++
++    if (c.setenv(gecko_path_env, invalid, 1) != 0) return error.SetenvFailed;
++    try testing.expect(resolveBrowserExecutableForBuild(gecko, true) == null);
++    try testing.expectEqualStrings(installed_gecko_path, resolveBrowserExecutableForBuild(gecko, false).?);
++
++    // unsupported still null
++    try testing.expect(resolveBrowserExecutableForBuild("not-a-browser", true) == null);
++
++    // Gecko-safe argv: no chromium flags
++    var gecko_args: BrowserSpawnArgv = .{};
++    const argv = buildBrowserSpawnArgv(
++        &gecko_args,
++        "/tmp/ah-geckod",
++        "gecko",
++        "default",
++        "/tmp/gui.sock",
++        "/tmp/listen.sock",
++        1234,
++    ) orelse return error.ArgvBuildFailed;
++    try testing.expectEqualStrings("/tmp/ah-geckod", argv[0]);
++    var i: usize = 0;
++    while (i < argv.len) : (i += 1) {
++        try testing.expect(!std.mem.eql(u8, argv[i], "--hidden"));
++        try testing.expect(!std.mem.eql(u8, argv[i], "--no-sandbox"));
++        try testing.expect(!std.mem.eql(u8, argv[i], "--enable-logging"));
++        try testing.expect(!std.mem.startsWith(u8, argv[i], "--log-file="));
++    }
++    // browser-name remains gecko (protocol identity)
++    var saw_browser_name = false;
++    i = 0;
++    while (i < argv.len) : (i += 1) {
++        if (std.mem.eql(u8, argv[i], "--browser-name=gecko")) saw_browser_name = true;
++    }
++    try testing.expect(saw_browser_name);
++
++    _ = c.unsetenv(gecko_path_env);
++}
++
+ test "Surfari runtime framework path follows executable directory" {
+     const testing = std.testing;
+     try testing.expect(shouldSupplySurfariRuntimeFrameworkPath("webkit", null));
+-- 
+2.54.0
+

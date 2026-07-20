@@ -1,0 +1,502 @@
+From f7232ff3ce0f796007589102a294b9fcd32fb1e3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 09:59:03 -0500
+Subject: [PATCH 03/17] Let the window carry Back
+
+One arrow leaves the glass,
+finds its pane and tab by name,
+and no dead road answers.
+---
+ .../App/macOS/ghostty-bridging-header.h       |   1 +
+ .../Surface View/SurfaceView_AppKit.swift     | 111 +++++++++----
+ src/apprt/termsurf.zig                        | 147 +++++++++++++-----
+ src/main_c.zig                                |  10 ++
+ 4 files changed, 208 insertions(+), 61 deletions(-)
+
+diff --git a/macos/Sources/App/macOS/ghostty-bridging-header.h b/macos/Sources/App/macOS/ghostty-bridging-header.h
+index 50e38af3d..b29e31251 100644
+--- a/macos/Sources/App/macOS/ghostty-bridging-header.h
++++ b/macos/Sources/App/macOS/ghostty-bridging-header.h
+@@ -8,3 +8,4 @@ void termsurf_pane_focus_changed(const char *pane_id, int focused);
+ void termsurf_gui_active_changed(int active);
+ void termsurf_hello_config_changed(const char *homepage, const char *browsers);
+ void termsurf_color_scheme_changed(int dark);
++int termsurf_navigation_action_for_pane(const char *pane_id, const char *action);
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 8b084b8f7..61581fd21 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -256,8 +256,10 @@ extension Ghostty {
+     private var termsurfOverlayContextID: UInt64 = 0
+     private var termsurfOverlayFrame: CGRect?
+     private var termsurfActiveOverlay: TermSurfOverlayRequest?
++    private var termsurfActiveIOSurfaceOverlay: TermSurfIOSurfaceOverlayRequest?
+     private var termsurfDeferredOverlay: TermSurfOverlayRequest?
+     private var termsurfPressedBrowserKeys: Set<UInt16> = []
++    private var termsurfSemanticNavigationKeys: Set<UInt16> = []
+     private var termsurfCursorType: Int64 = 0
+     private var termsurfMouseOverOverlay: Bool = false
+ 
+@@ -627,6 +629,7 @@ extension Ghostty {
+       }
+ 
+       termsurfActiveOverlay = nil
++      termsurfActiveIOSurfaceOverlay = nil
+       if applyTermSurfOverlay(
+         request,
+         surfaceLayer: surfaceLayer,
+@@ -808,14 +811,22 @@ extension Ghostty {
+ 
+       termsurfDeferredOverlay = nil
+       termsurfActiveOverlay = nil
+-      if !applyTermSurfIOSurfaceOverlay(request, surfaceLayer: surfaceLayer) {
++      termsurfActiveIOSurfaceOverlay = nil
++      if !applyTermSurfIOSurfaceOverlay(
++        request,
++        surfaceLayer: surfaceLayer,
++        replaceSurface: true
++      ) {
+         Unmanaged.passUnretained(surface).release()
++      } else {
++        termsurfActiveIOSurfaceOverlay = request
+       }
+     }
+ 
+     private func applyTermSurfIOSurfaceOverlay(
+       _ request: TermSurfIOSurfaceOverlayRequest,
+-      surfaceLayer: CALayer
++      surfaceLayer: CALayer,
++      replaceSurface: Bool
+     ) -> Bool {
+       let grid = "\(request.width)x\(request.height)+\(request.col)+\(request.row)"
+       let browserPixel = "\(request.pixelWidth)x\(request.pixelHeight)"
+@@ -887,10 +898,11 @@ extension Ghostty {
+         }()
+       iosurfaceLayer.frame = CGRect(origin: .zero, size: frame.size)
+       iosurfaceLayer.contentsScale = backingScale
+-      iosurfaceLayer.contents = request.surface
+-
+-      releaseTermSurfIOSurfaceOverlayRetain()
+-      termsurfOverlayIOSurface = request.surface
++      if replaceSurface {
++        iosurfaceLayer.contents = request.surface
++        releaseTermSurfIOSurfaceOverlayRetain()
++        termsurfOverlayIOSurface = request.surface
++      }
+ 
+       let appkitPixelWidth = UInt64((frame.width * backingScale).rounded())
+       let appkitPixelHeight = UInt64((frame.height * backingScale).rounded())
+@@ -923,25 +935,41 @@ extension Ghostty {
+ 
+     private func replayActiveTermSurfOverlayAfterFrameResize() {
+       dispatchPrecondition(condition: .onQueue(.main))
+-      guard let request = termsurfActiveOverlay else { return }
+-      guard termsurfOverlayRootLayer != nil,
+-        termsurfOverlayPositioningLayer != nil,
+-        termsurfOverlayHostLayer != nil
+-      else { return }
+       guard let surfaceLayer = layer else { return }
+ 
+-      _ = applyTermSurfOverlay(
+-        request,
+-        surfaceLayer: surfaceLayer,
+-        event: "presented_replay",
+-        pixelEventNote: "reported-presented-pixels-frame-size-replay",
+-        geometryNote: "overlay-presented-frame-size-replay")
++      if let request = termsurfActiveOverlay {
++        guard termsurfOverlayRootLayer != nil,
++          termsurfOverlayPositioningLayer != nil,
++          termsurfOverlayHostLayer != nil
++        else { return }
++
++        _ = applyTermSurfOverlay(
++          request,
++          surfaceLayer: surfaceLayer,
++          event: "presented_replay",
++          pixelEventNote: "reported-presented-pixels-frame-size-replay",
++          geometryNote: "overlay-presented-frame-size-replay")
++        return
++      }
++
++      if let request = termsurfActiveIOSurfaceOverlay {
++        guard termsurfOverlayRootLayer != nil,
++          termsurfOverlayPositioningLayer != nil,
++          termsurfOverlayIOSurfaceLayer != nil,
++          termsurfOverlayIOSurface != nil
++        else { return }
++        _ = applyTermSurfIOSurfaceOverlay(
++          request,
++          surfaceLayer: surfaceLayer,
++          replaceSurface: false)
++      }
+     }
+ 
+     func clearTermSurfOverlay() {
+       termSurfLogGeometry(event: "clear", note: "clearing-overlay")
+       removeTermSurfOverlayLayers(resetDeferred: true)
+       termsurfPressedBrowserKeys.removeAll()
++      termsurfSemanticNavigationKeys.removeAll()
+       termsurfCursorType = 0
+       termsurfMouseOverOverlay = false
+       NSCursor.arrow.set()
+@@ -967,6 +995,7 @@ extension Ghostty {
+       termsurfOverlayContextID = 0
+       termsurfOverlayFrame = nil
+       termsurfActiveOverlay = nil
++      termsurfActiveIOSurfaceOverlay = nil
+       releaseTermSurfIOSurfaceOverlayRetain()
+       if resetDeferred {
+         termsurfDeferredOverlay = nil
+@@ -1675,20 +1704,25 @@ extension Ghostty {
+       let pos = self.convert(event.locationInWindow, from: nil)
+       mouseLocationInSurface = pos
+ 
++      // Keep the terminal plane's pointer position current even while the
++      // browser overlay consumes the same move. Without this, returning from
++      // the viewport to TUI chrome can be deduplicated as an unchanged cell,
++      // leaving controls unable to enter or clear their hover state.
++      if let surfaceModel {
++        let mouseEvent = Ghostty.Input.MousePosEvent(
++          x: pos.x,
++          y: frame.height - pos.y,
++          mods: .init(nsFlags: event.modifierFlags)
++        )
++        surfaceModel.sendMousePos(mouseEvent)
++      }
++
+       if forwardTermSurfMouseMove(event) {
+         return
+       }
+ 
+       guard let surfaceModel else { return }
+ 
+-      // Convert window position to view position. Note (0, 0) is bottom left.
+-      let mouseEvent = Ghostty.Input.MousePosEvent(
+-        x: pos.x,
+-        y: frame.height - pos.y,
+-        mods: .init(nsFlags: event.modifierFlags)
+-      )
+-      surfaceModel.sendMousePos(mouseEvent)
+-
+       // Handle focus-follows-mouse
+       if let window,
+         let controller = window.windowController as? BaseTerminalController,
+@@ -1947,6 +1981,10 @@ extension Ghostty {
+     }
+ 
+     override func keyUp(with event: NSEvent) {
++      if termsurfSemanticNavigationKeys.remove(event.keyCode) != nil {
++        return
++      }
++
+       if forwardTermSurfKeyUp(event) {
+         return
+       }
+@@ -2003,6 +2041,26 @@ extension Ghostty {
+         return false
+       }
+ 
++      if event.keyCode == 0x21, isTermSurfBrowserNavigationKeyEquivalent(event),
++        termSurfScriptHasActiveOverlay
++      {
++        let paneID = id.uuidString
++        let accepted: Bool = paneID.withCString { paneIDPointer in
++          "back".withCString { actionPointer in
++            termsurf_navigation_action_for_pane(paneIDPointer, actionPointer) != 0
++          }
++        }
++        termsurfSemanticNavigationKeys.insert(event.keyCode)
++        termSurfLogGeometry(
++          event:
++            accepted
++            ? "perform_key_equivalent_browser_navigation_action"
++            : "perform_key_equivalent_browser_navigation_disabled",
++          note: "key_code=33 action=back"
++        )
++        return true
++      }
++
+       if isTermSurfBrowserNavigationKeyEquivalent(event) {
+         if forwardTermSurfKeyDown(event) {
+           termSurfLogGeometry(
+@@ -2324,7 +2382,8 @@ extension Ghostty {
+     }
+ 
+     private var termSurfScriptHasActiveOverlay: Bool {
+-      termsurfOverlayHostLayer != nil && termsurfOverlayFrame != nil
++      (termsurfOverlayHostLayer != nil || termsurfOverlayIOSurfaceLayer != nil)
++        && termsurfOverlayFrame != nil
+     }
+ 
+     private func termSurfScriptValidateOverlayPoint(x: Double, y: Double) throws {
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 7a49d42a4..c7513c741 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -179,6 +179,10 @@ var test_iosurface_present_count: usize = 0;
+ var test_last_iosurface_present_surface: ?*anyopaque = null;
+ var test_last_iosurface_present_attachment_id: u64 = 0;
+ var test_last_iosurface_present_generation: u64 = 0;
++var test_last_iosurface_present_col: u64 = 0;
++var test_last_iosurface_present_row: u64 = 0;
++var test_last_iosurface_present_width: u64 = 0;
++var test_last_iosurface_present_height: u64 = 0;
+ var test_received_surface_release_count: usize = 0;
+ var test_iosurface_bridge_retain_count: usize = 0;
+ var test_iosurface_bridge_release_count: usize = 0;
+@@ -196,16 +200,16 @@ fn testTermsurfPresentIOSurfaceOverlay(
+     generation: u64,
+ ) callconv(.c) void {
+     _ = pane_id;
+-    _ = col;
+-    _ = row;
+-    _ = width;
+-    _ = height;
+     _ = pixel_width;
+     _ = pixel_height;
+     test_iosurface_present_count += 1;
+     test_last_iosurface_present_surface = surface;
+     test_last_iosurface_present_attachment_id = attachment_id;
+     test_last_iosurface_present_generation = generation;
++    test_last_iosurface_present_col = col;
++    test_last_iosurface_present_row = row;
++    test_last_iosurface_present_width = width;
++    test_last_iosurface_present_height = height;
+ }
+ 
+ fn testTermsurfClearOverlay(pane_id: [*:0]const u8) callconv(.c) void {
+@@ -1886,6 +1890,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+     var spawn_listen_socket_len: usize = 0;
+     var should_record_child: bool = false;
+     var overlay_snapshot: ?OverlaySnapshot = null;
++    var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
+ 
+     state_mutex.lock();
+ 
+@@ -1904,6 +1909,11 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+         const server_index = findServer(profile, browser);
+         const pane_count = if (server_index) |index| servers[index].pane_count else 0;
+         overlay_snapshot = snapshotOverlay(&panes[pane_index]);
++        if (server_index) |index| {
++            if (paneRenderSurfaceAttachmentMatches(&panes[pane_index], &servers[index].render_side_channel)) {
++                iosurface_snapshot = snapshotIOSurfaceOverlay(&panes[pane_index], &servers[index].render_side_channel);
++            }
++        }
+         log.info(
+             "SetOverlay: updated pane_id={s} profile={s} browser={s} pane_count={}",
+             .{ pane_id, profile, browser, pane_count },
+@@ -1911,6 +1921,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+         geometryTracePane("set_overlay_update", &panes[pane_index], "updated-existing-pane");
+         state_mutex.unlock();
+         if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
++        if (iosurface_snapshot) |snapshot| presentIOSurfaceOverlay(&snapshot);
+         return;
+     }
+ 
+@@ -3072,43 +3083,29 @@ fn handleNavigationAction(
+         return false;
+     }
+ 
+-    state_mutex.lock();
+-    const pane_index = findPane(pane_id) orelse {
+-        state_mutex.unlock();
+-        log.warn("NavigationAction: unknown pane_id={s}", .{pane_id});
+-        return false;
+-    };
+-    const pane = &panes[pane_index];
+-    if (pane.tui_fd != tui_fd or pane.tab_id <= 0) {
+-        state_mutex.unlock();
+-        log.warn(
+-            "NavigationAction: unowned or unready pane_id={s} tab_id={} fd={}",
+-            .{ pane_id, pane.tab_id, tui_fd },
+-        );
+-        return false;
+-    }
+-    const server_index = findServer(pane.profileName(), pane.browserName()) orelse {
+-        state_mutex.unlock();
+-        return false;
+-    };
+-    if (servers[server_index].attached_fd < 0) {
+-        state_mutex.unlock();
+-        return false;
+-    }
+-    var snapshot: BrowserInputSnapshot = .{
+-        .browser_fd = servers[server_index].attached_fd,
+-        .tab_id = pane.tab_id,
+-    };
+-    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) {
+-        state_mutex.unlock();
++    return sendNavigationActionForPaneOwned(pane_id, action, tui_fd);
++}
++
++pub fn sendNavigationActionForPane(pane_id: []const u8, action: []const u8) bool {
++    return sendNavigationActionForPaneOwned(pane_id, action, null);
++}
++
++fn sendNavigationActionForPaneOwned(
++    pane_id: []const u8,
++    action: []const u8,
++    required_tui_fd: ?std.posix.fd_t,
++) bool {
++    if (!std.mem.eql(u8, action, "back")) {
++        log.warn("NavigationAction: invalid product action pane_id={s} action={s}", .{ pane_id, action });
+         return false;
+     }
+-    state_mutex.unlock();
++
++    const snapshot = snapshotEnabledBackAction(pane_id, required_tui_fd) orelse return false;
+ 
+     var forwarded: c.Termsurf__NavigationAction = undefined;
+     c.termsurf__navigation_action__init(&forwarded);
+     forwarded.tab_id = snapshot.tab_id;
+-    forwarded.action = action_req.*.action;
++    forwarded.action = @constCast("back");
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -3129,6 +3126,45 @@ fn handleNavigationAction(
+     return true;
+ }
+ 
++fn snapshotEnabledBackAction(
++    pane_id: []const u8,
++    required_tui_fd: ?std.posix.fd_t,
++) ?BrowserInputSnapshot {
++    state_mutex.lock();
++    defer state_mutex.unlock();
++
++    const pane_index = findPane(pane_id) orelse {
++        log.warn("NavigationAction: unknown pane_id={s}", .{pane_id});
++        return null;
++    };
++    const pane = &panes[pane_index];
++    if (required_tui_fd) |tui_fd| {
++        if (pane.tui_fd != tui_fd) {
++            log.warn(
++                "NavigationAction: unowned pane_id={s} tab_id={} fd={}",
++                .{ pane_id, pane.tab_id, tui_fd },
++            );
++            return null;
++        }
++    }
++    if (pane.tab_id <= 0 or !pane.can_go_back) {
++        log.info(
++            "NavigationAction disabled pane_id={s} tab_id={} action=back",
++            .{ pane_id, pane.tab_id },
++        );
++        return null;
++    }
++    const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
++    if (servers[server_index].attached_fd < 0) return null;
++
++    var snapshot: BrowserInputSnapshot = .{
++        .browser_fd = servers[server_index].attached_fd,
++        .tab_id = pane.tab_id,
++    };
++    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
++    return snapshot;
++}
++
+ fn sendNavigationStateToTui(snapshot: *const NavigationStateSnapshot) !void {
+     var state: c.Termsurf__NavigationState = undefined;
+     c.termsurf__navigation_state__init(&state);
+@@ -6027,6 +6063,27 @@ test "termsurf render surface stores matched Ladybird attachment metadata" {
+     try testing.expectEqual(@as(u64, 3), test_last_iosurface_present_generation);
+     try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_retain_count);
+     try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_release_count);
++
++    var resized_overlay: c.Termsurf__SetOverlay = undefined;
++    c.termsurf__set_overlay__init(&resized_overlay);
++    resized_overlay.pane_id = @constCast("pane-ladybird");
++    resized_overlay.profile = @constCast(profile.ptr);
++    resized_overlay.browser = @constCast(girlbat.ptr);
++    resized_overlay.url = @constCast("https://example.test/ladybird");
++    resized_overlay.col = 1;
++    resized_overlay.row = 5;
++    resized_overlay.width = 71;
++    resized_overlay.height = 16;
++    resized_overlay.browsing = 1;
++    handleSetOverlay(tui[0], &resized_overlay);
++
++    try testing.expectEqual(@as(usize, 2), test_iosurface_present_count);
++    try testing.expectEqual(@as(u64, 1), test_last_iosurface_present_col);
++    try testing.expectEqual(@as(u64, 5), test_last_iosurface_present_row);
++    try testing.expectEqual(@as(u64, 71), test_last_iosurface_present_width);
++    try testing.expectEqual(@as(u64, 16), test_last_iosurface_present_height);
++    try testing.expectEqual(@as(usize, 2), test_iosurface_bridge_retain_count);
++    try testing.expectEqual(@as(usize, 2), test_iosurface_bridge_release_count);
+ }
+ 
+ test "termsurf render surface defers Ladybird attachment until side-channel handshake" {
+@@ -6575,6 +6632,10 @@ fn resetTermsurfStateForTest() void {
+     test_last_iosurface_present_surface = null;
+     test_last_iosurface_present_attachment_id = 0;
+     test_last_iosurface_present_generation = 0;
++    test_last_iosurface_present_col = 0;
++    test_last_iosurface_present_row = 0;
++    test_last_iosurface_present_width = 0;
++    test_last_iosurface_present_height = 0;
+     test_received_surface_release_count = 0;
+     test_iosurface_bridge_retain_count = 0;
+     test_iosurface_bridge_release_count = 0;
+@@ -7057,6 +7118,19 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     try testing.expect(panes[0].can_go_back);
+     try testing.expect(!panes[1].can_go_back);
+ 
++    try testing.expect(sendNavigationActionForPane("pane-a", "back"));
++    const product_forwarded = try readTestMessage(browser_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(product_forwarded, null);
++    try testing.expectEqual(
++        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION),
++        product_forwarded.*.msg_case,
++    );
++    try testing.expectEqual(@as(i64, 77), product_forwarded.*.unnamed_0.navigation_action.*.tab_id);
++    try testing.expectEqualStrings("back", cString(product_forwarded.*.unnamed_0.navigation_action.*.action));
++    try testing.expect(!sendNavigationActionForPane("pane-b", "back"));
++    try testing.expect(!sendNavigationActionForPane("missing-pane", "back"));
++    try testing.expect(!sendNavigationActionForPane("pane-a", "forward"));
++
+     action.action = @constCast("forward");
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
+     action.action = @constCast("refresh");
+@@ -7067,6 +7141,7 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     try testing.expect(!handleNavigationAction(tui_b[0], &action));
+     action.tab_id = 77;
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
++    action.tab_id = 0;
+ 
+     var state: c.Termsurf__NavigationState = undefined;
+     c.termsurf__navigation_state__init(&state);
+@@ -7099,6 +7174,8 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_go_back);
+     try testing.expect(!panes[0].can_go_back);
+     try testing.expect(!panes[1].can_go_back);
++    try testing.expect(!sendNavigationActionForPane("pane-a", "back"));
++    try testing.expect(!handleNavigationAction(tui_a[0], &action));
+ }
+ 
+ test "termsurf browser disconnect clears Back only for affected owners" {
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 8cc800af9..82d606598 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -201,6 +201,16 @@ pub export fn termsurf_forward_key_event(
+     )) 1 else 0;
+ }
+ 
++pub export fn termsurf_navigation_action_for_pane(
++    pane_id: [*:0]const u8,
++    action: [*:0]const u8,
++) c_int {
++    return if (termsurf.sendNavigationActionForPane(
++        std.mem.span(pane_id),
++        std.mem.span(action),
++    )) 1 else 0;
++}
++
+ pub export fn termsurf_forward_mouse_event(
+     pane_id: [*:0]const u8,
+     event_type: [*:0]const u8,
+-- 
+2.50.1 (Apple Git-155)
+

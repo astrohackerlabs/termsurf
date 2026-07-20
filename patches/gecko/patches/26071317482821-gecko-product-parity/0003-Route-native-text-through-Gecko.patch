@@ -1,0 +1,917 @@
+From a86be3a343732921d82b0b2abd7cf4b6116b235b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 21:20:26 -0500
+Subject: [PATCH] Route native text through Gecko
+
+Text crosses the hidden pane,
+Compositions bloom without chrome.
+When the final tab goes quiet,
+Main-thread shutdown walks it home.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 528 ++++++++++++++----
+ dom/interfaces/base/nsIRemoteTab.idl          |  10 +-
+ dom/ipc/BrowserHost.cpp                       |  15 +
+ 3 files changed, 429 insertions(+), 124 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index 85790d10d3ef..a58f380fc948 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -210,9 +210,7 @@ async function runVisible(urlStr, headless, hold) {
+   // Ensure size/position
+   try {
+     win.resizeTo(800, 600);
+-    if (
+-      Services.env.get("ASTROHACKER_GECKO_SURFACE_OWNER") !== "hidden"
+-    ) {
++    if (Services.env.get("ASTROHACKER_GECKO_SURFACE_OWNER") !== "hidden") {
+       win.moveTo(100, 100);
+     }
+   } catch (e) {}
+@@ -276,7 +274,7 @@ async function runVisible(urlStr, headless, hold) {
+     try {
+       title = browser.contentTitle || win.gBrowser?.contentTitle || "";
+     } catch (e) {}
+-    if (title.includes("EXP3_FIXTURE_OK")) {
++    if (title) {
+       break;
+     }
+   }
+@@ -299,7 +297,7 @@ async function runVisible(urlStr, headless, hold) {
+   let outerOk = (win.outerWidth | 0) >= 100 && (win.outerHeight | 0) >= 100;
+   if (
+     !headless &&
+-    marker &&
++    title.length > 0 &&
+     outerOk &&
+     finalUri &&
+     finalUri !== "about:blank"
+@@ -388,8 +386,7 @@ async function runVisible(urlStr, headless, hold) {
+  * @param {MozBrowser} browser The browser whose content rect is resized.
+  */
+ function startSurfaceControlLoop(win, browser) {
+-  const path =
+-    Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
++  const path = Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
+   if (!path) {
+     dump("surface_owner_control=0 reason=no_path\n");
+     return;
+@@ -535,16 +532,20 @@ function startSurfaceControlLoop(win, browser) {
+  *   seq=<n> op=query
+  *
+  * Status file (same path + ".status") written after each command:
+- *   seq=<n> ok=1 title=... status=... input_value=... pid=... content_w=... content_h=...
++ *   seq=<n> ok=1 title_enc=... status_enc=... input_value_enc=... pid=... content_w=... content_h=...
+  *   native_widget_path=1
+  */
+ function startInputControlLoop(win, browser) {
+   let path = Services.env.get("ASTROHACKER_GECKO_INPUT_CONTROL_PATH") || "";
+   if (!path) {
+     // Default beside surface control / profile if set.
+-    let surface = Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
++    let surface =
++      Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
+     if (surface) {
+-      path = surface.replace(/astrohacker_surface_control\.txt$/, "astrohacker_input_control.txt");
++      path = surface.replace(
++        /astrohacker_surface_control\.txt$/,
++        "astrohacker_input_control.txt"
++      );
+       if (path === surface) {
+         path = surface + ".input";
+       }
+@@ -559,6 +560,7 @@ function startInputControlLoop(win, browser) {
+ 
+   // Content-process DOM dispatch (reliable page effects) + chrome native path.
+   ensureDomDispatchFrameScript(browser);
++  ensureGenericTextInputScript(browser);
+ 
+   let lastSeq = 0;
+   let focused = true;
+@@ -631,8 +633,8 @@ function ensureSelectFrameScript(browser) {
+     'if(phase==="mousedown"||phase==="mouseup"||phase==="mousemove"||phase==="click_status"){' +
+     'var x=parseFloat(d.start||d.x||"0")||0,y=parseFloat(d.end||d.y||"0")||0;' +
+     'var cc=parseInt(d.expect||d.data||"1",10)||1;if(cc<1)cc=1;' +
+-    'var btn=0;' +
+-    'var mods=0;' +
++    "var btn=0;" +
++    "var mods=0;" +
+     'var t=phase==="mousemove"?"mousemove":(phase==="mouseup"?"mouseup":"mousedown");' +
+     'if(phase==="click_status"&&statusEl){try{statusEl.click();result.ok=1;}catch(e){result.error=String(e);}}' +
+     "else{" +
+@@ -645,20 +647,20 @@ function ensureSelectFrameScript(browser) {
+     "var delivered=0;" +
+     "try{" +
+     // Tier2: synthesizeMouseEvent with real (non-DOM-synthesized) path
+-    "if(typeof content.synthesizeMouseEvent===\"function\"){" +
++    'if(typeof content.synthesizeMouseEvent==="function"){' +
+     "content.synthesizeMouseEvent(t,x,y,{button:btn,clickCount:cc,modifiers:mods},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});" +
+     'if(t==="mouseup"&&cc>=2){content.synthesizeMouseEvent("dblclick",x,y,{button:btn,clickCount:2,modifiers:mods},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});}' +
+-    "delivered=1;result.error+=(result.error?\";\":\"\")+\"tier2_synth=1\";" +
++    'delivered=1;result.error+=(result.error?";":"")+"tier2_synth=1";' +
+     "}" +
+-    "}catch(e){result.error+=(result.error?\";\":\"\")+\"tier2_fail=\"+String(e);}" +
++    '}catch(e){result.error+=(result.error?";":"")+"tier2_fail="+String(e);}' +
+     "if(!delivered){try{" +
+     "var wu=content.windowUtils;" +
+-    "if(wu&&typeof wu.sendMouseEvent===\"function\"){" +
++    'if(wu&&typeof wu.sendMouseEvent==="function"){' +
+     "wu.sendMouseEvent(t,x,y,btn,cc,mods,false,0,0,false,false);" +
+-    "delivered=1;result.error+=(result.error?\";\":\"\")+\"tier2_wu=1\";" +
++    'delivered=1;result.error+=(result.error?";":"")+"tier2_wu=1";' +
+     "}" +
+-    "}catch(e2){result.error+=(result.error?\";\":\"\")+\"tier2_wu_fail=\"+String(e2);}}" +
+-    "if(!delivered){try{var tgt=edit||hit||doc.body;tgt.dispatchEvent(new content.MouseEvent(t,{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,button:btn,detail:cc}));delivered=1;result.error+=(result.error?\";\":\"\")+\"tier_dom_dispatch=1\";}catch(e3){result.error+=(result.error?\";\":\"\")+\"tier_dom_fail=\"+String(e3);}}" +
++    '}catch(e2){result.error+=(result.error?";":"")+"tier2_wu_fail="+String(e2);}}' +
++    'if(!delivered){try{var tgt=edit||hit||doc.body;tgt.dispatchEvent(new content.MouseEvent(t,{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,button:btn,detail:cc}));delivered=1;result.error+=(result.error?";":"")+"tier_dom_dispatch=1";}catch(e3){result.error+=(result.error?";":"")+"tier_dom_fail="+String(e3);}}' +
+     "result.ok=delivered?1:0;" +
+     "}" +
+     'if(edit){result.sel_a=edit.selectionStart|0;result.sel_b=edit.selectionEnd|0;result.sel_text=(edit.value||"").slice(Math.min(result.sel_a,result.sel_b),Math.max(result.sel_a,result.sel_b)).slice(0,80);result.scroll=edit.scrollTop|0;}' +
+@@ -668,13 +670,13 @@ function ensureSelectFrameScript(browser) {
+     "}" +
+     'if(!edit){result.error="no_edit";sendAsyncMessage("ah-select-result",result);return;}' +
+     "try{edit.focus();}catch(e){}" +
+-    'var a0=edit.selectionStart|0,b0=edit.selectionEnd|0;' +
++    "var a0=edit.selectionStart|0,b0=edit.selectionEnd|0;" +
+     'var full=(edit.value||"");' +
+-    'var tx=full.slice(Math.min(a0,b0),Math.max(a0,b0));' +
+-    'result.sel_a=a0;result.sel_b=b0;result.sel_text=tx.slice(0,80);result.scroll=edit.scrollTop|0;' +
++    "var tx=full.slice(Math.min(a0,b0),Math.max(a0,b0));" +
++    "result.sel_a=a0;result.sel_b=b0;result.sel_text=tx.slice(0,80);result.scroll=edit.scrollTop|0;" +
+     // query/caret/drag/word/line/all: classify only
+     'if(phase==="query"||phase==="caret"||phase==="drag"||phase==="word"||phase==="line"||phase==="all"){' +
+-    'result.input_value=tx.slice(0,80);' +
++    "result.input_value=tx.slice(0,80);" +
+     'if(a0===b0){phase="caret";}' +
+     'else if(tx==="beta"){phase="word";}' +
+     'else if(tx==="alpha"||(a0===0&&b0===5)){phase="drag";}' +
+@@ -694,11 +696,11 @@ function ensureSelectFrameScript(browser) {
+     'var signal=phase;if(phase==="paste")signal="paste_check";if(phase==="cut")signal="cut_check";if(phase==="undo")signal="undo_check";' +
+     'try{edit.removeAttribute("data-select-phase");}catch(e){}' +
+     'edit.setAttribute("data-select-phase",signal);' +
+-    "result.title=doc.title||\"\";" +
++    'result.title=doc.title||"";' +
+     'var st=doc.getElementById("status");result.status=st?(st.textContent||"").trim():"";' +
+     'if(phase!=="copy"&&phase!=="cut"&&phase!=="paste"&&phase!=="paste_check"&&phase!=="autoscroll"){result.input_value=(edit.value||"").slice(0,100);}' +
+     "result.ok=1;" +
+-    'a0=edit.selectionStart|0;b0=edit.selectionEnd|0;' +
++    "a0=edit.selectionStart|0;b0=edit.selectionEnd|0;" +
+     'result.error="sel_ok phase="+phase+" a="+a0+" b="+b0;' +
+     "}catch(e){result.error=String(e);result.ok=0;}" +
+     'sendAsyncMessage("ah-select-result",result);' +
+@@ -727,7 +729,7 @@ function ensureWorkflowFrameScript(browser) {
+     'var result={ok:0,title:"",status:"",input_value:"",error:""};' +
+     "try{" +
+     'var phase=d.phase||"";' +
+-    'var wu=content.windowUtils;' +
++    "var wu=content.windowUtils;" +
+     'function synth(type,x,y,btn,cc){try{if(typeof content.synthesizeMouseEvent==="function"){content.synthesizeMouseEvent(type,x,y,{button:btn|0,clickCount:cc|1},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});}else if(wu&&wu.sendMouseEvent){wu.sendMouseEvent(type,x,y,btn|0,cc|1,0);}else{var el=doc.elementFromPoint(x,y)||doc.body;el.dispatchEvent(new content.MouseEvent(type,{bubbles:true,clientX:x,clientY:y,button:btn|0,detail:cc|1}));}}catch(e){}}' +
+     'function clickEl(id){var el=doc.getElementById(id);if(!el){result.error="no_"+id;return null;}try{el.focus();}catch(e){}try{el.click();}catch(e){}return el;}' +
+     // form: product click name, insertText user1, submit click
+@@ -754,7 +756,7 @@ function ensureWorkflowFrameScript(browser) {
+     // storage check
+     'else if(phase==="store_check"){clickEl("store-check");result.ok=1;}' +
+     'else{result.error="unknown_phase";}' +
+-    "result.title=doc.title||\"\";" +
++    'result.title=doc.title||"";' +
+     'var st=doc.getElementById("status");result.status=st?(st.textContent||"").trim():"";' +
+     "}catch(e){result.error=String(e);result.ok=0;}" +
+     'sendAsyncMessage("ah-workflow-result",result);' +
+@@ -771,6 +773,166 @@ function ensureWorkflowFrameScript(browser) {
+   }
+ }
+ 
++function ensureGenericTextInputScript(browser) {
++  if (browser._astrohackerTextInput) {
++    return;
++  }
++  const script = `
++    var ahTextInputProcessor = null;
++    addMessageListener("astrohacker-text-input", async function(msg) {
++      var d = msg.data || {};
++      var result = { ok: 0, error: "", title: "", status: "", input_value: "" };
++      try {
++        var wu = content.windowUtils;
++        function validRange(start, length, label) {
++          start = Number(start);
++          length = Number(length);
++          if (start === -1 && length === -1) return null;
++          if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || start < 0 || length < 0)
++            throw new Error("invalid_" + label + "_range");
++          return [start, length];
++        }
++        async function applyReplacementRange() {
++          var range = validRange(d.replacement_start, d.replacement_length, "replacement");
++          if (!range) return;
++          if (!wu || typeof wu.sendSelectionSetEvent !== "function")
++            throw new Error("no_selection_set_event");
++          var focusManager = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
++          var editor = focusManager.focusedElement || content.document.activeElement || content.document.querySelector("[autofocus]");
++          if (!editor || typeof editor.selectionStart !== "number" || typeof editor.value !== "string")
++            throw new Error("no_focused_text_editor");
++          if (range[0] + range[1] > editor.value.length)
++            throw new Error("replacement_range_out_of_bounds");
++          var nativeContent = wu.sendQueryContentEvent(wu.QUERY_TEXT_CONTENT, 0, 0x7fffffff, 0, 0);
++          if (!nativeContent || !nativeContent.succeeded || typeof nativeContent.text !== "string")
++            throw new Error("query_text_content_failed");
++          var editorBase = nativeContent.text.indexOf(editor.value);
++          if (editorBase < 0 || nativeContent.text.indexOf(editor.value, editorBase + 1) >= 0)
++            throw new Error("ambiguous_editor_base");
++          await new Promise(resolve => content.requestAnimationFrame(() => content.requestAnimationFrame(resolve)));
++          if (!wu.sendSelectionSetEvent(editorBase + range[0], range[1], wu.SELECTION_SET_FLAG_USE_XP_LINE_BREAK))
++            throw new Error("replacement_range_rejected");
++          if (editor.selectionStart !== range[0] || editor.selectionEnd !== range[0] + range[1])
++            throw new Error("replacement_selection_not_applied_base_" + editorBase + "_actual_" + editor.selectionStart + "_" + editor.selectionEnd);
++        }
++        function getTIP() {
++          if (ahTextInputProcessor) return ahTextInputProcessor;
++          var tip = Cc["@mozilla.org/text-input-processor;1"].createInstance(Ci.nsITextInputProcessor);
++          if (!tip.beginInputTransactionForTests(content, null))
++            throw new Error("tip_transaction_rejected");
++          ahTextInputProcessor = tip;
++          return tip;
++        }
++        function setPendingComposition(tip, text) {
++          var selected = validRange(d.selected_start, d.selected_length, "selected");
++          tip.setPendingCompositionString(text);
++          if (!selected) {
++            if (text.length) tip.appendClauseToPendingComposition(text.length, tip.ATTR_RAW_CLAUSE);
++            return;
++          }
++          var start = selected[0], length = selected[1], end = start + length;
++          if (end > text.length) throw new Error("selected_range_out_of_bounds");
++          if (start) tip.appendClauseToPendingComposition(start, tip.ATTR_RAW_CLAUSE);
++          if (length) tip.appendClauseToPendingComposition(length, tip.ATTR_SELECTED_RAW_CLAUSE);
++          if (end < text.length) tip.appendClauseToPendingComposition(text.length - end, tip.ATTR_RAW_CLAUSE);
++          tip.setCaretInPendingComposition(end);
++        }
++        if (d.op === "key") {
++          var raw = String(d.type || "");
++          if (raw !== "down" && raw !== "up" && raw !== "repeat")
++            throw new Error("unknown_key_type");
++          var code = Number(d.keyCode) || 0;
++          var names = {8:["Backspace","Backspace"],9:["Tab","Tab"],13:["Enter","Enter"],27:["Escape","Escape"],32:[" ","Space"],37:["ArrowLeft","ArrowLeft"],38:["ArrowUp","ArrowUp"],39:["ArrowRight","ArrowRight"],40:["ArrowDown","ArrowDown"],46:["Delete","Delete"]};
++          var pair = names[code] || [code >= 65 && code <= 90 ? String.fromCharCode(code + 32) : "Unidentified", code >= 65 && code <= 90 ? "Key" + String.fromCharCode(code) : ""];
++          var event = new content.KeyboardEvent("", { key: pair[0], code: pair[1], keyCode: code, repeat: raw === "repeat" });
++          var tip = getTIP();
++          if (raw === "up") tip.keyup(event, 0);
++          else tip.keydown(event, tip.KEY_DEFAULT_PREVENTED);
++          result.ok = 1;
++          result.error = "widget_key_" + raw;
++        } else if (d.op === "text_input") {
++          var text = String(d.text || "");
++          var utf8Bytes = new TextEncoder().encode(text).length;
++          var codePoints = Array.from(text).length;
++          if (utf8Bytes !== Number(d.text_utf8_bytes) || codePoints !== Number(d.text_code_points))
++            throw new Error("text_code_point_mismatch");
++          var kind = String(d.input_type || "");
++          var textTip = getTIP();
++          if (kind === "commit") {
++            var commitReplacement = validRange(d.replacement_start, d.replacement_length, "replacement");
++            if (commitReplacement) {
++              var replacementEditor = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager).focusedElement || content.document.activeElement || content.document.querySelector("[autofocus]");
++              if (!replacementEditor || typeof replacementEditor.value !== "string")
++                throw new Error("no_replacement_editor");
++              var beforeReplacement = replacementEditor.value;
++              var expectedReplacement = beforeReplacement.slice(0, commitReplacement[0]) + text + beforeReplacement.slice(commitReplacement[0] + commitReplacement[1]);
++              await applyReplacementRange();
++              wu.sendContentCommandEvent("insertText", null, text);
++              if (replacementEditor.value !== expectedReplacement)
++                throw new Error("native_replace_not_applied");
++            } else if (!textTip.commitCompositionWith(text, null, 0)) {
++              throw new Error("tip_commit_rejected");
++            }
++          } else if (kind === "ime_start") {
++            await applyReplacementRange();
++            if (!textTip.startComposition(null, 0)) throw new Error("tip_start_rejected");
++          } else if (kind === "ime_update") {
++            setPendingComposition(textTip, text);
++            if (!textTip.flushPendingComposition(null, 0)) throw new Error("tip_update_rejected");
++          } else if (kind === "ime_commit") {
++            if (!textTip.commitCompositionWith(text, null, 0)) throw new Error("tip_ime_commit_rejected");
++          } else if (kind === "ime_cancel") {
++            if (textTip.hasComposition) textTip.cancelComposition(null, 0);
++          } else {
++            throw new Error("unknown_text_input");
++          }
++          result.ok = 1;
++          result.error = "widget_text_" + kind + "_utf8=" + utf8Bytes + "_codepoints=" + codePoints;
++        } else if (d.op === "focus") {
++          var selection = content.docShell.QueryInterface(Ci.nsIInterfaceRequestor)
++            .getInterface(Ci.nsISelectionDisplay).QueryInterface(Ci.nsISelectionController);
++          var focusManager = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
++          if (d.focused) {
++            var focusTarget = content.document.querySelector("[autofocus]") || content.document.activeElement;
++            if (focusTarget && focusTarget !== content.document.body && focusTarget !== content.document.documentElement) {
++              focusTarget.focus({ preventScroll: true });
++              focusManager.setFocus(focusTarget, focusManager.FLAG_NOSCROLL);
++            } else
++              focusManager.moveFocus(content, null, focusManager.MOVEFOCUS_FIRST, focusManager.FLAG_NOSCROLL);
++            selection.setDisplaySelection(selection.SELECTION_ON);
++          } else {
++            if (ahTextInputProcessor && ahTextInputProcessor.hasComposition)
++              ahTextInputProcessor.cancelComposition(null, 0);
++            focusManager.clearFocus(content);
++            selection.setDisplaySelection(selection.SELECTION_HIDDEN);
++          }
++          result.ok = 1;
++          result.error = "widget_focus_" + (d.focused ? "on" : "off");
++        } else if (d.op === "query") {
++          result.ok = 1;
++          result.error = "query";
++        } else {
++          throw new Error("unknown_text_op");
++        }
++        result.title = content.document ? content.document.title || "" : "";
++      } catch (e) {
++        result.error = String(e);
++        result.ok = 0;
++      }
++      sendAsyncMessage("astrohacker-text-input-result", result);
++    });`;
++  try {
++    browser.messageManager.loadFrameScript(
++      "data:," + encodeURIComponent(script),
++      true
++    );
++    browser._astrohackerTextInput = true;
++    dump("text_input_widget_frame_script=1\n");
++  } catch (e) {
++    dump(`text_input_widget_frame_script=0 error=${String(e)}\n`);
++  }
++}
++
+ function ensureDomDispatchFrameScript(browser) {
+   if (browser._astrohackerDomInput) {
+     return;
+@@ -786,9 +948,9 @@ function ensureDomDispatchFrameScript(browser) {
+     "var doc=content.document;" +
+     "var x=parseFloat(d.x)||0,y=parseFloat(d.y)||0;" +
+     "var wu=content.windowUtils;" +
+-    'function centerOf(id){var el=doc.getElementById(id);if(!el)return null;var r=el.getBoundingClientRect();return{el:el,x:r.left+r.width/2,y:r.top+r.height/2};}' +
+-    'function synth(type,sx,sy,btn,cc,mods){' +
+-    "try{if(typeof content.synthesizeMouseEvent===\"function\"){" +
++    "function centerOf(id){var el=doc.getElementById(id);if(!el)return null;var r=el.getBoundingClientRect();return{el:el,x:r.left+r.width/2,y:r.top+r.height/2};}" +
++    "function synth(type,sx,sy,btn,cc,mods){" +
++    'try{if(typeof content.synthesizeMouseEvent==="function"){' +
+     "content.synthesizeMouseEvent(type,sx,sy,{button:btn|0,clickCount:cc|1,modifiers:mods|0},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});return 1;}" +
+     "}catch(e){}" +
+     "try{if(wu&&wu.sendMouseEvent){wu.sendMouseEvent(type,sx,sy,btn|0,cc|1,mods|0,false,0,0,false,false);return 1;}}catch(e2){}" +
+@@ -796,7 +958,7 @@ function ensureDomDispatchFrameScript(browser) {
+     "}" +
+     'if(d.op==="mouse"||d.op==="mousemove"){' +
+     'var type=d.op==="mousemove"?"mousemove":(d.type||"mousedown");' +
+-    "if(type===\"down\")type=\"mousedown\";if(type===\"up\")type=\"mouseup\";" +
++    'if(type==="down")type="mousedown";if(type==="up")type="mouseup";' +
+     "var btn=d.button|0,cc=d.clickCount|1,mods=d.modifiers|0;" +
+     "var hit=null;" +
+     'if(d.op==="mousemove"||type==="mousemove"){hit=centerOf("hover-target");}' +
+@@ -811,7 +973,7 @@ function ensureDomDispatchFrameScript(browser) {
+     'result.ok=delivered?1:0;result.error="mouse_"+type+"_btn"+btn+(hit?("_hit="+hit.el.id):"_nohit");' +
+     '}else if(d.op==="wheel"){' +
+     'var box=doc.getElementById("scroll-box")||doc.elementFromPoint(x,y)||doc.body;' +
+-    "try{box.dispatchEvent(new content.WheelEvent(\"wheel\",{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,deltaX:d.dx||0,deltaY:d.dy||0,deltaMode:0}));}catch(e){}" +
++    'try{box.dispatchEvent(new content.WheelEvent("wheel",{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,deltaX:d.dx||0,deltaY:d.dy||0,deltaMode:0}));}catch(e){}' +
+     "try{if(box&&box.scrollTop!==undefined)box.scrollTop+=Math.abs(d.dy||40)||40;}catch(e2){}" +
+     'result.ok=1;result.error="wheel";' +
+     '}else if(d.op==="key"){' +
+@@ -819,14 +981,14 @@ function ensureDomDispatchFrameScript(browser) {
+     'var key=(d.utf8&&d.utf8!=="-")?d.utf8:"";' +
+     'var inp=doc.getElementById("t");try{if(inp)inp.focus();}catch(e){}' +
+     "var active=inp||doc.activeElement||doc.body;" +
+-    "try{active.dispatchEvent(new content.KeyboardEvent(ktype,{bubbles:true,cancelable:true,view:content,key:key||\"Unidentified\",code:key?(\"Key\"+String(key).toUpperCase()):\"\",keyCode:d.keyCode|0,charCode:d.charCode|0,repeat:d.type===\"repeat\",shiftKey:!!(d.modifiers&1),ctrlKey:!!(d.modifiers&2),altKey:!!(d.modifiers&4),metaKey:!!(d.modifiers&8)}));}catch(e){}" +
++    'try{active.dispatchEvent(new content.KeyboardEvent(ktype,{bubbles:true,cancelable:true,view:content,key:key||"Unidentified",code:key?("Key"+String(key).toUpperCase()):"",keyCode:d.keyCode|0,charCode:d.charCode|0,repeat:d.type==="repeat",shiftKey:!!(d.modifiers&1),ctrlKey:!!(d.modifiers&2),altKey:!!(d.modifiers&4),metaKey:!!(d.modifiers&8)}));}catch(e){}' +
+     'if(ktype==="keydown"&&key&&inp&&!(d.modifiers&1)&&key.toLowerCase()!=="x"){try{inp.value=(inp.value||\"\")+key;inp.dispatchEvent(new content.InputEvent(\"input\",{bubbles:true,data:key,inputType:\"insertText\"}));}catch(e){try{inp.dispatchEvent(new content.Event(\"input\",{bubbles:true}));}catch(e2){}}}' +
+     'result.ok=1;result.error="key_"+ktype;' +
+     '}else if(d.op==="composition"){' +
+     'var phase=d.phase||d.type||"end";var data=d.data||d.utf8||"";if(data==="-")data="";' +
+     'var inp=doc.getElementById("t")||doc.activeElement;try{if(inp&&inp.focus)inp.focus();}catch(e){}' +
+     'var evType=phase==="start"?"compositionstart":(phase==="update"?"compositionupdate":"compositionend");' +
+-    "try{inp.dispatchEvent(new content.CompositionEvent(evType,{bubbles:true,cancelable:true,data:data}));}catch(e){try{var ev=doc.createEvent(\"CompositionEvent\");ev.initCompositionEvent(evType,true,true,content,data);inp.dispatchEvent(ev);}catch(e2){}}" +
++    'try{inp.dispatchEvent(new content.CompositionEvent(evType,{bubbles:true,cancelable:true,data:data}));}catch(e){try{var ev=doc.createEvent("CompositionEvent");ev.initCompositionEvent(evType,true,true,content,data);inp.dispatchEvent(ev);}catch(e2){}}' +
+     'try{inp.setAttribute("data-ime-phase",phase);inp.setAttribute("data-ime-data",data||"");}catch(e){}' +
+     'if(phase==="end"){try{if(data)inp.value=(inp.value||"")+data;inp.dispatchEvent(new content.InputEvent("input",{bubbles:true,data:data||"",inputType:"insertCompositionText"}));}catch(e){}}' +
+     'result.ok=1;result.error="composition_"+phase;' +
+@@ -835,7 +997,7 @@ function ensureDomDispatchFrameScript(browser) {
+     '}else if(d.op==="query"){result.ok=1;}' +
+     'else if(d.op==="select"){result.ok=1;result.error="select_legacy_use_ah_select";}' +
+     'else{result.error="unknown_op";}' +
+-    "try{result.title=doc.title||\"\";}catch(e){}" +
++    'try{result.title=doc.title||"";}catch(e){}' +
+     'try{var st=doc.getElementById("status");if(st)result.status=(st.textContent||"").trim();}catch(e){}' +
+     'try{var iv=doc.getElementById("edit")||doc.getElementById("t");if(iv)result.input_value=(iv.value||"").slice(0,120);}catch(e){}' +
+     "}catch(e){result.error=String(e);result.ok=0;}" +
+@@ -864,9 +1026,9 @@ function readFileSync(path) {
+       Ci.nsIFileInputStream
+     );
+     fstream.init(file, -1, 0, 0);
+-    let cstream = Cc["@mozilla.org/intl/converter-input-stream;1"].createInstance(
+-      Ci.nsIConverterInputStream
+-    );
++    let cstream = Cc[
++      "@mozilla.org/intl/converter-input-stream;1"
++    ].createInstance(Ci.nsIConverterInputStream);
+     cstream.init(fstream, "UTF-8", 0, 0);
+     let data = "";
+     let str = {};
+@@ -988,8 +1150,8 @@ function processInputControlOnce(path, browser, win, state) {
+       } catch (e) {}
+     }
+     let body =
+-      `seq=${seq} ok=${result.ok ? 1 : 0} title=${title.replace(/\s+/g, "_")} ` +
+-      `status=${status.replace(/\s+/g, "_")} input_value=${inputValue.replace(/\s+/g, "_")} ` +
++      `seq=${seq} ok=${result.ok ? 1 : 0} title_enc=${encodeURIComponent(title)} ` +
++      `status_enc=${encodeURIComponent(status)} input_value_enc=${encodeURIComponent(inputValue)} ` +
+       `pid=${pid} content_w=${contentW} content_h=${contentH} ` +
+       `native_widget_path=1 focused=${state.focused ? 1 : 0} ` +
+       `error=${(result.error || "").replace(/\s+/g, "_")}\n`;
+@@ -1004,16 +1166,81 @@ function processInputControlOnce(path, browser, win, state) {
+   };
+ 
+   let op = cmd.op || "";
++  if (op === "shutdown") {
++    writeStatus({
++      ok: 1,
++      title: "",
++      status: "",
++      input_value: "",
++      error: "shutdown_acknowledged",
++    });
++    Services.tm.dispatchToMainThread(() => {
++      dump("surface_owner_shutdown=1 path=control_main_thread\n");
++      Services.startup.quit(
++        Ci.nsIAppStartup.eForceQuit | Ci.nsIAppStartup.eAttemptQuit
++      );
++    });
++    return;
++  }
+   if (op === "focus") {
+     state.focused = cmd.focused === "1" || cmd.focused === "true";
+     try {
+-      if (state.focused) {
+-        win.focus();
+-        browser.focus();
+-      }
+-    } catch (e) {}
+-    writeStatus({ ok: 1, title: "", status: "", input_value: "", error: "" });
+-    dump(`input_focus focused=${state.focused ? 1 : 0}\n`);
++      browser.frameLoader?.remoteTab?.astrohackerSetInputActive(state.focused);
++    } catch (e) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: `remote_input_activation_failed:${String(e)}`,
++      });
++      return;
++    }
++    if (state.focused) {
++      try {
++        browser.docShellIsActive = true;
++      } catch (e) {}
++    }
++    let completed = false;
++    let listener = msg => {
++      if (completed) return;
++      completed = true;
++      try {
++        browser.messageManager.removeMessageListener(
++          "astrohacker-text-input-result",
++          listener
++        );
++      } catch (e) {}
++      let result = msg.data || {};
++      writeStatus({
++        ok: result.ok ? 1 : 0,
++        title: result.title || "",
++        status: result.status || "",
++        input_value: result.input_value || "",
++        error: result.error || "focus_no_result",
++      });
++    };
++    try {
++      ensureGenericTextInputScript(browser);
++      browser.messageManager.addMessageListener(
++        "astrohacker-text-input-result",
++        listener
++      );
++      browser.messageManager.sendAsyncMessage("astrohacker-text-input", {
++        op: "focus",
++        focused: state.focused,
++      });
++    } catch (e) {
++      completed = true;
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: String(e),
++      });
++    }
++    dump(`input_focus focused=${state.focused ? 1 : 0} content_bridge=1\n`);
+     return;
+   }
+ 
+@@ -1050,7 +1277,8 @@ function processInputControlOnce(path, browser, win, state) {
+         title = browser.contentTitle || "";
+       } catch (e) {}
+       try {
+-        curUrl = browser.currentURI?.spec || win.gBrowser?.currentURI?.spec || "";
++        curUrl =
++          browser.currentURI?.spec || win.gBrowser?.currentURI?.spec || "";
+       } catch (e) {}
+       dump(`nav_done op=${op} ok=${ok ? 1 : 0} url=${curUrl} title=${title}\n`);
+       dump(`loading_state=done\n`);
+@@ -1186,10 +1414,8 @@ function processInputControlOnce(path, browser, win, state) {
+           try {
+             const isNetwork =
+               aStateFlags & Ci.nsIWebProgressListener.STATE_IS_NETWORK;
+-            const isStart =
+-              aStateFlags & Ci.nsIWebProgressListener.STATE_START;
+-            const isStop =
+-              aStateFlags & Ci.nsIWebProgressListener.STATE_STOP;
++            const isStart = aStateFlags & Ci.nsIWebProgressListener.STATE_START;
++            const isStop = aStateFlags & Ci.nsIWebProgressListener.STATE_STOP;
+             if (isNetwork && isStart) {
+               sawStart = true;
+               dump("loading_state=loading\n");
+@@ -1246,11 +1472,7 @@ function processInputControlOnce(path, browser, win, state) {
+           titleNow.indexOf("NAV_PAGE_B") >= 0 ||
+           (uriNow && uriNow.indexOf("page-b.html") >= 0);
+         // Fallback: title/uri settled without progress events (file:// fast path).
+-        if (
+-          redirected ||
+-          polls >= 25 ||
+-          (op === "stop" && polls >= 2)
+-        ) {
++        if (redirected || polls >= 25 || (op === "stop" && polls >= 2)) {
+           try {
+             t.cancel();
+           } catch (e) {}
+@@ -1327,7 +1549,10 @@ function processInputControlOnce(path, browser, win, state) {
+       if (done) return;
+       done = true;
+       try {
+-        browser.messageManager.removeMessageListener("ah-workflow-result", listener);
++        browser.messageManager.removeMessageListener(
++          "ah-workflow-result",
++          listener
++        );
+       } catch (e) {}
+       let d = msg.data || {};
+       // First frame result may race fixture oracles; final write uses poll below.
+@@ -1390,8 +1615,7 @@ function processInputControlOnce(path, browser, win, state) {
+             ) {
+               dump("download_attempt=1\n");
+               dump("download_denied=1 reason=no_product_download_path\n");
+-              denyBits =
+-                "download_attempt=1 download_denied=1 workflow_poll";
++              denyBits = "download_attempt=1 download_denied=1 workflow_poll";
+             } else if (phase === "popup" && title.indexOf("POPUP_") >= 0) {
+               dump("popup_attempt=1\n");
+               dump("popup_denied=1 reason=blocked_or_single_tab\n");
+@@ -1410,8 +1634,7 @@ function processInputControlOnce(path, browser, win, state) {
+               } else if (title.indexOf("DIALOG_REQUESTED") >= 0) {
+                 // Confirm hung or not dismissed; tested deny (no hang beyond poll).
+                 dump("dialog_denied=1 reason=confirm_not_dismissed\n");
+-                denyBits =
+-                  "dialog_attempt=1 dialog_denied=1 workflow_poll";
++                denyBits = "dialog_attempt=1 dialog_denied=1 workflow_poll";
+               }
+             } else if (phase === "http_auth") {
+               let u = "";
+@@ -1451,15 +1674,15 @@ function processInputControlOnce(path, browser, win, state) {
+       if (!browser._ahClickScript) {
+         const cscript =
+           'addMessageListener("ah-click",function(msg){' +
+-          "var id=(msg.data&&msg.data.id)||\"\";" +
++          'var id=(msg.data&&msg.data.id)||"";' +
+           "var doc=content.document;" +
+-          'var el=doc.getElementById(id);' +
++          "var el=doc.getElementById(id);" +
+           'var result={ok:0,title:"",url:"",error:""};' +
+           "try{" +
+-          "if(el){el.click();result.ok=1;result.error=\"clicked\";}" +
++          'if(el){el.click();result.ok=1;result.error="clicked";}' +
+           'else{result.error="no_el";}' +
+-          "result.title=doc.title||\"\";" +
+-          "try{result.url=content.location.href||\"\";}catch(e){}" +
++          'result.title=doc.title||"";' +
++          'try{result.url=content.location.href||"";}catch(e){}' +
+           "}catch(e){result.error=String(e);}" +
+           'sendAsyncMessage("ah-click-result",result);' +
+           "});";
+@@ -1474,7 +1697,10 @@ function processInputControlOnce(path, browser, win, state) {
+         if (done) return;
+         done = true;
+         try {
+-          browser.messageManager.removeMessageListener("ah-click-result", listener);
++          browser.messageManager.removeMessageListener(
++            "ah-click-result",
++            listener
++          );
+         } catch (e) {}
+         dump(
+           "click_id_frame=1 id=" +
+@@ -1546,12 +1772,21 @@ function processInputControlOnce(path, browser, win, state) {
+     };
+     let frameDone = false;
+     let wrote = false;
+-    let lastFrame = { ok: 1, title: "", status: "", input_value: "", error: "" };
++    let lastFrame = {
++      ok: 1,
++      title: "",
++      status: "",
++      input_value: "",
++      error: "",
++    };
+     let listener = msg => {
+       if (frameDone) return;
+       frameDone = true;
+       try {
+-        browser.messageManager.removeMessageListener("ah-select-result", listener);
++        browser.messageManager.removeMessageListener(
++          "ah-select-result",
++          listener
++        );
+       } catch (e) {}
+       lastFrame = msg.data || lastFrame;
+       // Chrome-privileged OS clipboard after content reports selection (copy/cut).
+@@ -1565,7 +1800,9 @@ function processInputControlOnce(path, browser, win, state) {
+             Ci.nsIClipboardHelper
+           );
+           ch.copyString(lastFrame.input_value);
+-          dump("clipboard_helper_copy=1 len=" + lastFrame.input_value.length + "\n");
++          dump(
++            "clipboard_helper_copy=1 len=" + lastFrame.input_value.length + "\n"
++          );
+         }
+       } catch (e) {
+         dump("clipboard_helper_error=" + String(e) + "\n");
+@@ -1652,47 +1889,75 @@ function processInputControlOnce(path, browser, win, state) {
+   let type = cmd.type || "";
+   let phase = cmd.phase || "";
+   let data = cmd.data || "";
++  let inputType = cmd.input_type || "";
++  let text = "";
++  if (cmd.text_enc) {
++    try {
++      text = decodeURIComponent(cmd.text_enc);
++    } catch (e) {
++      writeStatus({
++        ok: 0,
++        title: "",
++        status: "",
++        input_value: "",
++        error: "invalid_text_encoding",
++      });
++      return;
++    }
++  }
++  let textUtf8Bytes = parseInt(cmd.text_utf8_bytes || "0", 10);
++  let textCodePoints = parseInt(cmd.text_code_points || "0", 10);
++  let selectedStart = parseInt(cmd.selected_start || "-1", 10);
++  let selectedLength = parseInt(cmd.selected_length || "-1", 10);
++  let replacementStart = parseInt(cmd.replacement_start || "-1", 10);
++  let replacementLength = parseInt(cmd.replacement_length || "-1", 10);
+   let start = cmd.start || "";
+   let end = cmd.end || "";
+   let expect = cmd.expect || "";
++  let textPath = op === "key" || op === "text_input" || op === "query";
+ 
+   // Chrome native path (widget-level).
+   try {
+-    let utils = win.windowUtils;
+-    if (op === "mouse") {
+-      let native =
+-        type === "mouseup" || type === "up"
+-          ? utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP
+-          : utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN;
+-      applyNativeMouse(win, browser, native, button, x, y, modifiers);
+-    } else if (op === "mousemove") {
+-      applyNativeMouse(
+-        win,
+-        browser,
+-        utils.NATIVE_MOUSE_MESSAGE_MOVE,
+-        0,
+-        x,
+-        y,
+-        modifiers
+-      );
+-    } else if (op === "wheel") {
+-      // Prefer native scroll if available; always also DOM wheel below.
+-      applyNativeMouse(
+-        win,
+-        browser,
+-        utils.NATIVE_MOUSE_MESSAGE_MOVE,
+-        0,
+-        x,
+-        y,
+-        modifiers
+-      );
+-    } else if (op === "key") {
+-      try {
+-        // sendNativeKeyEvent(layout, nativeKeyCode, modifiers, chars, unmodified)
+-        let ch = utf8 && utf8 !== "-" ? utf8 : "";
+-        utils.sendNativeKeyEvent(0, keyCode, modifiers, ch, ch);
+-      } catch (e) {
+-        dump(`native_key_error=${String(e)}\n`);
++    if (textPath) {
++      // Hidden-owner text/key delivery is content-relative through the
++      // dedicated widget bridge below; never activate the chrome window.
++    } else {
++      let utils = win.windowUtils;
++      if (op === "mouse") {
++        let native =
++          type === "mouseup" || type === "up"
++            ? utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP
++            : utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN;
++        applyNativeMouse(win, browser, native, button, x, y, modifiers);
++      } else if (op === "mousemove") {
++        applyNativeMouse(
++          win,
++          browser,
++          utils.NATIVE_MOUSE_MESSAGE_MOVE,
++          0,
++          x,
++          y,
++          modifiers
++        );
++      } else if (op === "wheel") {
++        // Prefer native scroll if available; always also DOM wheel below.
++        applyNativeMouse(
++          win,
++          browser,
++          utils.NATIVE_MOUSE_MESSAGE_MOVE,
++          0,
++          x,
++          y,
++          modifiers
++        );
++      } else if (op === "key") {
++        try {
++          // sendNativeKeyEvent(layout, nativeKeyCode, modifiers, chars, unmodified)
++          let ch = utf8 && utf8 !== "-" ? utf8 : "";
++          utils.sendNativeKeyEvent(0, keyCode, modifiers, ch, ch);
++        } catch (e) {
++          dump(`native_key_error=${String(e)}\n`);
++        }
+       }
+     }
+   } catch (e) {
+@@ -1719,10 +1984,30 @@ function processInputControlOnce(path, browser, win, state) {
+     keyCode,
+     charCode,
+     utf8,
++    input_type: inputType,
++    text,
++    text_utf8_bytes: textUtf8Bytes,
++    text_code_points: textCodePoints,
++    selected_start: selectedStart,
++    selected_length: selectedLength,
++    replacement_start: replacementStart,
++    replacement_length: replacementLength,
+   };
+ 
+   let got = false;
+-  let best = { ok: 1, title: "", status: "", input_value: "", error: "" };
++  let best = {
++    ok: textPath ? 0 : 1,
++    title: "",
++    status: "",
++    input_value: "",
++    error: "",
++  };
++  let messageName = textPath
++    ? "astrohacker-text-input"
++    : "astrohacker-dom-input";
++  let resultName = textPath
++    ? "astrohacker-text-input-result"
++    : "astrohacker-dom-input-result";
+   let listener = msg => {
+     if (got && msg.data && msg.data.title) {
+       // Prefer richer content result if it arrives after poll write.
+@@ -1733,19 +2018,14 @@ function processInputControlOnce(path, browser, win, state) {
+       best = msg.data || best;
+     }
+     try {
+-      browser.messageManager.removeMessageListener(
+-        "astrohacker-dom-input-result",
+-        listener
+-      );
++      browser.messageManager.removeMessageListener(resultName, listener);
+     } catch (e) {}
+   };
+ 
+   try {
+-    browser.messageManager.addMessageListener(
+-      "astrohacker-dom-input-result",
+-      listener
+-    );
+-    browser.messageManager.sendAsyncMessage("astrohacker-dom-input", payload);
++    if (textPath) ensureGenericTextInputScript(browser);
++    browser.messageManager.addMessageListener(resultName, listener);
++    browser.messageManager.sendAsyncMessage(messageName, payload);
+   } catch (e) {
+     writeStatus({
+       ok: 0,
+@@ -1778,10 +2058,7 @@ function processInputControlOnce(path, browser, win, state) {
+         } catch (e) {}
+         inputControlTimers.delete(pollTimer);
+         try {
+-          browser.messageManager.removeMessageListener(
+-            "astrohacker-dom-input-result",
+-            listener
+-          );
++          browser.messageManager.removeMessageListener(resultName, listener);
+         } catch (e) {}
+         if (!best.title) {
+           try {
+@@ -1792,13 +2069,18 @@ function processInputControlOnce(path, browser, win, state) {
+           best.error = (best.error || "") + "no_frame_reply";
+           // Allow one re-inject if frame script never answered (late load).
+           try {
+-            browser._astrohackerDomInput = false;
+-            ensureDomDispatchFrameScript(browser);
++            if (textPath) {
++              browser._astrohackerTextInput = false;
++              ensureGenericTextInputScript(browser);
++            } else {
++              browser._astrohackerDomInput = false;
++              ensureDomDispatchFrameScript(browser);
++            }
+           } catch (e) {}
+         } else if (!best.error) {
+           best.error = "got_frame";
+         }
+-        best.ok = 1;
++        if (!textPath) best.ok = 1;
+         writeStatus(best);
+       }
+     },
+diff --git a/dom/interfaces/base/nsIRemoteTab.idl b/dom/interfaces/base/nsIRemoteTab.idl
+index 4d1d851c2eeb..457bbdb2d9a3 100644
+--- a/dom/interfaces/base/nsIRemoteTab.idl
++++ b/dom/interfaces/base/nsIRemoteTab.idl
+@@ -10,7 +10,7 @@ webidl Element;
+ webidl WindowGlobalParent;
+ webidl BrowsingContext;
+ 
+-[builtinclass, scriptable, uuid(8e49f7b0-1f98-4939-bf91-e9c39cd56434)]
++[builtinclass, scriptable, uuid(f4e47650-62bb-4b8d-90af-4cd306a66e6b)]
+ interface nsIRemoteTab : nsISupports
+ {
+   /**
+@@ -47,6 +47,14 @@ interface nsIRemoteTab : nsISupports
+    */
+   void preserveLayers(in boolean aPreserveLayers);
+ 
++  /**
++   * Activate or deactivate this remote tab for Astrohacker's hidden compositor
++   * owner without raising or focusing the native chrome window.  This keeps
++   * Gecko's normal remote-widget text and IME routing active while the product
++   * owns visible focus in its embedding SurfaceView.
++   */
++  void astrohackerSetInputActive(in boolean aActive);
++
+   readonly attribute uint64_t tabId;
+ 
+   readonly attribute uint64_t contentProcessId;
+diff --git a/dom/ipc/BrowserHost.cpp b/dom/ipc/BrowserHost.cpp
+index 779b7899c55f..2f59969fdeb6 100644
+--- a/dom/ipc/BrowserHost.cpp
++++ b/dom/ipc/BrowserHost.cpp
+@@ -9,6 +9,7 @@
+ #include "mozilla/dom/CancelContentJSOptionsBinding.h"
+ #include "mozilla/dom/ContentParent.h"
+ #include "mozilla/dom/WindowGlobalParent.h"
++#include "nsFocusManager.h"
+ #include "nsIObserverService.h"
+ 
+ namespace mozilla::dom {
+@@ -175,6 +176,20 @@ BrowserHost::PreserveLayers(bool aPreserveLayers) {
+   return NS_OK;
+ }
+ 
++NS_IMETHODIMP
++BrowserHost::AstrohackerSetInputActive(bool aActive) {
++  if (!mRoot) {
++    return NS_OK;
++  }
++  const uint64_t actionId = nsFocusManager::GenerateFocusActionId();
++  if (aActive) {
++    mRoot->Activate(actionId);
++  } else {
++    mRoot->Deactivate(false, actionId);
++  }
++  return NS_OK;
++}
++
+ /* readonly attribute uint64_t tabId; */
+ NS_IMETHODIMP
+ BrowserHost::GetTabId(uint64_t* aTabId) {
+-- 
+2.54.0
+

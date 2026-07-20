@@ -1,0 +1,184 @@
+From ac32cba68908345ef381c5fb3bf12f408321ee4e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 18:09:03 -0500
+Subject: [PATCH 64/90] Default-deny PaymentRequest
+
+A checkout knocked with wallet dreams,
+We answered with polite regimes:
+No cards, no sheet, no native show,
+Just false and unsupported, clean and slow.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../libtermsurf_chromium/ts_browser_client.cc |  4 +
+ .../ts_payment_request.cc                     | 88 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_payment_request.h | 21 +++++
+ 4 files changed, 115 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_payment_request.cc
+ create mode 100644 content/libtermsurf_chromium/ts_payment_request.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 7d41a23c17..c09c75e084 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -67,6 +67,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_pdf_renderer_support.h",
+     "ts_pdf_stream_delegate.cc",
+     "ts_pdf_stream_delegate.h",
++    "ts_payment_request.cc",
++    "ts_payment_request.h",
+     "ts_plugin_response_interceptor_url_loader_throttle.cc",
+     "ts_plugin_response_interceptor_url_loader_throttle.h",
+     "ts_plugin_utils.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 821d4402e7..3c9c535559 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -6,6 +6,7 @@
+ 
+ #include "base/command_line.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/libtermsurf_chromium/ts_payment_request.h"
+ #include "content/libtermsurf_chromium/ts_pdf_browser_support.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+@@ -23,6 +24,7 @@
+ #include "third_party/blink/public/common/web_preferences/web_preferences.h"
+ #include "third_party/blink/public/mojom/badging/badging.mojom.h"
+ #include "third_party/blink/public/mojom/css/preferred_color_scheme.mojom.h"
++#include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
+ 
+ namespace content {
+ namespace {}  // namespace
+@@ -105,6 +107,8 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       render_frame_host, map);
+   RegisterTsPdfBrowserInterfaceBindersForFrame(render_frame_host, map);
++  map->Add<payments::mojom::PaymentRequest>(
++      base::BindRepeating(&BindTsPaymentRequest));
+ 
+   // Add BadgeService stub (Issue 655).
+   map->Add<blink::mojom::BadgeService>(base::BindRepeating(
+diff --git a/content/libtermsurf_chromium/ts_payment_request.cc b/content/libtermsurf_chromium/ts_payment_request.cc
+new file mode 100644
+index 0000000000..8e5f0c3d99
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_payment_request.cc
+@@ -0,0 +1,88 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_payment_request.h"
++
++#include <memory>
++#include <utility>
++#include <vector>
++
++#include "mojo/public/cpp/bindings/remote.h"
++#include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "third_party/blink/public/mojom/payments/payment_request.mojom.h"
++
++namespace content {
++namespace {
++
++class TsPaymentRequest final : public payments::mojom::PaymentRequest {
++ public:
++  TsPaymentRequest() = default;
++  TsPaymentRequest(const TsPaymentRequest&) = delete;
++  TsPaymentRequest& operator=(const TsPaymentRequest&) = delete;
++  ~TsPaymentRequest() override = default;
++
++  // payments::mojom::PaymentRequest:
++  void Init(mojo::PendingRemote<payments::mojom::PaymentRequestClient> client,
++            std::vector<payments::mojom::PaymentMethodDataPtr> method_data,
++            payments::mojom::PaymentDetailsPtr details,
++            payments::mojom::PaymentOptionsPtr options) override {
++    client_.Bind(std::move(client));
++  }
++
++  void Show(bool wait_for_updated_details, bool had_user_activation) override {
++    SendUnsupported();
++  }
++
++  void UpdateWith(payments::mojom::PaymentDetailsPtr details) override {}
++
++  void OnPaymentDetailsNotUpdated() override {}
++
++  void Abort() override {
++    if (client_) {
++      client_->OnAbort(false);
++    }
++  }
++
++  void Complete(payments::mojom::PaymentComplete result) override {}
++
++  void Retry(payments::mojom::PaymentValidationErrorsPtr errors) override {
++    SendUnsupported();
++  }
++
++  void CanMakePayment() override {
++    if (client_) {
++      client_->OnCanMakePayment(
++          payments::mojom::CanMakePaymentQueryResult::CANNOT_MAKE_PAYMENT);
++    }
++  }
++
++  void HasEnrolledInstrument() override {
++    if (client_) {
++      client_->OnHasEnrolledInstrument(
++          payments::mojom::HasEnrolledInstrumentQueryResult::
++              HAS_NO_ENROLLED_INSTRUMENT);
++    }
++  }
++
++ private:
++  void SendUnsupported() {
++    if (client_) {
++      client_->OnError(payments::mojom::PaymentErrorReason::NOT_SUPPORTED,
++                       "Payment Request is not supported in TermSurf");
++    }
++  }
++
++  mojo::Remote<payments::mojom::PaymentRequestClient> client_;
++};
++
++}  // namespace
++
++void BindTsPaymentRequest(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<payments::mojom::PaymentRequest> receiver) {
++  mojo::MakeSelfOwnedReceiver(std::make_unique<TsPaymentRequest>(),
++                              std::move(receiver));
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_payment_request.h b/content/libtermsurf_chromium/ts_payment_request.h
+new file mode 100644
+index 0000000000..0813a9ebd1
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_payment_request.h
+@@ -0,0 +1,21 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PAYMENT_REQUEST_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PAYMENT_REQUEST_H_
++
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "third_party/blink/public/mojom/payments/payment_request.mojom-forward.h"
++
++namespace content {
++
++class RenderFrameHost;
++
++void BindTsPaymentRequest(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<payments::mojom::PaymentRequest> receiver);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PAYMENT_REQUEST_H_
+-- 
+2.54.0
+

@@ -1,0 +1,155 @@
+From bf52415970d9ac0d9153b4e0567ff716a0982d1b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 16 Jul 2026 07:02:57 -0500
+Subject: [PATCH 06/17] Trace the split tree's eclipse
+
+Nested branches redraw the frame,
+while every pane recites its name.
+The borrowed layer slips from view;
+the logs preserve the path it knew.
+---
+ .../Terminal/BaseTerminalController.swift     | 66 +++++++++++++++++++
+ .../Surface View/SurfaceView_AppKit.swift     | 12 ++++
+ 2 files changed, 78 insertions(+)
+
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index f0e9cc42e..c9d8c5309 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -244,6 +244,10 @@ class BaseTerminalController: NSWindowController,
+         // Create a new surface view
+         guard let ghostty_app = ghostty.app else { return nil }
+         let newView = Ghostty.SurfaceView(ghostty_app, baseConfig: config)
++        termSurfLogSplitTree(
++            event: "split_requested",
++            tree: surfaceTree,
++            note: "target:\(oldView.id.uuidString) new:\(newView.id.uuidString) direction:\(termSurfSplitDirection(direction))")
+ 
+         // Do the split
+         let newTree: SplitTree<Ghostty.SurfaceView>
+@@ -288,6 +292,10 @@ class BaseTerminalController: NSWindowController,
+     ///
+     /// Subclasses should call super first.
+     func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
++        termSurfLogSplitTree(
++            event: "surface_tree_changed",
++            tree: to,
++            note: "old:\(termSurfSplitTreeDescription(from))")
+         // If our surface tree becomes empty then we have no focused surface.
+         if to.isEmpty {
+             focusedSurface = nil
+@@ -506,10 +514,22 @@ class BaseTerminalController: NSWindowController,
+     ) {
+         // Setup our new split tree
+         let oldTree = surfaceTree
++        termSurfLogSplitTree(
++            event: "surface_tree_replace_before",
++            tree: oldTree,
++            note: "new:\(termSurfSplitTreeDescription(newTree)) move_focus_to:\(newView?.id.uuidString ?? "none") move_focus_from:\(oldView?.id.uuidString ?? "none")")
+         surfaceTree = newTree
++        termSurfLogSplitTree(
++            event: "surface_tree_replace_after",
++            tree: surfaceTree,
++            note: "old:\(termSurfSplitTreeDescription(oldTree)) move_focus_to:\(newView?.id.uuidString ?? "none") move_focus_from:\(oldView?.id.uuidString ?? "none")")
+         if let newView {
+             DispatchQueue.main.async {
+                 Ghostty.moveFocus(to: newView, from: oldView)
++                self.termSurfLogSplitTree(
++                    event: "surface_focus_settled",
++                    tree: self.surfaceTree,
++                    note: "requested:\(newView.id.uuidString) actual:\(self.focusedSurface?.id.uuidString ?? "none")")
+             }
+         }
+ 
+@@ -543,6 +563,52 @@ class BaseTerminalController: NSWindowController,
+         }
+     }
+ 
++    private func termSurfLogSplitTree(
++        event: String,
++        tree: SplitTree<Ghostty.SurfaceView>,
++        note: String
++    ) {
++        guard termsurfGeometryTraceEnabled() else { return }
++        let windowID = window?.windowNumber ?? 0
++        let focused = focusedSurface?.id.uuidString ?? "none"
++        termsurfLogGeometry(
++            "layer=split event=\(event) scenario=\(termsurfGeometryScenario()) window_id:\(windowID) focused_pane:\(focused) topology=\(termSurfSplitTreeDescription(tree)) note=\(note)"
++        )
++    }
++
++    private func termSurfSplitTreeDescription(
++        _ tree: SplitTree<Ghostty.SurfaceView>
++    ) -> String {
++        guard let root = tree.root else { return "empty" }
++        return termSurfSplitNodeDescription(root)
++    }
++
++    private func termSurfSplitNodeDescription(
++        _ node: SplitTree<Ghostty.SurfaceView>.Node
++    ) -> String {
++        switch node {
++        case .leaf(let view):
++            return "leaf(\(view.id.uuidString))"
++        case .split(let split):
++            let direction: String = switch split.direction {
++            case .horizontal: "horizontal"
++            case .vertical: "vertical"
++            }
++            return "\(direction)(\(termSurfSplitNodeDescription(split.left)),\(termSurfSplitNodeDescription(split.right)))"
++        }
++    }
++
++    private func termSurfSplitDirection(
++        _ direction: SplitTree<Ghostty.SurfaceView>.NewDirection
++    ) -> String {
++        switch direction {
++        case .left: "left"
++        case .right: "right"
++        case .down: "down"
++        case .up: "up"
++        }
++    }
++
+     // MARK: Notifications
+ 
+     @objc private func didChangeScreenParametersNotification(_ notification: Notification) {
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 645ddba02..3634abe41 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -1051,6 +1051,10 @@ extension Ghostty {
+       guard let surface = self.surface else { return }
+       guard self.focused != focused else { return }
+       self.focused = focused
++      termSurfLogGeometry(
++        event: "focus_changed",
++        visible: termsurfOverlayRootLayer != nil,
++        note: focused ? "focused" : "unfocused")
+       id.uuidString.withCString { paneID in
+         termsurf_pane_focus_changed(paneID, focused ? 1 : 0)
+       }
+@@ -1476,12 +1480,20 @@ extension Ghostty {
+ 
+     override func becomeFirstResponder() -> Bool {
+       let result = super.becomeFirstResponder()
++      termSurfLogGeometry(
++        event: "first_responder_changed",
++        visible: termsurfOverlayRootLayer != nil,
++        note: result ? "became" : "become-rejected")
+       if result { focusDidChange(true) }
+       return result
+     }
+ 
+     override func resignFirstResponder() -> Bool {
+       let result = super.resignFirstResponder()
++      termSurfLogGeometry(
++        event: "first_responder_changed",
++        visible: termsurfOverlayRootLayer != nil,
++        note: result ? "resigned" : "resign-rejected")
+ 
+       // We sometimes call this manually (see SplitView) as a way to force us to
+       // yield our focus state.
+-- 
+2.50.1 (Apple Git-155)
+

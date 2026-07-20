@@ -1,0 +1,384 @@
+From f93f52cbfd849f58aff2802794430d4d877a5ee5 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 16:42:52 -0500
+Subject: [PATCH 063/122] Harden PDF extension boundary
+
+One PDF key now guards the gate,
+Fake IDs must simply wait.
+Pipes may fail without a crash,
+And loose extension trust gets dashed.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../extensions/ts_pdf_extension_identity.cc   | 34 +++++++++
+ .../extensions/ts_pdf_extension_identity.h    | 26 +++++++
+ .../extensions/ts_pdf_viewer_private_api.cc   | 29 +++++---
+ .../extensions/ts_resources_private_api.cc    | 12 ++++
+ .../ts_pdf_browser_support.cc                 | 72 ++++++++-----------
+ ...esponse_interceptor_url_loader_throttle.cc | 26 +++++--
+ 7 files changed, 147 insertions(+), 54 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d74a785183..7d41a23c17 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -31,6 +31,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_extensions_renderer_client.h",
+     "extensions/ts_pdf_component_extension.cc",
+     "extensions/ts_pdf_component_extension.h",
++    "extensions/ts_pdf_extension_identity.cc",
++    "extensions/ts_pdf_extension_identity.h",
+     "extensions/ts_pdf_load_time_data.cc",
+     "extensions/ts_pdf_load_time_data.h",
+     "extensions/ts_pdf_resource_bundle.cc",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.cc b/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.cc
+new file mode 100644
+index 0000000000..9a76b205d3
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.cc
+@@ -0,0 +1,34 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h"
++
++#include "extensions/browser/extension_function.h"
++#include "extensions/common/constants.h"
++#include "extensions/common/extension.h"
++#include "extensions/common/manifest.h"
++#include "url/gurl.h"
++
++namespace content {
++
++bool IsTsPdfComponentExtensionId(std::string_view extension_id) {
++  return extension_id == extension_misc::kPdfExtensionId;
++}
++
++bool IsTsPdfComponentExtensionUrl(const GURL& url) {
++  return url.SchemeIs(extensions::kExtensionScheme) &&
++         IsTsPdfComponentExtensionId(url.host());
++}
++
++bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
++  return extension && IsTsPdfComponentExtensionId(extension->id()) &&
++         extensions::Manifest::IsComponentLocation(extension->location());
++}
++
++bool IsTsPdfExtensionFunctionSender(const ExtensionFunction* function) {
++  return function && IsTsPdfComponentExtension(function->extension()) &&
++         IsTsPdfComponentExtensionUrl(function->source_url());
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h b/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h
+new file mode 100644
+index 0000000000..3c14c81e5c
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h
+@@ -0,0 +1,26 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_EXTENSION_IDENTITY_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_EXTENSION_IDENTITY_H_
++
++#include <string_view>
++
++class GURL;
++class ExtensionFunction;
++
++namespace extensions {
++class Extension;
++}  // namespace extensions
++
++namespace content {
++
++bool IsTsPdfComponentExtensionId(std::string_view extension_id);
++bool IsTsPdfComponentExtensionUrl(const GURL& url);
++bool IsTsPdfComponentExtension(const extensions::Extension* extension);
++bool IsTsPdfExtensionFunctionSender(const ExtensionFunction* function);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_PDF_EXTENSION_IDENTITY_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+index 7923d1b85e..1fde7ec63c 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_viewer_private_api.cc
+@@ -11,6 +11,7 @@
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/common/extensions/api/pdf_viewer_private.h"
+ #include "components/pdf/common/constants.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h"
+ #include "content/public/browser/navigation_controller.h"
+ #include "content/public/browser/navigation_entry.h"
+ #include "content/public/browser/web_contents.h"
+@@ -31,27 +32,39 @@ TsPdfViewerPrivateSetPdfDocumentTitleFunction::
+ 
+ ExtensionFunction::ResponseAction
+ TsPdfViewerPrivateSetPdfDocumentTitleFunction::Run() {
++  if (!IsTsPdfExtensionFunctionSender(this)) {
++    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0"
++              << " reason=non-pdf-sender"
++              << " extension_id=" << (extension() ? extension()->id() : "")
++              << " source_url=" << source_url();
++    return RespondNow(
++        Error("pdfViewerPrivate.setPdfDocumentTitle is only "
++              "available to the PDF viewer."));
++  }
++
+   WebContents* web_contents = GetSenderWebContents();
+   if (!web_contents) {
+-    LOG(INFO)
+-        << "[termsurf-pdf-title] pdf-set-title success=0 reason=no-web-contents";
++    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 "
++                 "reason=no-web-contents";
+     return RespondNow(Error("Could not find a valid web contents."));
+   }
+ 
+   const std::string mime_type = web_contents->GetContentsMimeType();
+   if (mime_type != pdf::kPDFMimeType) {
+-    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 reason=mime-guard"
+-              << " mime_type=" << mime_type
+-              << " url=" << web_contents->GetLastCommittedURL();
++    LOG(INFO)
++        << "[termsurf-pdf-title] pdf-set-title success=0 reason=mime-guard"
++        << " mime_type=" << mime_type
++        << " url=" << web_contents->GetLastCommittedURL();
+     EXTENSION_FUNCTION_VALIDATE(false);
+   }
+ 
+   std::optional<set_pdf_document_title::Params> params =
+       set_pdf_document_title::Params::Create(args());
+   if (!params) {
+-    LOG(INFO) << "[termsurf-pdf-title] pdf-set-title success=0 reason=bad-params"
+-              << " mime_type=" << mime_type
+-              << " url=" << web_contents->GetLastCommittedURL();
++    LOG(INFO)
++        << "[termsurf-pdf-title] pdf-set-title success=0 reason=bad-params"
++        << " mime_type=" << mime_type
++        << " url=" << web_contents->GetLastCommittedURL();
+     EXTENSION_FUNCTION_VALIDATE(false);
+   }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+index e8f53427ae..54b2c779cc 100644
+--- a/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
++++ b/content/libtermsurf_chromium/extensions/ts_resources_private_api.cc
+@@ -7,7 +7,9 @@
+ #include <optional>
+ #include <utility>
+ 
++#include "base/logging.h"
+ #include "chrome/common/extensions/api/resources_private.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h"
+ #include "content/libtermsurf_chromium/extensions/ts_pdf_load_time_data.h"
+ #include "extensions/browser/extensions_browser_client.h"
+ #include "ui/base/webui/web_ui_util.h"
+@@ -27,6 +29,16 @@ TsResourcesPrivateGetStringsFunction::~TsResourcesPrivateGetStringsFunction() =
+     default;
+ 
+ ExtensionFunction::ResponseAction TsResourcesPrivateGetStringsFunction::Run() {
++  if (!IsTsPdfExtensionFunctionSender(this)) {
++    LOG(INFO) << "[termsurf-pdf] resources-private-get-strings success=0"
++              << " reason=non-pdf-sender"
++              << " extension_id=" << (extension() ? extension()->id() : "")
++              << " source_url=" << source_url();
++    return RespondNow(
++        Error("resourcesPrivate.getStrings is only available to the PDF "
++              "viewer."));
++  }
++
+   std::optional<get_strings::Params> params =
+       get_strings::Params::Create(args());
+   if (!params) {
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+index 1555ea85be..9dda721fc7 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -11,6 +11,7 @@
+ #include "components/pdf/browser/pdf_navigation_throttle.h"
+ #include "components/pdf/browser/pdf_url_loader_request_interceptor.h"
+ #include "components/pdf/common/constants.h"
++#include "content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h"
+ #include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
+ #include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
+ #include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
+@@ -41,7 +42,6 @@
+ #include "extensions/common/api/mime_handler.mojom.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+-#include "extensions/common/manifest.h"
+ #include "extensions/common/mojom/frame.mojom.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "pdf/mojom/pdf.mojom.h"
+@@ -82,16 +82,6 @@ std::optional<std::string> GetTsPdfTraceFileFromEnv(
+   return path;
+ }
+ 
+-bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
+-  return extension && extension->id() == extension_misc::kPdfExtensionId &&
+-         extensions::Manifest::IsComponentLocation(extension->location());
+-}
+-
+-bool IsTsPdfComponentExtensionUrl(const GURL& url) {
+-  return url.SchemeIs(extensions::kExtensionScheme) &&
+-         url.host() == extension_misc::kPdfExtensionId;
+-}
+-
+ const extensions::Extension* GetEnabledPdfExtension(
+     content::BrowserContext* browser_context) {
+   auto* registry = extensions::ExtensionRegistry::Get(browser_context);
+@@ -361,7 +351,7 @@ void RegisterTsPdfExtensionSubresourceURLLoaderFactory(
+ bool MaybeUseTsPdfProcessPerSite(BrowserContext* browser_context,
+                                  const GURL& site_url,
+                                  bool* use_process_per_site) {
+-  if (!site_url.SchemeIs(extensions::kExtensionScheme)) {
++  if (!IsTsPdfComponentExtensionUrl(site_url)) {
+     return false;
+   }
+ 
+@@ -372,8 +362,8 @@ bool MaybeUseTsPdfProcessPerSite(BrowserContext* browser_context,
+   }
+ 
+   const extensions::Extension* extension =
+-      registry->enabled_extensions().GetByID(site_url.GetHost());
+-  if (!extension) {
++      registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
++  if (!IsTsPdfComponentExtension(extension)) {
+     *use_process_per_site = false;
+     return true;
+   }
+@@ -385,7 +375,7 @@ bool MaybeUseTsPdfProcessPerSite(BrowserContext* browser_context,
+ }
+ 
+ bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled) {
+-  if (!url.SchemeIs(extensions::kExtensionScheme)) {
++  if (!IsTsPdfComponentExtensionUrl(url)) {
+     return false;
+   }
+ 
+@@ -399,6 +389,10 @@ bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled) {
+ }
+ 
+ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
++  if (!IsTsPdfComponentExtensionUrl(site_instance->GetSiteURL())) {
++    return;
++  }
++
+   BrowserContext* browser_context = site_instance->GetBrowserContext();
+   if (browser_context->IsOffTheRecord()) {
+     return;
+@@ -410,13 +404,10 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+   }
+ 
+   const extensions::Extension* extension =
+-      registry->enabled_extensions().GetExtensionOrAppByURL(
+-          site_instance->GetSiteURL());
+-  if (!extension) {
+-    if (site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme)) {
+-      LOG(INFO) << "[termsurf-pdf] process-map-miss site_url="
+-                << site_instance->GetSiteURL();
+-    }
++      registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
++  if (!IsTsPdfComponentExtension(extension)) {
++    LOG(INFO) << "[termsurf-pdf] process-map-miss site_url="
++              << site_instance->GetSiteURL();
+     return;
+   }
+ 
+@@ -431,26 +422,25 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+             << extension->id() << " process_id=" << process_id
+             << " site_url=" << site_instance->GetSiteURL();
+ 
+-  if (IsTsPdfComponentExtension(extension)) {
+-    auto* renderer_startup_helper =
+-        extensions::RendererStartupHelperFactory::GetForBrowserContext(
+-            browser_context);
+-    LOG(INFO) << "[termsurf-pdf] pdf-process-map-helper extension_id="
+-              << extension->id() << " process_id=" << process_id
+-              << " helper=" << (renderer_startup_helper != nullptr);
+-    if (renderer_startup_helper) {
+-      renderer_startup_helper->ActivateExtensionInProcess(
+-          *extension, site_instance->GetProcess());
+-      LOG(INFO) << "[termsurf-pdf] pdf-activate-request extension_id="
+-                << extension->id() << " process_id=" << process_id
+-                << " called=1";
+-    }
+-    ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
+-        process_id, url::Origin::CreateFromNormalizedTuple(
+-                        kChromeUIScheme, kChromeUIResourcesHost, 0));
+-    LOG(INFO) << "[termsurf-pdf] chrome-resources-grant extension_id="
+-              << extension->id() << " process_id=" << process_id;
++  auto* renderer_startup_helper =
++      extensions::RendererStartupHelperFactory::GetForBrowserContext(
++          browser_context);
++  LOG(INFO) << "[termsurf-pdf] pdf-process-map-helper extension_id="
++            << extension->id() << " process_id=" << process_id
++            << " helper=" << (renderer_startup_helper != nullptr);
++  if (renderer_startup_helper) {
++    renderer_startup_helper->ActivateExtensionInProcess(
++        *extension, site_instance->GetProcess());
++    LOG(INFO) << "[termsurf-pdf] pdf-activate-request extension_id="
++              << extension->id() << " process_id=" << process_id << " called=1";
+   }
++  // This grant is process-scoped. It is safe only because the process policy
++  // above is restricted to the PDF component extension's site URL.
++  ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
++      process_id, url::Origin::CreateFromNormalizedTuple(
++                      kChromeUIScheme, kChromeUIResourcesHost, 0));
++  LOG(INFO) << "[termsurf-pdf] chrome-resources-grant extension_id="
++            << extension->id() << " process_id=" << process_id;
+ }
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 2966055faf..cd734b4219 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -30,6 +30,7 @@
+ #include "mojo/public/cpp/bindings/pending_remote.h"
+ #include "mojo/public/cpp/bindings/remote.h"
+ #include "mojo/public/cpp/system/data_pipe.h"
++#include "net/base/net_errors.h"
+ #include "pdf/pdf_features.h"
+ #include "services/network/public/mojom/content_security_policy.mojom.h"
+ #include "services/network/public/mojom/url_loader.mojom.h"
+@@ -228,11 +229,26 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ 
+   mojo::ScopedDataPipeProducerHandle producer_handle;
+   mojo::ScopedDataPipeConsumerHandle consumer_handle;
+-  CHECK_EQ(
+-      mojo::CreateDataPipe(payload.size(), producer_handle, consumer_handle),
+-      MOJO_RESULT_OK);
+-  CHECK_EQ(MOJO_RESULT_OK,
+-           producer_handle->WriteAllData(base::as_byte_span(payload)));
++  MojoResult pipe_result =
++      mojo::CreateDataPipe(payload.size(), producer_handle, consumer_handle);
++  if (pipe_result != MOJO_RESULT_OK) {
++    LOG(ERROR) << "[termsurf-pdf] interceptor-data-pipe-failed"
++               << " frame_tree_node_id=" << frame_tree_node_id_
++               << " result=" << pipe_result;
++    delegate_->CancelWithError(net::ERR_FAILED,
++                               "termsurf_pdf_data_pipe_create_failed");
++    return;
++  }
++  MojoResult write_result =
++      producer_handle->WriteAllData(base::as_byte_span(payload));
++  if (write_result != MOJO_RESULT_OK) {
++    LOG(ERROR) << "[termsurf-pdf] interceptor-data-pipe-write-failed"
++               << " frame_tree_node_id=" << frame_tree_node_id_
++               << " result=" << write_result;
++    delegate_->CancelWithError(net::ERR_FAILED,
++                               "termsurf_pdf_data_pipe_write_failed");
++    return;
++  }
+ 
+   network::URLLoaderCompletionStatus status(net::OK);
+   status.decoded_body_length = base::checked_cast<int64_t>(payload.size());
+-- 
+2.50.1 (Apple Git-155)
+

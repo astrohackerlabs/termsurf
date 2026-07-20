@@ -1,134 +1,14 @@
-# Editor/IDE
-*~
-.*.swp
-.swp
-*.log
+# Local upstream fork working trees are reconstructed from patches and stay out
+# of public source history.
+/forks/*
+!/forks/README.md
+
+node_modules
+.astro
+dist
+target
+.wrangler
 .DS_Store
-.vscode/
-.direnv/
-.envrc.local
 
-# Debug logs
-logs/
-
-# Build outputs (root level for future WezTerm)
-/target/
-/build/
-zig-out/
-
-# Profiling
-default.profraw
-*.profraw
-
-# TermSurf 1.x / Ghostty (ts1/)
-ts1/zig-cache/
-ts1/.zig-cache/
-ts1/zig-out/
-ts1/build/
-ts1/.flatpak-builder/
-ts1/flatpak/builddir/
-ts1/flatpak/repo/
-ts1/result*
-ts1/.nixos-test-history
-ts1/example/*.wasm
-ts1/test/ghostty
-ts1/test/cases/**/*.actual.png
-ts1/glad.zip
-ts1/Box_test.ppm
-ts1/Box_test_diff.ppm
-ts1/ghostty.qcow2
-ts1/vgcore.*
-
-# TermSurf 5.0 / Ghostty (ts5/)
-ts5/zig-cache/
-ts5/.zig-cache/
-ts5/zig-out/
-ts5/build/
-ts5/.flatpak-builder/
-ts5/flatpak/builddir/
-ts5/flatpak/repo/
-ts5/result*
-ts5/.nixos-test-history
-ts5/example/*.wasm
-ts5/test/ghostty
-ts5/test/cases/**/*.actual.png
-ts5/glad.zip
-ts5/Box_test.ppm
-ts5/Box_test_diff.ppm
-ts5/ghostty.qcow2
-ts5/vgcore.*
-
-# TermSurf 5.0 Swift app build outputs
-ts5/*/.build/
-ts5/*/Sources/*/*.metallib
-
-# TermSurf Ghostboard (ghostboard/)
-ghostboard/zig-cache/
-ghostboard/.zig-cache/
-ghostboard/zig-out/
-ghostboard/build/
-ghostboard/.flatpak-builder/
-ghostboard/flatpak/builddir/
-ghostboard/flatpak/repo/
-ghostboard/result*
-ghostboard/.nixos-test-history
-ghostboard/example/*.wasm
-ghostboard/test/ghostty
-ghostboard/test/cases/**/*.actual.png
-ghostboard/glad.zip
-ghostboard/Box_test.ppm
-ghostboard/Box_test_diff.ppm
-ghostboard/ghostty.qcow2
-ghostboard/vgcore.*
-ghostboard/*/.build/
-ghostboard/*/Sources/*/*.metallib
-
-# Browser (browser/)
-browser/zig-cache/
-browser/.zig-cache/
-browser/zig-out/
-
-# Chromium build workspace (src/, depot_tools, gclient state all ignored)
-/chromium/*
-!/chromium/AGENTS.md
-!/chromium/patches/
-!/chromium/README.md
-
-# WebKit build workspace (src/ and build products ignored)
-/webkit/*
-!/webkit/AGENTS.md
-!/webkit/README.md
-!/webkit/patches/
-!/webkit/patches/**
-
-# TermSurf 4.0 (ts4/) build outputs
-ts4/termsurf-window/.build/
-ts4/termsurf-terminal/target/
-ts4/termsurf-browser/termsurf-browser
-ts4/termsurf-browser/src/*.o
-ts4/termsurf-xpc/target/
-ts4/two-profiles-receiver/receiver
-ts4/two-profiles-receiver/shaders.metallib
-
-# Vendor repos (engine research)
-vendor/firefox/
-vendor/webkit/
-vendor/ladybird/
-girlbat/libtermsurf_ladybird/build/
-vendor/rust-objc/
-vendor/objc2/
-
-# TUI build outputs
-webtui/target/
-
-# Release packaging
-dist/
-
-vendor/toolchains/
-
-# Issue 802: automation screenshots are never committed (see issue README policy)
-__screenshots__/
-
-# Issue 802: RoasttyKit build artifact (libroastty + headers), not committed
-roastty/macos/RoasttyKit.xcframework/
-roastty/macos/build/
+/rust/ah-webkitd/libtermsurf_webkit/build/
+/rust/ah-ladybirdd/libtermsurf_ladybird/build/

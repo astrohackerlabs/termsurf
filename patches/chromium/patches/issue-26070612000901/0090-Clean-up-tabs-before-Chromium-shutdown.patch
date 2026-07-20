@@ -1,0 +1,83 @@
+From 63fbf664d25376674abe63ad8b2a7a75ff2b62a5 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 6 Jul 2026 07:20:35 -0500
+Subject: [PATCH 90/90] Clean up tabs before Chromium shutdown
+
+---
+ .../libtermsurf_chromium.cc                   |  3 +++
+ .../ts_browser_main_parts.cc                  | 25 +++++++++++++++++++
+ .../ts_browser_main_parts.h                   |  1 +
+ 3 files changed, 29 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index ff8a10d9fd..bd0bf6f7f0 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -238,6 +238,9 @@ void ts_post_task(void (*task)(void* user_data), void* user_data) {
+ }
+ 
+ void ts_quit(void) {
++  if (g_main_parts) {
++    g_main_parts->ShutdownTabs();
++  }
+   content::Shell::Shutdown();
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 5b5e9a2925..700352ddca 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -686,6 +686,11 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+     if ((*it)->shell &&
+         static_cast<void*>((*it)->shell->web_contents()) == wc_handle) {
+       (*it)->tab_observer.reset();
++#if BUILDFLAG(IS_MAC)
++      if (auto* view = (*it)->shell->web_contents()->GetRenderWidgetHostView()) {
++        SetParentUiLayerOnView(view, nullptr);
++      }
++#endif
+       delete (*it)->shell.get();
+       (*it)->shell = nullptr;
+       tabs_.erase(it);
+@@ -697,6 +702,26 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+   }
+ }
+ 
++void TsBrowserMainParts::ShutdownTabs() {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  for (auto& tab : tabs_) {
++    tab->tab_observer.reset();
++#if BUILDFLAG(IS_MAC)
++    if (tab->shell) {
++      if (auto* view = tab->shell->web_contents()->GetRenderWidgetHostView()) {
++        SetParentUiLayerOnView(view, nullptr);
++      }
++    }
++    tab->bridge.reset();
++#endif
++    if (tab->shell) {
++      delete tab->shell.get();
++      tab->shell = nullptr;
++    }
++  }
++  tabs_.clear();
++}
++
+ void TsBrowserMainParts::NavigateTab(void* wc_handle, const char* url) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   TabState* tab = FindTab(wc_handle);
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 51f1d49db1..9d15dcac38 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -80,6 +80,7 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+                           int width,
+                           int height,
+                           bool dark);
++  void ShutdownTabs();
+   void DestroyTab(void* wc_handle);
+   void NavigateTab(void* wc_handle, const char* url);
+   void ResizeTab(void* wc_handle,
+-- 
+2.54.0
+

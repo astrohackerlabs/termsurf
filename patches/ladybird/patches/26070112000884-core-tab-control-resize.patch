@@ -1,0 +1,78 @@
+From afbfda7ba35c73179edfc542cc8e0e4ead5a02ab Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 01:59:16 -0500
+Subject: [PATCH] Add TermSurf viewport resize
+
+A headless view learned to resize,
+With pixels both humble and wise.
+No grand frame parade,
+Just a viewport remade,
+For Girlbat to stretch toward the skies.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 22 ++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index d2df084ec4..5dcd07b557 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -138,6 +138,11 @@ public:
+         ++m_render_surface_generation;
+     }
+ 
++    void resize(Web::DevicePixelSize viewport_size)
++    {
++        reset_viewport_size(viewport_size);
++    }
++
+ private:
+     TermSurfWebView(Core::AnonymousBuffer theme, Web::DevicePixelSize viewport_size)
+         : HeadlessWebView(move(theme), viewport_size)
+@@ -186,6 +191,7 @@ extern "C" char const* ts_ladybird_runtime_last_error(TsLadybirdRuntime const*);
+ extern "C" TsLadybirdView* ts_ladybird_view_create(TsLadybirdRuntime*, int, int);
+ extern "C" void ts_ladybird_view_destroy(TsLadybirdView*);
+ extern "C" bool ts_ladybird_view_load_url(TsLadybirdView*, char const*);
++extern "C" bool ts_ladybird_view_resize(TsLadybirdView*, int, int);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -376,6 +382,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_last_error(TsLadybirdRu
+ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRuntime*, int, int);
+ TERMSURF_LADYBIRD_EXPORT void ts_ladybird_view_destroy(TsLadybirdView*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView*, char const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_resize(TsLadybirdView*, int, int);
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -388,7 +395,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-render-surface-abi-probe";
++    return "ladybird-a80d01fc-issue-0884-core-tab-resize";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -541,6 +548,19 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView* view, ch
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_resize(TsLadybirdView* view, int width, int height)
++{
++    if (!validate_view(view))
++        return false;
++    if (width <= 0 || height <= 0) {
++        set_runtime_error(view->runtime, "view size must be positive");
++        return false;
++    }
++
++    view->view->resize(Web::DevicePixelSize { width, height });
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

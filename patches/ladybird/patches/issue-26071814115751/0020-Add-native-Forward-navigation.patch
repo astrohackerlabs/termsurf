@@ -1,0 +1,73 @@
+From 7d2d5c31dc08170bc8ce2af93be69671d8ae40ee Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 13:56:01 -0500
+Subject: [PATCH 20/22] Add native Forward navigation
+
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 26 +++++++++++++------
+ 1 file changed, 18 insertions(+), 8 deletions(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 20095d7f43..e7c212bb73 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -282,6 +282,7 @@ typedef struct TsLadybirdRendererCrash {
+ 
+ typedef struct TsLadybirdNavigationState {
+     bool can_go_back;
++    bool can_go_forward;
+ } TsLadybirdNavigationState;
+ 
+ extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
+@@ -1183,24 +1184,32 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_action(TsLadybirdView*
+         set_runtime_error(view->runtime, "navigation action is null");
+         return false;
+     }
+-    if (strcmp(action, "back")) {
++    int delta = 0;
++    if (!strcmp(action, "back"))
++        delta = -1;
++    else if (!strcmp(action, "forward"))
++        delta = 1;
++    else {
+         set_runtime_error(view->runtime, "navigation action is unsupported");
+         return false;
+     }
+     if (view->did_crash) {
+-        set_runtime_error(view->runtime, "back navigation is unavailable after renderer crash");
++        set_runtime_error(view->runtime, "navigation is unavailable after renderer crash");
+         return false;
+     }
+-    if (!view->view->navigate_back_action().enabled()) {
+-        set_runtime_error(view->runtime, "back navigation is unavailable");
++    bool enabled = delta < 0
++        ? view->view->navigate_back_action().enabled()
++        : view->view->navigate_forward_action().enabled();
++    if (!enabled) {
++        set_runtime_error(view->runtime, ByteString::formatted("{} navigation is unavailable", action));
+         return false;
+     }
+ 
+-    auto outcome = view->view->traverse_the_history_by_delta(-1);
+-    outln("PROBE: TermSurf Ladybird ABI navigation_action action=back status={} replace_process={} top_level={} waiting={} url={}",
+-        history_traversal_status_name(outcome.status), outcome.will_replace_web_content_process, outcome.will_change_top_level_entry, outcome.waiting_for_cancelation_check, view->view->url().to_byte_string());
++    auto outcome = view->view->traverse_the_history_by_delta(delta);
++    outln("PROBE: TermSurf Ladybird ABI navigation_action action={} status={} replace_process={} top_level={} waiting={} url={}",
++        action, history_traversal_status_name(outcome.status), outcome.will_replace_web_content_process, outcome.will_change_top_level_entry, outcome.waiting_for_cancelation_check, view->view->url().to_byte_string());
+     if (outcome.status != WebView::HistoryTraversalStatus::Started) {
+-        set_runtime_error(view->runtime, ByteString::formatted("back navigation did not start: {}", history_traversal_status_name(outcome.status)));
++        set_runtime_error(view->runtime, ByteString::formatted("{} navigation did not start: {}", action, history_traversal_status_name(outcome.status)));
+         return false;
+     }
+     return true;
+@@ -1219,6 +1228,7 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_state(TsLadybirdView c
+         return true;
+ 
+     out_state->can_go_back = view->view->navigate_back_action().enabled();
++    out_state->can_go_forward = view->view->navigate_forward_action().enabled();
+     return true;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

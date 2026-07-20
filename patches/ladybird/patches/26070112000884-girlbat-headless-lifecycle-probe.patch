@@ -1,0 +1,144 @@
+From 260e5bdd81fc0d8cf6c9472d045402b06dbb0116 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 1 Jul 2026 20:22:08 -0500
+Subject: [PATCH] Add Girlbat headless lifecycle probe
+
+---
+ Tests/LibWebView/CMakeLists.txt               | 10 ++
+ .../TestGirlbatHeadlessLifecycle.cpp          | 98 +++++++++++++++++++
+ 2 files changed, 108 insertions(+)
+ create mode 100644 Tests/LibWebView/TestGirlbatHeadlessLifecycle.cpp
+
+diff --git a/Tests/LibWebView/CMakeLists.txt b/Tests/LibWebView/CMakeLists.txt
+index 9a2cc297eb..42640a444d 100644
+--- a/Tests/LibWebView/CMakeLists.txt
++++ b/Tests/LibWebView/CMakeLists.txt
+@@ -18,6 +18,13 @@ if (NOT WIN32)
+     if (APPLE)
+         target_compile_definitions(TestAutocomplete PRIVATE LADYBIRD_BINARY_PATH="$<TARGET_FILE_DIR:ladybird>")
+     endif()
++
++    add_executable(TestGirlbatHeadlessLifecycle TestGirlbatHeadlessLifecycle.cpp)
++    add_dependencies(TestGirlbatHeadlessLifecycle ${ladybird_helper_processes})
++    target_link_libraries(TestGirlbatHeadlessLifecycle PRIVATE AK LibCore LibDiff LibFileSystem LibGfx LibImageDecoders LibImageDecoderClient LibIPC LibJS LibMain LibRequests LibURL LibWeb LibWebView)
++    if (APPLE)
++        target_compile_definitions(TestGirlbatHeadlessLifecycle PRIVATE LADYBIRD_BINARY_PATH="$<TARGET_FILE_DIR:ladybird>")
++    endif()
+ endif()
+ 
+ if (BUILD_TESTING AND NOT WIN32)
+@@ -29,4 +36,7 @@ if (BUILD_TESTING AND NOT WIN32)
+ 
+     add_test(NAME TestAutocomplete COMMAND $<TARGET_FILE:TestAutocomplete>)
+     set_tests_properties(TestAutocomplete PROPERTIES TIMEOUT 60 ENVIRONMENT LADYBIRD_SOURCE_DIR=${LADYBIRD_SOURCE_DIR})
++
++    add_test(NAME TestGirlbatHeadlessLifecycle COMMAND $<TARGET_FILE:TestGirlbatHeadlessLifecycle>)
++    set_tests_properties(TestGirlbatHeadlessLifecycle PROPERTIES TIMEOUT 60 ENVIRONMENT LADYBIRD_SOURCE_DIR=${LADYBIRD_SOURCE_DIR})
+ endif()
+diff --git a/Tests/LibWebView/TestGirlbatHeadlessLifecycle.cpp b/Tests/LibWebView/TestGirlbatHeadlessLifecycle.cpp
+new file mode 100644
+index 0000000000..8f13e1bb5f
+--- /dev/null
++++ b/Tests/LibWebView/TestGirlbatHeadlessLifecycle.cpp
+@@ -0,0 +1,98 @@
++/*
++ * Copyright (c) 2026, Ryan X. Charles <ryan@ryanxcharles.com>
++ *
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#include <AK/String.h>
++#include <LibCore/EventLoop.h>
++#include <LibGfx/SystemTheme.h>
++#include <LibMain/Main.h>
++#include <LibURL/URL.h>
++#include <LibWeb/Bindings/Navigation.h>
++#include <LibWebView/Application.h>
++#include <LibWebView/HeadlessWebView.h>
++#include <LibWebView/Options.h>
++
++namespace {
++
++class TestApplication final : public WebView::Application {
++    WEB_VIEW_APPLICATION(TestApplication)
++
++public:
++    explicit TestApplication(Optional<ByteString> ladybird_binary_path)
++        : WebView::Application(move(ladybird_binary_path))
++    {
++    }
++
++private:
++    virtual void create_platform_options(WebView::BrowserOptions& browser_options, WebView::RequestServerOptions&, WebView::WebContentOptions& web_content_options) override
++    {
++        browser_options.headless_mode = WebView::HeadlessMode::Test;
++        browser_options.disable_sql_database = WebView::DisableSQLDatabase::Yes;
++        web_content_options.force_fontconfig = WebView::ForceFontconfig::Yes;
++    }
++};
++
++static ErrorOr<Core::AnonymousBuffer> load_default_theme()
++{
++    auto buffer = TRY(Core::AnonymousBuffer::create_with_size(sizeof(Gfx::SystemTheme)));
++    auto* theme = buffer.data<Gfx::SystemTheme>();
++    for (auto& color : theme->color)
++        color = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::Window)] = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::WindowText)] = Color(Color::Black).value();
++    theme->color[to_underlying(Gfx::ColorRole::Base)] = Color(Color::White).value();
++    theme->color[to_underlying(Gfx::ColorRole::BaseText)] = Color(Color::Black).value();
++    return buffer;
++}
++
++}
++
++ErrorOr<int> ladybird_main(Main::Arguments arguments)
++{
++    outln("PROBE: creating application");
++#if defined(LADYBIRD_BINARY_PATH)
++    auto app = TRY(TestApplication::create(arguments, LADYBIRD_BINARY_PATH));
++#else
++    auto app = TRY(TestApplication::create(arguments, OptionalNone {}));
++#endif
++
++    outln("PROBE: loading theme");
++    auto theme = TRY(load_default_theme());
++
++    outln("PROBE: constructing HeadlessWebView");
++    auto view = WebView::HeadlessWebView::create(move(theme), { 800, 600 });
++    outln("TIER2: constructed HeadlessWebView handle={}", view->handle());
++
++    bool finished = false;
++    bool crashed = false;
++
++    view->on_load_start = [&](URL::URL const& url, bool) {
++        outln("PROBE: load_start url={}", url.serialize());
++    };
++    view->on_load_finish = [&](URL::URL const& url) {
++        outln("PROBE: load_finish url={}", url.serialize());
++        if (url.scheme() == "data"sv) {
++            outln("TIER3: load_finish url={}", url.serialize());
++            finished = true;
++        }
++    };
++    view->on_web_content_crashed = [&] {
++        outln("FAIL: WebContent crashed");
++        crashed = true;
++    };
++
++    auto url = URL::create_with_data("text/html"sv, "<title>Girlbat</title><p>ok</p>"sv);
++    view->load(url, Web::Bindings::NavigationHistoryBehavior::Auto);
++
++    Core::EventLoop::current().spin_until([&] {
++        return finished || crashed;
++    });
++
++    if (crashed || !finished)
++        return 1;
++
++    outln("PASS: Girlbat headless lifecycle probe reached Tier 3");
++    return 0;
++}
+-- 
+2.54.0
+

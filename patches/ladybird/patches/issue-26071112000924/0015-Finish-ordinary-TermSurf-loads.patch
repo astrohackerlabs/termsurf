@@ -1,0 +1,46 @@
+From 7ccaa21777c427af3642cb1cf4c3c32b10d9da42 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 05:29:21 -0500
+Subject: [PATCH 15/18] Finish ordinary TermSurf loads
+
+The view would clap for data alone,
+While HTTP sat by the phone.
+Now finished means done,
+For pages that run,
+And Girlbat can show what has grown.
+---
+ Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp | 10 ++++++----
+ 1 file changed, 6 insertions(+), 4 deletions(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 5cb80211db..00c3c53ade 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -749,7 +749,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-renderer-crashed";
++    return "ladybird-a80d01fc-issue-0884-visible-runtime-load-finish";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_resource_root()
+@@ -874,10 +874,12 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+     wrapper->view->on_load_finish = [wrapper](URL::URL const& url) {
+         wrapper->last_url = url.to_byte_string();
+         outln("PROBE: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
+-        if (url.scheme() == "data"sv) {
+-            outln("TIER3: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
+-            wrapper->did_finish_load = true;
++        if (url.scheme() == "about"sv) {
++            outln("PROBE: TermSurf Ladybird ABI ignoring about load_finish url={}", wrapper->last_url);
++            return;
+         }
++        outln("TIER3: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
++        wrapper->did_finish_load = true;
+     };
+     wrapper->view->on_web_content_crashed = [wrapper] {
+         RendererCrash crash;
+-- 
+2.54.0
+

@@ -1,0 +1,137 @@
+From 080969b54eafec5384f8ddb88c50c74e2f9dd1ed Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 19 May 2026 19:11:29 -0500
+Subject: [PATCH 009/119] Add safe popup trace points
+
+A select menu lost its map,
+So logs now mark the trail.
+No bounds are bent, no widgets shoved,
+Just breadcrumbs when they fail.
+---
+ .../renderer_host/popup_menu_helper_mac.mm    | 31 ++++++++++++++++++
+ .../ts_browser_main_parts.cc                  | 32 +++++++++++++++++++
+ 2 files changed, 63 insertions(+)
+
+diff --git a/content/browser/renderer_host/popup_menu_helper_mac.mm b/content/browser/renderer_host/popup_menu_helper_mac.mm
+index c56f5f4428..575646a453 100644
+--- a/content/browser/renderer_host/popup_menu_helper_mac.mm
++++ b/content/browser/renderer_host/popup_menu_helper_mac.mm
+@@ -4,6 +4,9 @@
+ 
+ #include "content/browser/renderer_host/popup_menu_helper_mac.h"
+ 
++#include <cstdlib>
++
++#include "base/logging.h"
+ #include "base/numerics/safe_conversions.h"
+ #import "content/app_shim_remote_cocoa/render_widget_host_view_cocoa.h"
+ #include "content/browser/permissions/permission_controller_impl.h"
+@@ -22,6 +25,20 @@ namespace {
+ 
+ bool g_allow_showing_popup_menus = true;
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
+ }  // namespace
+ 
+ PopupMenuHelper::PopupMenuHelper(
+@@ -62,6 +79,20 @@ void PopupMenuHelper::ShowPopupMenu(
+   // Convert element_bounds to be in screen.
+   gfx::Rect client_area = web_contents->GetContainerBounds();
+   gfx::Rect bounds_in_screen = bounds + client_area.OffsetFromOrigin();
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] PopupMenuHelper::ShowPopupMenu"
++              << " webcontents=" << static_cast<void*>(web_contents)
++              << " rwhvm=" << static_cast<void*>(rwhvm)
++              << " input_bounds=" << bounds.ToString()
++              << " container_bounds=" << client_area.ToString()
++              << " bounds_in_screen=" << bounds_in_screen.ToString()
++              << " rwhvm_get_view_bounds=" << rwhvm->GetViewBounds().ToString()
++              << " item_count=" << items.size()
++              << " selected_item=" << selected_item
++              << " right_aligned=" << right_aligned
++              << " allow_multiple_selection=" << allow_multiple_selection;
++  }
+ 
+   // The new popup menu would overlap the permission prompt, which could lead to
+   // users making decisions based on incorrect information. We should close the
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 3beda19079..27c2f57080 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -4,6 +4,7 @@
+ 
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ 
++#include <cstdlib>
+ #include <cmath>
+ #include <optional>
+ 
+@@ -46,6 +47,24 @@
+ 
+ namespace content {
+ 
++namespace {
++
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium";
++  }
++}
++
++}  // namespace
++
+ TsBrowserMainParts::TsBrowserMainParts() = default;
+ TsBrowserMainParts::~TsBrowserMainParts() = default;
+ TsBrowserMainParts::TabState::TabState() = default;
+@@ -161,6 +180,12 @@ void* TsBrowserMainParts::CreateTab(void* ctx, const char* url,
+ 
+   // Fire tab ready callback.
+   TsNotifyTabReady(handle, tab->tab_id);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] chromium_tab_map"
++              << " tab_id=" << tab->tab_id << " webcontents=" << handle
++              << " devtools=false";
++  }
+ 
+ #if BUILDFLAG(IS_MAC)
+   // Register cursor and CALayerParams callbacks.
+@@ -331,6 +356,13 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx, int inspected_tab_id,
+   tab_observer->ObserveContents(shell->web_contents());
+ 
+   TsNotifyTabReady(handle, tab->tab_id);
++  if (Issue779TraceEnabled()) {
++    Issue779TraceAnnounce();
++    LOG(INFO) << "[issue-779-trace] chromium_tab_map"
++              << " tab_id=" << tab->tab_id << " webcontents=" << handle
++              << " devtools=true"
++              << " inspected_tab_id=" << inspected_tab_id;
++  }
+ 
+ #if BUILDFLAG(IS_MAC)
+   if (auto* view = shell->web_contents()->GetRenderWidgetHostView()) {
+-- 
+2.54.0
+

@@ -1,0 +1,416 @@
+From b26b2f80e93db7c9b2238e2dd041ceffc45a2dbc Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 13:55:20 -0500
+Subject: [PATCH 077/119] Issue 834 exp20: wire PDF print manager
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |   5 +
+ .../libtermsurf_chromium/ts_browser_client.cc |   1 +
+ .../ts_pdf_browser_support.cc                 |  21 ++
+ .../ts_pdf_browser_support.h                  |   1 +
+ .../ts_pdf_print_manager.cc                   | 203 ++++++++++++++++++
+ .../ts_pdf_print_manager.h                    |  77 +++++++
+ 6 files changed, 308 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_print_manager.cc
+ create mode 100644 content/libtermsurf_chromium/ts_pdf_print_manager.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d4b6346d10..c63b1f0d0b 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -73,6 +73,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_pdf_help_bubble_handler_factory.h",
+     "ts_pdf_iframe_navigation_throttle.cc",
+     "ts_pdf_iframe_navigation_throttle.h",
++    "ts_pdf_print_manager.cc",
++    "ts_pdf_print_manager.h",
+     "ts_pdf_renderer_support.cc",
+     "ts_pdf_renderer_support.h",
+     "ts_pdf_stream_delegate.cc",
+@@ -114,6 +116,8 @@ shared_library("libtermsurf_chromium") {
+     "//components/pdf/renderer",
+     "//components/pref_registry",
+     "//components/prefs",
++    "//components/printing/browser",
++    "//components/printing/common",
+     "//components/printing/renderer",
+     "//components/resources:components_resources",
+     "//components/strings:components_strings",
+@@ -135,6 +139,7 @@ shared_library("libtermsurf_chromium") {
+     "//extensions/common:common_constants",
+     "//extensions/common:core_api_provider",
+     "//extensions/renderer",
++    "//printing",
+     "//ui/webui/resources/cr_components/help_bubble:mojo_bindings",
+   ]
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index a75baf0f9e..4d946ada99 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -138,6 +138,7 @@ void TsBrowserClient::OnWebContentsCreated(WebContents* web_contents) {
+   ShellContentBrowserClient::OnWebContentsCreated(web_contents);
+   extensions::ExtensionsBrowserClient::Get()
+       ->CreateExtensionWebContentsObserver(web_contents);
++  CreateTsPdfPrintManagersForWebContents(web_contents);
+ }
+ 
+ void TsBrowserClient::OverrideWebPreferences(
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+index 9dda721fc7..aad634bb80 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -11,11 +11,14 @@
+ #include "components/pdf/browser/pdf_navigation_throttle.h"
+ #include "components/pdf/browser/pdf_url_loader_request_interceptor.h"
+ #include "components/pdf/common/constants.h"
++#include "components/printing/browser/print_manager_utils.h"
++#include "components/printing/common/print.mojom.h"
+ #include "content/libtermsurf_chromium/extensions/ts_pdf_extension_identity.h"
+ #include "content/libtermsurf_chromium/ts_mime_handler_binders.h"
+ #include "content/libtermsurf_chromium/ts_pdf_document_helper_client.h"
+ #include "content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.h"
+ #include "content/libtermsurf_chromium/ts_pdf_iframe_navigation_throttle.h"
++#include "content/libtermsurf_chromium/ts_pdf_print_manager.h"
+ #include "content/libtermsurf_chromium/ts_pdf_stream_delegate.h"
+ #include "content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.h"
+ #include "content/libtermsurf_chromium/ts_plugin_utils.h"
+@@ -233,6 +236,15 @@ void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
+                  receiver) {
+             extensions::ExtensionWebContentsObserver::BindLocalFrameHost(
+                 std::move(receiver), render_frame_host);
++      },
++      &render_frame_host));
++  associated_registry.AddInterface<printing::mojom::PrintManagerHost>(
++      base::BindRepeating(
++          [](RenderFrameHost* render_frame_host,
++             mojo::PendingAssociatedReceiver<
++                 printing::mojom::PrintManagerHost> receiver) {
++            termsurf::TsPdfPrintManager::BindPrintManagerHost(
++                std::move(receiver), render_frame_host);
+           },
+           &render_frame_host));
+   associated_registry.AddInterface<pdf::mojom::PdfHost>(base::BindRepeating(
+@@ -248,6 +260,15 @@ void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
+       &render_frame_host));
+ }
+ 
++void CreateTsPdfPrintManagersForWebContents(WebContents* web_contents) {
++  if (!web_contents) {
++    return;
++  }
++
++  termsurf::TsPdfPrintManager::CreateForWebContents(web_contents);
++  printing::CreateCompositeClientIfNeeded(web_contents, std::string());
++}
++
+ void AppendTsPdfRendererCommandLineSwitches(base::CommandLine* command_line) {
+   std::optional<std::string> intercept_file = GetTsPdfTraceFileFromEnv(
+       "TERMSURF_PDF_PRINT_INTERCEPT", "TERMSURF_PDF_PRINT_INTERCEPT_FILE");
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.h b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+index c8debb9482..3b0a3598e9 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.h
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+@@ -67,6 +67,7 @@ void RegisterTsPdfBrowserInterfaceBindersForFrame(
+ void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
+     RenderFrameHost& render_frame_host,
+     blink::AssociatedInterfaceRegistry& associated_registry);
++void CreateTsPdfPrintManagersForWebContents(WebContents* web_contents);
+ void AppendTsPdfRendererCommandLineSwitches(base::CommandLine* command_line);
+ bool IsTsPdfExtensionScheme(const std::string& scheme);
+ mojo::PendingRemote<network::mojom::URLLoaderFactory>
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.cc b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+new file mode 100644
+index 0000000000..371c80a3fe
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+@@ -0,0 +1,203 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_pdf_print_manager.h"
++
++#include <memory>
++#include <string>
++
++#include "base/functional/bind.h"
++#include "components/printing/browser/print_manager_utils.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++#include "printing/mojom/print.mojom.h"
++#include "printing/print_settings.h"
++#include "printing/printing_context.h"
++#include "ui/gfx/native_ui_types.h"
++
++namespace termsurf {
++namespace {
++
++class TsPrintingContextDelegate : public printing::PrintingContext::Delegate {
++ public:
++  explicit TsPrintingContextDelegate(content::WebContents* web_contents)
++      : web_contents_(web_contents) {}
++
++  gfx::NativeView GetParentView() override {
++    return web_contents_ ? web_contents_->GetNativeView() : gfx::NativeView();
++  }
++
++  std::string GetAppLocale() override { return "en-US"; }
++
++ private:
++  const raw_ptr<content::WebContents> web_contents_;
++};
++
++}  // namespace
++
++struct TsPdfPrintManager::PrintRequest {
++  explicit PrintRequest(content::WebContents* web_contents)
++      : delegate(web_contents),
++        context(printing::PrintingContext::Create(
++            &delegate,
++            printing::PrintingContext::OutOfProcessBehavior::kDisabled)) {}
++
++  TsPrintingContextDelegate delegate;
++  std::unique_ptr<printing::PrintingContext> context;
++};
++
++namespace {
++
++printing::mojom::PrintParamsPtr CreatePrintParamsFromSettings(
++    const printing::PrintSettings& settings,
++    int document_cookie) {
++  auto params = printing::mojom::PrintParams::New();
++  printing::RenderParamsFromPrintSettings(settings, params.get());
++  params->document_cookie = document_cookie;
++  return params;
++}
++
++}  // namespace
++
++TsPdfPrintManager::TsPdfPrintManager(content::WebContents* web_contents)
++    : printing::PrintManager(web_contents),
++      content::WebContentsUserData<TsPdfPrintManager>(*web_contents) {}
++
++TsPdfPrintManager::~TsPdfPrintManager() = default;
++
++// static
++void TsPdfPrintManager::OnScriptedPrintSettingsReady(
++    std::unique_ptr<PrintRequest> request,
++    printing::mojom::ScriptedPrintParamsPtr params,
++    printing::mojom::PrintManagerHost::ScriptedPrintCallback callback,
++    printing::mojom::ResultCode result) {
++  if (result != printing::mojom::ResultCode::kSuccess) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  auto settings = request->context->TakeAndResetSettings();
++  if (!settings) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  auto print_pages_params = printing::mojom::PrintPagesParams::New();
++  print_pages_params->params = CreatePrintParamsFromSettings(
++      *settings, printing::PrintSettings::NewCookie());
++  if (!print_pages_params->params) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++  print_pages_params->pages = settings->ranges();
++
++  std::move(callback).Run(std::move(print_pages_params));
++}
++
++// static
++void TsPdfPrintManager::BindPrintManagerHost(
++    mojo::PendingAssociatedReceiver<printing::mojom::PrintManagerHost> receiver,
++    content::RenderFrameHost* render_frame_host) {
++  content::WebContents* web_contents =
++      content::WebContents::FromRenderFrameHost(render_frame_host);
++  if (!web_contents) {
++    return;
++  }
++
++  TsPdfPrintManager* print_manager =
++      TsPdfPrintManager::FromWebContents(web_contents);
++  if (!print_manager) {
++    return;
++  }
++
++  print_manager->BindReceiver(std::move(receiver), render_frame_host);
++}
++
++void TsPdfPrintManager::GetDefaultPrintSettings(
++    GetDefaultPrintSettingsCallback callback) {
++  auto request = std::make_unique<PrintRequest>(web_contents());
++  if (!request->context) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  request->context->set_margin_type(
++      printing::mojom::MarginType::kDefaultMargins);
++  printing::mojom::ResultCode result = request->context->UseDefaultSettings();
++  if (result != printing::mojom::ResultCode::kSuccess) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  const printing::PrintSettings& settings = request->context->settings();
++  if (!settings.dpi()) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  int document_cookie = printing::PrintSettings::NewCookie();
++  set_cookie(document_cookie);
++  auto print_params =
++      CreatePrintParamsFromSettings(request->context->settings(),
++                                    document_cookie);
++  pending_print_requests_[document_cookie] = std::move(request);
++  std::move(callback).Run(std::move(print_params));
++}
++
++void TsPdfPrintManager::ScriptedPrint(
++    printing::mojom::ScriptedPrintParamsPtr params,
++    ScriptedPrintCallback callback) {
++  auto request_iter = pending_print_requests_.find(params->cookie);
++  if (request_iter == pending_print_requests_.end()) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  std::unique_ptr<PrintRequest> request = std::move(request_iter->second);
++  pending_print_requests_.erase(request_iter);
++  if (!request->context) {
++    std::move(callback).Run(nullptr);
++    return;
++  }
++
++  request->context->set_margin_type(params->margin_type);
++  request->context->AskUserForSettings(
++      static_cast<int>(params->expected_pages_count), params->has_selection,
++      params->is_scripted,
++      base::BindOnce(&TsPdfPrintManager::OnScriptedPrintSettingsReady,
++                     std::move(request), std::move(params),
++                     std::move(callback)));
++}
++
++#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
++void TsPdfPrintManager::UpdatePrintSettings(
++    base::DictValue job_settings,
++    UpdatePrintSettingsCallback callback) {
++  std::move(callback).Run(nullptr);
++}
++
++void TsPdfPrintManager::SetupScriptedPrintPreview(
++    SetupScriptedPrintPreviewCallback callback) {
++  std::move(callback).Run();
++}
++
++void TsPdfPrintManager::ShowScriptedPrintPreview(bool source_is_modifiable) {}
++
++void TsPdfPrintManager::RequestPrintPreview(
++    printing::mojom::RequestPrintPreviewParamsPtr params) {}
++
++void TsPdfPrintManager::CheckForCancel(int32_t preview_ui_id,
++                                       int32_t request_id,
++                                       CheckForCancelCallback callback) {
++  std::move(callback).Run(true);
++}
++
++void TsPdfPrintManager::SetAccessibilityTree(
++    int32_t cookie,
++    const ui::AXTreeUpdate& accessibility_tree) {}
++#endif
++
++WEB_CONTENTS_USER_DATA_KEY_IMPL(TsPdfPrintManager);
++
++}  // namespace termsurf
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.h b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+new file mode 100644
+index 0000000000..f79e13babc
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+@@ -0,0 +1,77 @@
++// Copyright 2025 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_PRINT_MANAGER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_PRINT_MANAGER_H_
++
++#include <map>
++#include <memory>
++
++#include "components/printing/browser/print_manager.h"
++#include "components/printing/common/print.mojom.h"
++#include "content/public/browser/web_contents_user_data.h"
++#include "mojo/public/cpp/bindings/pending_associated_receiver.h"
++
++namespace content {
++class RenderFrameHost;
++class WebContents;
++}  // namespace content
++
++namespace termsurf {
++
++class TsPdfPrintManager
++    : public printing::PrintManager,
++      public content::WebContentsUserData<TsPdfPrintManager> {
++ public:
++  TsPdfPrintManager(const TsPdfPrintManager&) = delete;
++  TsPdfPrintManager& operator=(const TsPdfPrintManager&) = delete;
++  ~TsPdfPrintManager() override;
++
++  static void BindPrintManagerHost(
++      mojo::PendingAssociatedReceiver<printing::mojom::PrintManagerHost>
++          receiver,
++      content::RenderFrameHost* render_frame_host);
++
++ private:
++  friend class content::WebContentsUserData<TsPdfPrintManager>;
++
++  struct PrintRequest;
++
++  explicit TsPdfPrintManager(content::WebContents* web_contents);
++
++  static void OnScriptedPrintSettingsReady(
++      std::unique_ptr<PrintRequest> request,
++      printing::mojom::ScriptedPrintParamsPtr params,
++      printing::mojom::PrintManagerHost::ScriptedPrintCallback callback,
++      printing::mojom::ResultCode result);
++
++  void GetDefaultPrintSettings(
++      GetDefaultPrintSettingsCallback callback) override;
++  void ScriptedPrint(printing::mojom::ScriptedPrintParamsPtr params,
++                     ScriptedPrintCallback callback) override;
++
++#if BUILDFLAG(ENABLE_PRINT_PREVIEW)
++  void UpdatePrintSettings(base::DictValue job_settings,
++                           UpdatePrintSettingsCallback callback) override;
++  void SetupScriptedPrintPreview(
++      SetupScriptedPrintPreviewCallback callback) override;
++  void ShowScriptedPrintPreview(bool source_is_modifiable) override;
++  void RequestPrintPreview(
++      printing::mojom::RequestPrintPreviewParamsPtr params) override;
++  void CheckForCancel(int32_t preview_ui_id,
++                      int32_t request_id,
++                      CheckForCancelCallback callback) override;
++  void SetAccessibilityTree(
++      int32_t cookie,
++      const ui::AXTreeUpdate& accessibility_tree) override;
++#endif
++
++  std::map<int, std::unique_ptr<PrintRequest>> pending_print_requests_;
++
++  WEB_CONTENTS_USER_DATA_KEY_DECL();
++};
++
++}  // namespace termsurf
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_PDF_PRINT_MANAGER_H_
+-- 
+2.54.0
+

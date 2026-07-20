@@ -1,0 +1,41 @@
+From 59975c2ae380d6232072a36c6012740859836a2f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:48:05 -0500
+Subject: [PATCH 110/122] issue-924: call free CreateTemplateMimeHandlerPage
+ with OOPIF flags
+
+Template HTML helper moved off MimeHandlerViewAttachHelper; PDF uses
+use_oopif + is_oopif_pdf.
+---
+ .../ts_plugin_response_interceptor_url_loader_throttle.cc | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 867293a993..ae08e9bcaf 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -23,7 +23,7 @@
+ #include "content/public/browser/download_utils.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
+-#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.h"
++#include "extensions/browser/mime_handler/mime_handler_page.h"
+ #include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+@@ -207,9 +207,9 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   LOG(INFO) << "[termsurf-pdf] oopif-template-body frame_tree_node_id="
+             << frame_tree_node_id_ << " internal_id=" << internal_id
+             << " original_url=" << response_url;
+-  std::string payload =
+-      extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
+-          response_url, response_head->mime_type, internal_id);
++  std::string payload = extensions::CreateTemplateMimeHandlerPage(
++      response_url, response_head->mime_type, internal_id,
++      /*use_oopif=*/true, /*is_oopif_pdf=*/true);
+   const std::string pdf_extension_url =
+       extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
+   std::string pdf_extension_origin = pdf_extension_url;
+-- 
+2.50.1 (Apple Git-155)
+

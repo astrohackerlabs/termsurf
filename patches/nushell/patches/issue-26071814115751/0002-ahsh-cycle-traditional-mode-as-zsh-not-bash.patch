@@ -1,0 +1,37 @@
+From 6b337c240343b4ae27356de9a7083f781497aff4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 13:44:07 -0500
+Subject: [PATCH 2/4] ahsh: cycle traditional mode as zsh not bash
+
+Shannon mode toggle and highlighter branch use zsh so the host
+ahsh traditional worker name matches the default macOS shell.
+---
+ crates/nu-cli/src/repl.rs | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 4d7c96fd2..a6fe67378 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -642,7 +642,8 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 .get_env_var(engine_state, "SHANNON_MODE")
+                 .and_then(|v| v.as_str().ok().map(str::to_string))
+                 .unwrap_or_else(|| "nu".to_string());
+-            if shannon_mode == "bash" {
++            if shannon_mode == "zsh" {
++                // Reuse tree-sitter-bash highlighter for traditional mode (cosmetic).
+                 Box::new(crate::bash_highlight::BashHighlighter::new(&config))
+                     as Box<dyn reedline::Highlighter>
+             } else if shannon_mode != "nu" {
+@@ -1338,7 +1339,7 @@ fn switch_shannon_mode(engine_state: &EngineState, stack: &mut Stack) {
+         .get_env_var(engine_state, "SHANNON_MODE")
+         .and_then(|v| v.as_str().ok().map(str::to_string))
+         .unwrap_or_else(|| "nu".to_string());
+-    let modes = ["nu", "bash"];
++    let modes = ["nu", "zsh"];
+     let next_idx = modes
+         .iter()
+         .position(|mode| *mode == current)
+-- 
+2.50.1 (Apple Git-155)
+

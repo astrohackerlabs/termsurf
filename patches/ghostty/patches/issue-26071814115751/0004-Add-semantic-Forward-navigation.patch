@@ -1,0 +1,361 @@
+From d7f48e5994b4ac7470f516065ff0212fd45db130 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 13:55:55 -0500
+Subject: [PATCH 04/17] Add semantic Forward navigation
+
+---
+ .../Surface View/SurfaceView_AppKit.swift     |  8 ++-
+ src/apprt/termsurf.zig                        | 65 ++++++++++++++-----
+ src/protobuf/termsurf.pb-c.c                  | 19 +++++-
+ src/protobuf/termsurf.pb-c.h                  |  6 +-
+ 4 files changed, 75 insertions(+), 23 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 61581fd21..88fb4c343 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -2041,12 +2041,14 @@ extension Ghostty {
+         return false
+       }
+ 
+-      if event.keyCode == 0x21, isTermSurfBrowserNavigationKeyEquivalent(event),
++      if (event.keyCode == 0x21 || event.keyCode == 0x1E),
++        isTermSurfBrowserNavigationKeyEquivalent(event),
+         termSurfScriptHasActiveOverlay
+       {
++        let action = event.keyCode == 0x21 ? "back" : "forward"
+         let paneID = id.uuidString
+         let accepted: Bool = paneID.withCString { paneIDPointer in
+-          "back".withCString { actionPointer in
++          action.withCString { actionPointer in
+             termsurf_navigation_action_for_pane(paneIDPointer, actionPointer) != 0
+           }
+         }
+@@ -2056,7 +2058,7 @@ extension Ghostty {
+             accepted
+             ? "perform_key_equivalent_browser_navigation_action"
+             : "perform_key_equivalent_browser_navigation_disabled",
+-          note: "key_code=33 action=back"
++          note: "key_code=\(event.keyCode) action=\(action)"
+         )
+         return true
+       }
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index c7513c741..1cceff572 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -271,6 +271,7 @@ const PaneState = struct {
+     last_resize_pixel_height: u64 = 0,
+     cursor_type: i64 = 0,
+     can_go_back: bool = false,
++    can_go_forward: bool = false,
+     tui_fd: std.posix.fd_t = -1,
+ 
+     fn paneId(self: *const PaneState) []const u8 {
+@@ -795,6 +796,7 @@ const NavigationStateSnapshot = struct {
+     pane_id_len: usize = 0,
+     tab_id: i64 = 0,
+     can_go_back: bool = false,
++    can_go_forward: bool = false,
+ 
+     fn paneId(self: *const NavigationStateSnapshot) []const u8 {
+         return self.pane_id[0..self.pane_id_len];
+@@ -3075,7 +3077,9 @@ fn handleNavigationAction(
+     };
+     const pane_id = cString(action_req.*.pane_id);
+     const action = cString(action_req.*.action);
+-    if (action_req.*.tab_id != 0 or pane_id.len == 0 or !std.mem.eql(u8, action, "back")) {
++    if (action_req.*.tab_id != 0 or pane_id.len == 0 or
++        (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward")))
++    {
+         log.warn(
+             "NavigationAction: invalid TUI request pane_id={s} tab_id={} action={s}",
+             .{ pane_id, action_req.*.tab_id, action },
+@@ -3095,17 +3099,17 @@ fn sendNavigationActionForPaneOwned(
+     action: []const u8,
+     required_tui_fd: ?std.posix.fd_t,
+ ) bool {
+-    if (!std.mem.eql(u8, action, "back")) {
++    if (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward")) {
+         log.warn("NavigationAction: invalid product action pane_id={s} action={s}", .{ pane_id, action });
+         return false;
+     }
+ 
+-    const snapshot = snapshotEnabledBackAction(pane_id, required_tui_fd) orelse return false;
++    const snapshot = snapshotEnabledNavigationAction(pane_id, action, required_tui_fd) orelse return false;
+ 
+     var forwarded: c.Termsurf__NavigationAction = undefined;
+     c.termsurf__navigation_action__init(&forwarded);
+     forwarded.tab_id = snapshot.tab_id;
+-    forwarded.action = @constCast("back");
++    forwarded.action = @constCast(action.ptr);
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -3114,20 +3118,21 @@ fn sendNavigationActionForPaneOwned(
+ 
+     sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
+         log.warn(
+-            "NavigationAction send failed pane_id={s} tab_id={} err={}",
+-            .{ snapshot.paneId(), snapshot.tab_id, err },
++            "NavigationAction send failed pane_id={s} tab_id={} action={s} err={}",
++            .{ snapshot.paneId(), snapshot.tab_id, action, err },
+         );
+         return false;
+     };
+     log.info(
+-        "NavigationAction: pane_id={s} tab_id={} action=back",
+-        .{ snapshot.paneId(), snapshot.tab_id },
++        "NavigationAction: pane_id={s} tab_id={} action={s}",
++        .{ snapshot.paneId(), snapshot.tab_id, action },
+     );
+     return true;
+ }
+ 
+-fn snapshotEnabledBackAction(
++fn snapshotEnabledNavigationAction(
+     pane_id: []const u8,
++    action: []const u8,
+     required_tui_fd: ?std.posix.fd_t,
+ ) ?BrowserInputSnapshot {
+     state_mutex.lock();
+@@ -3147,10 +3152,11 @@ fn snapshotEnabledBackAction(
+             return null;
+         }
+     }
+-    if (pane.tab_id <= 0 or !pane.can_go_back) {
++    const enabled = if (std.mem.eql(u8, action, "back")) pane.can_go_back else pane.can_go_forward;
++    if (pane.tab_id <= 0 or !enabled) {
+         log.info(
+-            "NavigationAction disabled pane_id={s} tab_id={} action=back",
+-            .{ pane_id, pane.tab_id },
++            "NavigationAction disabled pane_id={s} tab_id={} action={s}",
++            .{ pane_id, pane.tab_id, action },
+         );
+         return null;
+     }
+@@ -3170,6 +3176,7 @@ fn sendNavigationStateToTui(snapshot: *const NavigationStateSnapshot) !void {
+     c.termsurf__navigation_state__init(&state);
+     state.tab_id = snapshot.tab_id;
+     state.can_go_back = if (snapshot.can_go_back) 1 else 0;
++    state.can_go_forward = if (snapshot.can_go_forward) 1 else 0;
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -3219,11 +3226,13 @@ fn handleNavigationState(
+         return false;
+     }
+     pane.can_go_back = navigation_state.*.can_go_back != 0;
++    pane.can_go_forward = navigation_state.*.can_go_forward != 0;
+     if (pane.tui_fd >= 0) {
+         var value: NavigationStateSnapshot = .{
+             .tui_fd = pane.tui_fd,
+             .tab_id = pane.tab_id,
+             .can_go_back = pane.can_go_back,
++            .can_go_forward = pane.can_go_forward,
+         };
+         if (copyText(&value.pane_id, &value.pane_id_len, pane.paneId())) {
+             snapshot = value;
+@@ -3366,6 +3375,7 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+ 
+     panes[pane_index].tab_id = tab_id;
+     panes[pane_index].can_go_back = false;
++    panes[pane_index].can_go_forward = false;
+     const lookup_count = upsertTabLookup(&panes[pane_index], tab_id);
+     if (panes[pane_index].inspected_tab_id == 0) {
+         _ = copyText(&last_browser_pane, &last_browser_pane_len, pane_id);
+@@ -4269,10 +4279,12 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+             if (!std.mem.eql(u8, pane.browserName(), server.browserName())) continue;
+ 
+             pane.can_go_back = false;
++            pane.can_go_forward = false;
+             var state: NavigationStateSnapshot = .{
+                 .tui_fd = pane.tui_fd,
+                 .tab_id = pane.tab_id,
+                 .can_go_back = false,
++                .can_go_forward = false,
+             };
+             if (copyText(&state.pane_id, &state.pane_id_len, pane.paneId())) {
+                 navigation_states[navigation_state_count] = state;
+@@ -7072,7 +7084,7 @@ fn readExactTest(fd: std.posix.fd_t, buf: []u8) !void {
+     }
+ }
+ 
+-test "termsurf Back action and state preserve pane tab ownership" {
++test "termsurf Back and Forward actions preserve pane tab ownership" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+@@ -7095,8 +7107,10 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     try testSetPane(1, "pane-b", "default", "webkit", "https://b.test/", tui_b[0]);
+     panes[0].tab_id = 77;
+     panes[0].can_go_back = true;
++    panes[0].can_go_forward = true;
+     panes[1].tab_id = 88;
+     panes[1].can_go_back = false;
++    panes[1].can_go_forward = false;
+     _ = upsertTabLookup(&panes[0], 77);
+     _ = upsertTabLookup(&panes[1], 88);
+ 
+@@ -7129,10 +7143,19 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     try testing.expectEqualStrings("back", cString(product_forwarded.*.unnamed_0.navigation_action.*.action));
+     try testing.expect(!sendNavigationActionForPane("pane-b", "back"));
+     try testing.expect(!sendNavigationActionForPane("missing-pane", "back"));
+-    try testing.expect(!sendNavigationActionForPane("pane-a", "forward"));
++    try testing.expect(sendNavigationActionForPane("pane-a", "forward"));
++    const forward_action = try readTestMessage(browser_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(forward_action, null);
++    try testing.expectEqualStrings(
++        "forward",
++        cString(forward_action.*.unnamed_0.navigation_action.*.action),
++    );
+ 
+     action.action = @constCast("forward");
+-    try testing.expect(!handleNavigationAction(tui_a[0], &action));
++    try testing.expect(handleNavigationAction(tui_a[0], &action));
++    const tui_forward = try readTestMessage(browser_a[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(tui_forward, null);
++    try testing.expectEqualStrings("forward", cString(tui_forward.*.unnamed_0.navigation_action.*.action));
+     action.action = @constCast("refresh");
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
+     action.action = @constCast("unknown");
+@@ -7147,6 +7170,7 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     c.termsurf__navigation_state__init(&state);
+     state.tab_id = 77;
+     state.can_go_back = 1;
++    state.can_go_forward = 1;
+     try testing.expect(handleNavigationState(browser_a[0], &state));
+ 
+     const relayed = try readTestMessage(tui_a[1], testing.allocator);
+@@ -7157,8 +7181,11 @@ test "termsurf Back action and state preserve pane tab ownership" {
+     );
+     try testing.expectEqual(@as(i64, 77), relayed.*.unnamed_0.navigation_state.*.tab_id);
+     try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_go_back);
++    try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_go_forward);
+     try testing.expect(panes[0].can_go_back);
++    try testing.expect(panes[0].can_go_forward);
+     try testing.expect(!panes[1].can_go_back);
++    try testing.expect(!panes[1].can_go_forward);
+ 
+     try testing.expect(!handleNavigationState(browser_b[0], &state));
+     state.tab_id = 0;
+@@ -7168,11 +7195,14 @@ test "termsurf Back action and state preserve pane tab ownership" {
+ 
+     state.tab_id = 77;
+     state.can_go_back = 0;
++    state.can_go_forward = 0;
+     try testing.expect(handleNavigationState(browser_a[0], &state));
+     const relayed_false = try readTestMessage(tui_a[1], testing.allocator);
+     defer c.termsurf__term_surf_message__free_unpacked(relayed_false, null);
+     try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_go_back);
++    try testing.expectEqual(@as(c_int, 0), relayed_false.*.unnamed_0.navigation_state.*.can_go_forward);
+     try testing.expect(!panes[0].can_go_back);
++    try testing.expect(!panes[0].can_go_forward);
+     try testing.expect(!panes[1].can_go_back);
+     try testing.expect(!sendNavigationActionForPane("pane-a", "back"));
+     try testing.expect(!handleNavigationAction(tui_a[0], &action));
+@@ -7201,8 +7231,10 @@ test "termsurf browser disconnect clears Back only for affected owners" {
+     try testSetPane(1, "pane-b", "default", "webkit", "https://b.test/", tui_b[0]);
+     panes[0].tab_id = 77;
+     panes[0].can_go_back = true;
++    panes[0].can_go_forward = true;
+     panes[1].tab_id = 88;
+     panes[1].can_go_back = true;
++    panes[1].can_go_forward = true;
+     _ = upsertTabLookup(&panes[0], 77);
+     _ = upsertTabLookup(&panes[1], 88);
+ 
+@@ -7216,8 +7248,11 @@ test "termsurf browser disconnect clears Back only for affected owners" {
+     );
+     try testing.expectEqual(@as(i64, 77), cleared.*.unnamed_0.navigation_state.*.tab_id);
+     try testing.expectEqual(@as(c_int, 0), cleared.*.unnamed_0.navigation_state.*.can_go_back);
++    try testing.expectEqual(@as(c_int, 0), cleared.*.unnamed_0.navigation_state.*.can_go_forward);
+     try testing.expect(!panes[0].can_go_back);
++    try testing.expect(!panes[0].can_go_forward);
+     try testing.expect(panes[1].can_go_back);
++    try testing.expect(panes[1].can_go_forward);
+     try testing.expectEqual(@as(std.posix.fd_t, -1), servers[0].attached_fd);
+     try testing.expectEqual(browser_b[0], servers[1].attached_fd);
+ }
+diff --git a/src/protobuf/termsurf.pb-c.c b/src/protobuf/termsurf.pb-c.c
+index cfb3edd2c..884936e15 100644
+--- a/src/protobuf/termsurf.pb-c.c
++++ b/src/protobuf/termsurf.pb-c.c
+@@ -3208,7 +3208,7 @@ const ProtobufCMessageDescriptor termsurf__navigation_action__descriptor =
+   (ProtobufCMessageInit) termsurf__navigation_action__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
+-static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descriptors[2] =
++static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descriptors[3] =
+ {
+   {
+     "tab_id",
+@@ -3234,15 +3234,28 @@ static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descript
+     0,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "can_go_forward",
++    3,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_BOOL,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, can_go_forward),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__navigation_state__field_indices_by_name[] = {
+   1,   /* field[1] = can_go_back */
++  2,   /* field[2] = can_go_forward */
+   0,   /* field[0] = tab_id */
+ };
+ static const ProtobufCIntRange termsurf__navigation_state__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 2 }
++  { 0, 3 }
+ };
+ const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor =
+ {
+@@ -3252,7 +3265,7 @@ const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor =
+   "Termsurf__NavigationState",
+   "termsurf",
+   sizeof(Termsurf__NavigationState),
+-  2,
++  3,
+   termsurf__navigation_state__field_descriptors,
+   termsurf__navigation_state__field_indices_by_name,
+   1,  termsurf__navigation_state__number_ranges,
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index fa02c6af9..0167b2648 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -320,7 +320,8 @@ struct  Termsurf__Navigate
+ /*
+  * TUI → GUI: tab_id=0, pane_id identifies the owning pane.
+  * GUI → engine: tab_id identifies the native tab, pane_id is empty.
+- * The only legal action currently is "back".
++ * Legal actions are "back" and "forward". Other values, including "refresh",
++ * are rejected.
+  */
+ struct  Termsurf__NavigationAction
+ {
+@@ -342,10 +343,11 @@ struct  Termsurf__NavigationState
+   ProtobufCMessage base;
+   int64_t tab_id;
+   protobuf_c_boolean can_go_back;
++  protobuf_c_boolean can_go_forward;
+ };
+ #define TERMSURF__NAVIGATION_STATE__INIT \
+  { PROTOBUF_C_MESSAGE_INIT (&termsurf__navigation_state__descriptor) \
+-, 0, 0 }
++, 0, 0, 0 }
+ 
+ 
+ struct  Termsurf__MouseEvent
+-- 
+2.50.1 (Apple Git-155)
+

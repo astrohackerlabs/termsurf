@@ -1,0 +1,14 @@
+[package]
+name = "ah-chromiumd"
+version = "0.1.54"
+edition = "2021"
+
+[[bin]]
+name = "ah-chromiumd"
+path = "src/main.rs"
+
+[dependencies]
+prost = "0.14"
+
+[build-dependencies]
+prost-build = "0.14"

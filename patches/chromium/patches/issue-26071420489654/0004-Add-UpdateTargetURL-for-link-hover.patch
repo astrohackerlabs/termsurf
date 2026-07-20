@@ -1,0 +1,123 @@
+From 43738e3baaff5ab3db1d20d5aac76a1d3e89064f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 17 Mar 2026 05:11:15 -0500
+Subject: [PATCH 004/119] Add UpdateTargetURL for link hover
+
+The mouse hovered, the link was shy,
+No URL whispered where it might fly.
+Now Shell speaks up with a callback call,
+And TargetUrlChanged tells one and all.
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+---
+ .../libtermsurf_chromium/libtermsurf_chromium.cc | 16 ++++++++++++++++
+ .../libtermsurf_chromium/libtermsurf_chromium.h  |  4 ++++
+ .../libtermsurf_chromium/ts_browser_main_parts.h |  1 +
+ content/shell/browser/shell.cc                   |  6 ++++++
+ content/shell/browser/shell.h                    |  1 +
+ 5 files changed, 28 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 6fb382cadc..04fece6d0a 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -47,6 +47,10 @@ void* g_on_title_changed_data = nullptr;
+ void (*g_on_cursor_changed)(ts_web_contents_t, int, void*) = nullptr;
+ void* g_on_cursor_changed_data = nullptr;
+ 
++// Target URL changed callback.
++void (*g_on_target_url_changed)(ts_web_contents_t, const char*, void*) = nullptr;
++void* g_on_target_url_changed_data = nullptr;
++
+ }  // namespace
+ 
+ namespace content {
+@@ -91,6 +95,11 @@ void TsNotifyCursorChanged(void* wc_handle, int cursor_type) {
+     g_on_cursor_changed(wc_handle, cursor_type, g_on_cursor_changed_data);
+ }
+ 
++void TsNotifyTargetUrlChanged(void* wc_handle, const char* url) {
++  if (g_on_target_url_changed)
++    g_on_target_url_changed(wc_handle, url, g_on_target_url_changed_data);
++}
++
+ }  // namespace content
+ 
+ // --- C API Implementation ---
+@@ -261,3 +270,10 @@ void ts_set_on_cursor_changed(
+   g_on_cursor_changed = cb;
+   g_on_cursor_changed_data = user_data;
+ }
++
++void ts_set_on_target_url_changed(
++    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
++    void* user_data) {
++  g_on_target_url_changed = cb;
++  g_on_target_url_changed_data = user_data;
++}
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index b1fcfc118b..cfb790f7d4 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -168,6 +168,10 @@ TS_EXPORT void ts_set_on_cursor_changed(
+     void (*cb)(ts_web_contents_t wc, int cursor_type, void* user_data),
+     void* user_data);
+ 
++TS_EXPORT void ts_set_on_target_url_changed(
++    void (*cb)(ts_web_contents_t wc, const char* url, void* user_data),
++    void* user_data);
++
+ #ifdef __cplusplus
+ }
+ #endif
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index a0b7038c32..f83d575a14 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -38,6 +38,7 @@ void TsNotifyUrlChanged(void* wc_handle, const char* url);
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
++void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
+ 
+ class TsBrowserMainParts : public ShellBrowserMainParts {
+  public:
+diff --git a/content/shell/browser/shell.cc b/content/shell/browser/shell.cc
+index 651f0fe84a..9e91ec368f 100644
+--- a/content/shell/browser/shell.cc
++++ b/content/shell/browser/shell.cc
+@@ -6,6 +6,8 @@
+ 
+ #include <stddef.h>
+ 
++#include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++
+ #include <map>
+ #include <memory>
+ #include <string>
+@@ -672,6 +674,10 @@ void Shell::NavigationStateChanged(WebContents* source,
+     g_platform->SetAddressBarURL(this, source->GetVisibleURL());
+ }
+ 
++void Shell::UpdateTargetURL(WebContents* source, const GURL& url) {
++  TsNotifyTargetUrlChanged(source, url.spec().c_str());
++}
++
+ JavaScriptDialogManager* Shell::GetJavaScriptDialogManager(
+     WebContents* source) {
+   if (!dialog_manager_)
+diff --git a/content/shell/browser/shell.h b/content/shell/browser/shell.h
+index 210a179a50..4edb2c4dcc 100644
+--- a/content/shell/browser/shell.h
++++ b/content/shell/browser/shell.h
+@@ -168,6 +168,7 @@ class Shell : public WebContentsDelegate, public WebContentsObserver {
+   bool CanOverscrollContent() override;
+   void NavigationStateChanged(WebContents* source,
+                               InvalidateTypes changed_flags) override;
++  void UpdateTargetURL(WebContents* source, const GURL& url) override;
+   JavaScriptDialogManager* GetJavaScriptDialogManager(
+       WebContents* source) override;
+ #if BUILDFLAG(IS_MAC)
+-- 
+2.54.0
+

@@ -1,0 +1,106 @@
+From 78015a25cecc40c2173982a9b05c9177d3e14192 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 23:58:34 -0500
+Subject: [PATCH] Keep WebKit pointer views active
+
+A view without a window looked asleep,
+so pointer whispers vanished in the deep.
+Mark its borrowed stage as active and bright,
+and hover reaches WebKit right.
+---
+ Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h |  1 +
+ Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm      | 10 ++++++++++
+ Source/WebKit/UIProcess/mac/PageClientImplMac.mm     |  2 ++
+ Source/WebKit/UIProcess/mac/WebViewImpl.h            |  3 +++
+ Source/WebKit/UIProcess/mac/WebViewImpl.mm           |  8 ++++++++
+ 5 files changed, 24 insertions(+)
+
+diff --git a/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h b/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
+index 18345b203c..65f681febe 100644
+--- a/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
++++ b/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
+@@ -853,6 +853,7 @@ typedef NS_OPTIONS(NSUInteger, _WKWebViewDataType) {
+ @property (nonatomic, readonly) BOOL _hasActiveVideoForControlsManager WK_API_AVAILABLE(macos(10.12));
+ @property (nonatomic, readwrite, setter=_setIgnoresNonWheelEvents:) BOOL _ignoresNonWheelEvents WK_API_AVAILABLE(macos(10.13.4));
+ @property (nonatomic, readwrite, setter=_setIgnoresMouseMoveEvents:) BOOL _ignoresMouseMoveEvents WK_API_AVAILABLE(macos(13.0));
++@property (nonatomic, readwrite, setter=_setTermSurfWindowActive:) BOOL _termSurfWindowActive;
+ 
+ /*! @abstract A Boolean value indicating whether drawing clips to the visibleRect.
+ @discussion When YES, the view will use its -visibleRect when determining which areas of the WKWebView to draw. This may improve performance for large WKWebViews which are mostly clipped out by enclosing views.  The default value is NO.
+diff --git a/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm b/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
+index f80d26f25a..70828095ec 100644
+--- a/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
++++ b/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
+@@ -1638,6 +1638,16 @@ ALLOW_DEPRECATED_DECLARATIONS_END
+     _impl->setIgnoresMouseMoveEvents(ignoresMouseMoveEvents);
+ }
+ 
++- (BOOL)_termSurfWindowActive
++{
++    return _impl->termSurfWindowActive();
++}
++
++- (void)_setTermSurfWindowActive:(BOOL)active
++{
++    _impl->setTermSurfWindowActive(active);
++}
++
+ - (NSView *)_safeBrowsingWarning
+ {
+     return _impl->warningView();
+diff --git a/Source/WebKit/UIProcess/mac/PageClientImplMac.mm b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
+index 57afcd9fbb..77f2adf363 100644
+--- a/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
++++ b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
+@@ -179,6 +179,8 @@ NSWindow *PageClientImpl::activeWindow() const
+ bool PageClientImpl::isViewWindowActive()
+ {
+     ASSERT(hasProcessPrivilege(ProcessPrivilege::CanCommunicateWithWindowServer));
++    if (CheckedPtr impl = m_impl.get(); impl && impl->termSurfWindowActive())
++        return true;
+     RetainPtr activeViewWindow = activeWindow();
+     return activeViewWindow.get().isKeyWindow || (activeViewWindow && [NSApp keyWindow] == activeViewWindow.get());
+ }
+diff --git a/Source/WebKit/UIProcess/mac/WebViewImpl.h b/Source/WebKit/UIProcess/mac/WebViewImpl.h
+index 7c86b076ba..79cf75f2fe 100644
+--- a/Source/WebKit/UIProcess/mac/WebViewImpl.h
++++ b/Source/WebKit/UIProcess/mac/WebViewImpl.h
+@@ -280,6 +280,8 @@ public:
+     bool becomeFirstResponder();
+     bool resignFirstResponder();
+     bool isFocused() const;
++    void setTermSurfWindowActive(bool);
++    bool termSurfWindowActive() const { return m_termSurfWindowActive; }
+ 
+     void viewWillStartLiveResize();
+     void viewDidEndLiveResize();
+@@ -1084,6 +1086,7 @@ private:
+     bool m_ignoresMouseMoveEvents { false };
+     bool m_ignoresAllEvents { false };
+     bool m_ignoresMouseDraggedEvents { false };
++    bool m_termSurfWindowActive { false };
+ 
+     RetainPtr<WKImmediateActionController> m_immediateActionController;
+     RetainPtr<NSImmediateActionGestureRecognizer> m_immediateActionGestureRecognizer;
+diff --git a/Source/WebKit/UIProcess/mac/WebViewImpl.mm b/Source/WebKit/UIProcess/mac/WebViewImpl.mm
+index c5fd0d4026..1d76ec90d5 100644
+--- a/Source/WebKit/UIProcess/mac/WebViewImpl.mm
++++ b/Source/WebKit/UIProcess/mac/WebViewImpl.mm
+@@ -1767,6 +1767,14 @@ bool WebViewImpl::isFocused() const
+     return [m_view.get() window].firstResponder == m_view.getAutoreleased();
+ }
+ 
++void WebViewImpl::setTermSurfWindowActive(bool active)
++{
++    if (m_termSurfWindowActive == active)
++        return;
++    m_termSurfWindowActive = active;
++    m_page->activityStateDidChange(WebCore::ActivityState::WindowIsActive);
++}
++
+ void WebViewImpl::viewWillStartLiveResize()
+ {
+     m_page->viewWillStartLiveResize();
+-- 
+2.54.0
+

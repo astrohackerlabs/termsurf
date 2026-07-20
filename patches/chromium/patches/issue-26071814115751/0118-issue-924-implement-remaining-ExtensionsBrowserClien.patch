@@ -1,0 +1,67 @@
+From 6480ccb06ceeec16f3481d0823d4b5da74424719 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:59:52 -0500
+Subject: [PATCH 118/122] issue-924: implement remaining
+ ExtensionsBrowserClient pure virtuals
+
+Ash-filter redirect helper and Extension* incognito overload for 150.
+---
+ .../extensions/ts_extensions_browser_client.cc      | 13 +++++++++++++
+ .../extensions/ts_extensions_browser_client.h       |  4 ++++
+ 2 files changed, 17 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 6f22c58963..fb11a52125 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -270,6 +270,13 @@ BrowserContext* TsExtensionsBrowserClient::GetContextRedirectedToOriginal(
+   return OriginalContextFor(context);
+ }
+ 
++BrowserContext*
++TsExtensionsBrowserClient::GetContextRedirectedToOriginalWithoutAshInternals(
++    BrowserContext* context) {
++  // TermSurf has no ash-internal profiles; same as redirected-to-original.
++  return OriginalContextFor(context);
++}
++
+ BrowserContext* TsExtensionsBrowserClient::GetContextOwnInstance(
+     BrowserContext* context) {
+   return context;
+@@ -295,6 +302,12 @@ bool TsExtensionsBrowserClient::IsExtensionIncognitoEnabled(
+   return false;
+ }
+ 
++bool TsExtensionsBrowserClient::IsExtensionIncognitoEnabled(
++    const extensions::Extension* extension,
++    BrowserContext* context) const {
++  return false;
++}
++
+ bool TsExtensionsBrowserClient::CanExtensionCrossIncognito(
+     const extensions::Extension* extension,
+     BrowserContext* context) const {
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+index f879c1c114..c8316ce3cc 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+@@ -41,12 +41,16 @@ class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
+   BrowserContext* GetOriginalContext(BrowserContext* context) override;
+   BrowserContext* GetContextRedirectedToOriginal(
+       BrowserContext* context) override;
++  BrowserContext* GetContextRedirectedToOriginalWithoutAshInternals(
++      BrowserContext* context) override;
+   BrowserContext* GetContextOwnInstance(BrowserContext* context) override;
+   BrowserContext* GetContextForOriginalOnly(BrowserContext* context) override;
+   bool AreExtensionsDisabledForContext(BrowserContext* context) override;
+   bool IsGuestSession(BrowserContext* context) const override;
+   bool IsExtensionIncognitoEnabled(const extensions::ExtensionId& extension_id,
+                                    BrowserContext* context) const override;
++  bool IsExtensionIncognitoEnabled(const extensions::Extension* extension,
++                                   BrowserContext* context) const override;
+   bool CanExtensionCrossIncognito(const extensions::Extension* extension,
+                                   BrowserContext* context) const override;
+   base::FilePath GetBundleResourcePath(
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,85 @@
+From 222f5f3edf32ea319b5ee710b222599f5df85d41 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:53:35 -0500
+Subject: [PATCH 114/119] issue-924: port ExtensionsBrowserClient for Chromium
+ 150
+
+ChildProcessId for cross-renderer loads; drop GetPrefService override;
+stub media capture after media_capture_util removal.
+---
+ .../extensions/ts_extensions_browser_client.cc    | 15 ++++++++-------
+ .../extensions/ts_extensions_browser_client.h     |  6 ++++--
+ 2 files changed, 12 insertions(+), 9 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 5a7f2e5161..49941f9c0c 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -37,7 +37,6 @@
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_api_provider.h"
+ #include "extensions/browser/extensions_browser_interface_binders.h"
+-#include "extensions/browser/media_capture_util.h"
+ #include "extensions/browser/safe_browsing_delegate.h"
+ #include "extensions/browser/updater/null_extension_cache.h"
+ #include "extensions/browser/url_request_util.h"
+@@ -96,8 +95,12 @@ class TsExtensionHostDelegate : public extensions::ExtensionHostDelegate {
+       const MediaStreamRequest& request,
+       MediaResponseCallback callback,
+       const extensions::Extension* extension) override {
+-    extensions::media_capture_util::GrantMediaStreamRequest(
+-        web_contents, request, std::move(callback), extension);
++    // extensions::media_capture_util was removed in Chromium 150; TermSurf
++    // does not host camera/mic for the PDF extension path.
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
++        std::unique_ptr<MediaStreamUI>());
+   }
+ 
+   bool CheckMediaAccessPermission(
+@@ -105,9 +108,7 @@ class TsExtensionHostDelegate : public extensions::ExtensionHostDelegate {
+       const url::Origin& security_origin,
+       blink::mojom::MediaStreamType type,
+       const extensions::Extension* extension) override {
+-    extensions::media_capture_util::VerifyMediaAccessPermission(type,
+-                                                                extension);
+-    return true;
++    return false;
+   }
+ 
+   PictureInPictureResult EnterPictureInPicture(
+@@ -337,7 +338,7 @@ bool TsExtensionsBrowserClient::AllowCrossRendererResourceLoad(
+     const network::ResourceRequest& request,
+     network::mojom::RequestDestination destination,
+     ui::PageTransition page_transition,
+-    int child_id,
++    content::ChildProcessId child_id,
+     bool is_incognito,
+     const extensions::Extension* extension,
+     const extensions::ExtensionSet& extensions,
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+index 6417afcdd0..f879c1c114 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+@@ -64,13 +64,15 @@ class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
+       const network::ResourceRequest& request,
+       network::mojom::RequestDestination destination,
+       ui::PageTransition page_transition,
+-      int child_id,
++      content::ChildProcessId child_id,
+       bool is_incognito,
+       const extensions::Extension* extension,
+       const extensions::ExtensionSet& extensions,
+       const extensions::ProcessMap& process_map,
+       const GURL& upstream_url) override;
+-  PrefService* GetPrefServiceForContext(BrowserContext* context) override;
++  // Not part of ExtensionsBrowserClient on Chromium 150; kept for TermSurf
++  // context registration (RegisterContext).
++  PrefService* GetPrefServiceForContext(BrowserContext* context);
+   void GetEarlyExtensionPrefsObservers(
+       BrowserContext* context,
+       std::vector<extensions::EarlyExtensionPrefsObserver*>* observers)
+-- 
+2.54.0
+

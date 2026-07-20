@@ -1,0 +1,120 @@
+From 6f61250c2a4df962ab92545d201c68910f015dbe Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 19:43:29 -0500
+Subject: [PATCH 067/122] Add TermSurf page zoom
+
+A page once sat too small to read,
+Its letters pleading, "help with speed."
+Cmd plus made it grow,
+Cmd zero said no,
+And raw keys no longer stampede.
+---
+ .../ts_browser_main_parts.cc                  | 52 ++++++++++++++++---
+ 1 file changed, 45 insertions(+), 7 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 130c7f4d12..4ad7fa501e 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -16,6 +16,8 @@
+ #include "components/input/render_widget_host_input_event_router.h"
+ #include "components/keyed_service/content/browser_context_dependency_manager.h"
+ #include "components/prefs/pref_service.h"
++#include "components/zoom/page_zoom.h"
++#include "components/zoom/zoom_controller.h"
+ #include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/browser/renderer_host/render_widget_host_view_base.h"
+ #include "content/browser/web_contents/web_contents_impl.h"
+@@ -36,6 +38,7 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/page_zoom.h"
+ #include "content/shell/browser/shell.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_devtools_frontend.h"
+@@ -91,6 +94,12 @@ void NotifyTermSurfInputActivation(WebContents* web_contents) {
+   }
+ }
+ 
++void EnsureTermSurfZoomController(WebContents* web_contents) {
++  if (!zoom::ZoomController::FromWebContents(web_contents)) {
++    zoom::ZoomController::CreateForWebContents(web_contents);
++  }
++}
++
+ void LogIssue794InputFrames(const char* tag,
+                             WebContents* web_contents,
+                             int x,
+@@ -975,24 +984,54 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+ 
+   int web_modifiers = modifiers & 0xF;
+   bool has_meta = (web_modifiers & blink::WebInputEvent::kMetaKey) != 0;
++  auto* web_contents = tab->shell->web_contents();
++
++  if (has_meta) {
++    bool is_zoom_shortcut = true;
++    content::PageZoom zoom_command = content::PAGE_ZOOM_RESET;
++    switch (keycode) {
++      case ui::VKEY_OEM_PLUS:
++      case ui::VKEY_ADD:
++        zoom_command = content::PAGE_ZOOM_IN;
++        break;
++      case ui::VKEY_OEM_MINUS:
++      case ui::VKEY_SUBTRACT:
++        zoom_command = content::PAGE_ZOOM_OUT;
++        break;
++      case ui::VKEY_0:
++      case ui::VKEY_NUMPAD0:
++        zoom_command = content::PAGE_ZOOM_RESET;
++        break;
++      default:
++        is_zoom_shortcut = false;
++        break;
++    }
++    if (is_zoom_shortcut) {
++      if (type != 1) {
++        EnsureTermSurfZoomController(web_contents);
++        zoom::PageZoom::Zoom(web_contents, zoom_command);
++      }
++      return;
++    }
++  }
+ 
+   // Navigation commands: Cmd+[ (back), Cmd+] (forward), Cmd+R (reload).
+   if (has_meta && type != 1) {
+     bool handled = true;
+     switch (keycode) {
+       case ui::VKEY_OEM_4:
+-        if (tab->shell->web_contents()->GetController().CanGoBack()) {
+-          tab->shell->web_contents()->GetController().GoBack();
++        if (web_contents->GetController().CanGoBack()) {
++          web_contents->GetController().GoBack();
+         }
+         break;
+       case ui::VKEY_OEM_6:
+-        if (tab->shell->web_contents()->GetController().CanGoForward()) {
+-          tab->shell->web_contents()->GetController().GoForward();
++        if (web_contents->GetController().CanGoForward()) {
++          web_contents->GetController().GoForward();
+         }
+         break;
+       case ui::VKEY_R:
+-        tab->shell->web_contents()->GetController().Reload(
+-            content::ReloadType::NORMAL, false);
++        web_contents->GetController().Reload(content::ReloadType::NORMAL,
++                                             false);
+         break;
+       default:
+         handled = false;
+@@ -1023,7 +1062,6 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+         static_cast<int>(static_cast<ui::DomKey::Base>(dom_key));
+   }
+ 
+-  auto* web_contents = tab->shell->web_contents();
+   if (type != 1) {
+     NotifyTermSurfInputActivation(web_contents);
+   }
+-- 
+2.50.1 (Apple Git-155)
+

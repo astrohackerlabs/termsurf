@@ -1,0 +1,242 @@
+From dcebb4be46d94a2ae08046b87bc800e212cd3a4f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 03:24:37 -0500
+Subject: [PATCH 10/18] Add TermSurf console callback
+
+A log line crossed the garden wall,
+From Ladybird to TermSurf call.
+Quoted, queued, and sent with care,
+The console now speaks through the air.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 137 +++++++++++++++++-
+ 1 file changed, 136 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 8e6bc4ff98..f15c629b2e 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -7,6 +7,7 @@
+ #include <AK/ByteString.h>
+ #include <AK/OwnPtr.h>
+ #include <AK/String.h>
++#include <AK/StringBuilder.h>
+ #include <AK/StringView.h>
+ #include <AK/Vector.h>
+ #include <LibCore/AnonymousBuffer.h>
+@@ -22,8 +23,10 @@
+ #include <LibWeb/HTML/VisibilityState.h>
+ #include <LibWeb/Page/InputEvent.h>
+ #include <LibWebView/Application.h>
++#include <LibWebView/ConsoleOutput.h>
+ #include <LibWebView/HeadlessWebView.h>
+ #include <LibWebView/Options.h>
++#include <limits.h>
+ #include <pthread.h>
+ #include <string.h>
+ #include <time.h>
+@@ -68,6 +71,13 @@ struct RenderSurfaceExport {
+     u64 generation { 0 };
+ };
+ 
++struct ConsoleMessage {
++    ByteString level;
++    ByteString message;
++    int line_no { 0 };
++    ByteString source_id;
++};
++
+ class TermSurfWebView final : public WebView::HeadlessWebView {
+ public:
+     static NonnullOwnPtr<TermSurfWebView> create(Core::AnonymousBuffer theme, Web::DevicePixelSize window_size)
+@@ -203,12 +213,20 @@ struct TsLadybirdView {
+     OwnPtr<TermSurfWebView> view;
+     ByteString last_url;
+     ByteString pending_title;
++    Vector<ConsoleMessage> pending_console_messages;
+     bool did_finish_load { false };
+     bool did_crash { false };
+     bool title_changed { false };
+     bool destroyed { false };
+ };
+ 
++typedef struct TsLadybirdConsoleMessage {
++    char level[32];
++    char message[1024];
++    int line_no;
++    char source_id[512];
++} TsLadybirdConsoleMessage;
++
+ extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
+ extern "C" void ts_ladybird_runtime_destroy(TsLadybirdRuntime*);
+ extern "C" bool ts_ladybird_runtime_pump(TsLadybirdRuntime*);
+@@ -224,6 +242,7 @@ extern "C" bool ts_ladybird_view_mouse_move(TsLadybirdView*, double, double, uns
+ extern "C" bool ts_ladybird_view_scroll_event(TsLadybirdView*, double, double, double, double, unsigned long long, unsigned long long, bool, unsigned long long);
+ extern "C" bool ts_ladybird_view_key_event(TsLadybirdView*, char const*, int, char const*, unsigned long long);
+ extern "C" bool ts_ladybird_view_take_title_changed(TsLadybirdView*, char*, size_t);
++extern "C" bool ts_ladybird_view_take_console_message(TsLadybirdView*, TsLadybirdConsoleMessage*);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -429,6 +448,88 @@ static u32 ascii_code_point(char const* utf8)
+     return byte;
+ }
+ 
++static ByteString console_level(WebView::ConsoleLog const& log)
++{
++    switch (log.level) {
++    case JS::Console::LogLevel::Debug:
++        return "debug";
++    case JS::Console::LogLevel::Error:
++        return "error";
++    case JS::Console::LogLevel::Info:
++        return "info";
++    case JS::Console::LogLevel::Log:
++        return "log";
++    case JS::Console::LogLevel::Warn:
++        return "warn";
++    default:
++        return "log";
++    }
++}
++
++static ByteString serialize_console_arguments(Vector<JsonValue> const& arguments)
++{
++    StringBuilder builder;
++    bool first = true;
++    for (auto const& argument : arguments) {
++        if (!first)
++            builder.append(' ');
++        first = false;
++        builder.append(argument.serialized());
++    }
++    return builder.to_byte_string();
++}
++
++static ByteString stack_frame_source_id(WebView::StackFrame const& frame)
++{
++    return frame.file.map([](auto const& file) {
++                         return file.to_byte_string();
++                     })
++        .value_or("<ladybird-console>");
++}
++
++static int stack_frame_line_no(WebView::StackFrame const& frame)
++{
++    auto line = frame.line.value_or(0);
++    if (line > static_cast<size_t>(INT_MAX))
++        return INT_MAX;
++    return static_cast<int>(line);
++}
++
++static ConsoleMessage console_message_from_output(WebView::ConsoleOutput const& console_output)
++{
++    ConsoleMessage message;
++    message.level = "log";
++    message.message = "";
++    message.line_no = 0;
++    message.source_id = "<ladybird-console>";
++
++    console_output.output.visit(
++        [&](WebView::ConsoleLog const& log) {
++            message.level = console_level(log);
++            message.message = serialize_console_arguments(log.arguments);
++        },
++        [&](WebView::ConsoleError const& error) {
++            message.level = "error";
++            message.message = ByteString::formatted("{}: {}", error.name, error.message);
++            if (!error.trace.is_empty()) {
++                auto const& first_frame = error.trace.first();
++                message.source_id = stack_frame_source_id(first_frame);
++                message.line_no = stack_frame_line_no(first_frame);
++            }
++        },
++        [&](WebView::ConsoleTrace const& trace) {
++            message.level = "trace";
++            message.message = trace.label.to_byte_string();
++            if (!trace.stack.is_empty()) {
++                auto const& first_frame = trace.stack.first();
++                message.source_id = stack_frame_source_id(first_frame);
++                message.line_no = stack_frame_line_no(first_frame);
++            }
++        });
++
++    return message;
++}
++
+ static ErrorOr<OwnPtr<TermSurfLadybirdApplication>> create_application()
+ {
+     tzset();
+@@ -545,6 +646,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView co
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_render_surface_probe(TsLadybirdView*, TsLadybirdRenderSurfaceProbe*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_console_message(TsLadybirdView*, TsLadybirdConsoleMessage*);
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ {
+@@ -553,7 +655,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-title-changed-callback";
++    return "ladybird-a80d01fc-issue-0884-console-message-callback";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -648,6 +750,7 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+     wrapper->view = view_or_error.release_value();
+     wrapper->last_url = {};
+     wrapper->pending_title = {};
++    wrapper->pending_console_messages.clear();
+     wrapper->did_finish_load = false;
+     wrapper->did_crash = false;
+     wrapper->title_changed = false;
+@@ -670,6 +773,17 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         wrapper->title_changed = true;
+         outln("PROBE: TermSurf Ladybird ABI title_change title={}", wrapper->pending_title);
+     };
++    wrapper->view->on_console_message = [wrapper](WebView::ConsoleOutput console_output) {
++        auto message = console_message_from_output(console_output);
++        outln("PROBE: TermSurf Ladybird ABI console_message level={} line={} source={} message={}",
++            message.level, message.line_no, message.source_id, message.message);
++        if (wrapper->pending_console_messages.size() >= 16) {
++            warnln("TermSurf Ladybird ABI console message queue full; dropping level={} message={}",
++                message.level, message.message);
++            return;
++        }
++        wrapper->pending_console_messages.append(move(message));
++    };
+     wrapper->view->on_ready_to_paint = [wrapper] {
+         wrapper->view->note_ready_to_paint();
+         auto probe = wrapper->view->render_surface_probe();
+@@ -868,6 +982,27 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_title_changed(TsLadybirdView
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_console_message(TsLadybirdView* view, TsLadybirdConsoleMessage* out_message)
++{
++    if (!out_message) {
++        set_runtime_error(view ? view->runtime : nullptr, "console message output is null");
++        return false;
++    }
++
++    memset(out_message, 0, sizeof(*out_message));
++    if (!validate_view(view))
++        return false;
++    if (view->pending_console_messages.is_empty())
++        return false;
++
++    auto message = view->pending_console_messages.take_first();
++    copy_c_string(out_message->level, sizeof(out_message->level), message.level);
++    copy_c_string(out_message->message, sizeof(out_message->message), message.message);
++    out_message->line_no = message.line_no;
++    copy_c_string(out_message->source_id, sizeof(out_message->source_id), message.source_id);
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

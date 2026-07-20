@@ -1,0 +1,541 @@
+From f2103294c8c49f09acbdb30f3d76a6cf50c14d9b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 09:48:49 -0500
+Subject: [PATCH 026/119] Serve PDF extension resources
+
+The viewer found a tiny gate,
+Where bundled bytes could navigate.
+No PDF river runs quite yet,
+But index.html can get its set.
+---
+ content/libtermsurf_chromium/BUILD.gn         |   2 +
+ .../ts_extension_resource_loader.cc           | 250 ++++++++++++++++++
+ .../extensions/ts_extension_resource_loader.h |  34 +++
+ .../ts_extensions_browser_client.cc           |  34 ++-
+ .../libtermsurf_chromium/ts_browser_client.cc |  62 +++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  26 +-
+ 6 files changed, 402 insertions(+), 6 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+ create mode 100644 content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index a7faa5ab83..30fbe61295 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -13,6 +13,8 @@ shared_library("libtermsurf_chromium") {
+     "extensions/ts_component_extension_resource_manager.h",
+     "extensions/ts_extension_prefs.cc",
+     "extensions/ts_extension_prefs.h",
++    "extensions/ts_extension_resource_loader.cc",
++    "extensions/ts_extension_resource_loader.h",
+     "extensions/ts_extension_system.cc",
+     "extensions/ts_extension_system.h",
+     "extensions/ts_extension_system_factory.cc",
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+new file mode 100644
+index 0000000000..2654eb6def
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+@@ -0,0 +1,250 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h"
++
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/check.h"
++#include "base/containers/span.h"
++#include "base/functional/bind.h"
++#include "base/logging.h"
++#include "base/memory/ref_counted_memory.h"
++#include "base/notreached.h"
++#include "base/strings/string_number_conversions.h"
++#include "base/strings/string_util.h"
++#include "base/strings/string_view_util.h"
++#include "base/time/time.h"
++#include "extensions/browser/component_extension_resource_manager.h"
++#include "extensions/browser/extensions_browser_client.h"
++#include "mojo/public/c/system/types.h"
++#include "mojo/public/cpp/bindings/receiver.h"
++#include "mojo/public/cpp/bindings/remote.h"
++#include "net/base/mime_util.h"
++#include "net/base/net_errors.h"
++#include "net/http/http_request_headers.h"
++#include "net/http/http_response_headers.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/mojom/url_loader.mojom.h"
++#include "services/network/public/mojom/url_response_head.mojom.h"
++#include "ui/base/resource/resource_bundle.h"
++#include "ui/base/template_expressions.h"
++#include "url/gurl.h"
++
++namespace content {
++namespace {
++
++bool IsHtmlMimeType(std::string_view mime_type) {
++  return base::EqualsCaseInsensitiveASCII(mime_type, "text/html") ||
++         base::EqualsCaseInsensitiveASCII(mime_type, "text/css");
++}
++
++bool IsJavaScriptMimeType(std::string_view mime_type) {
++  return base::EqualsCaseInsensitiveASCII(mime_type, "text/javascript") ||
++         base::EqualsCaseInsensitiveASCII(mime_type, "application/javascript");
++}
++
++bool IsTextLikeMimeType(std::string_view mime_type) {
++  return base::StartsWith(mime_type, "text/",
++                          base::CompareCase::INSENSITIVE_ASCII) ||
++         IsJavaScriptMimeType(mime_type);
++}
++
++std::string MimeTypeForPath(const base::FilePath& path) {
++  std::string mime_type;
++  if (!net::GetWellKnownMimeTypeFromFile(path, &mime_type)) {
++    mime_type = "application/octet-stream";
++  }
++  return mime_type;
++}
++
++std::string LoadResourceBody(int resource_id,
++                             const extensions::ExtensionId& extension_id,
++                             std::string_view mime_type) {
++  const ui::ResourceBundle& bundle = ui::ResourceBundle::GetSharedInstance();
++  std::string body = bundle.LoadDataResourceString(resource_id);
++  if (body.empty()) {
++    return body;
++  }
++
++  auto* replacements =
++      extensions::ExtensionsBrowserClient::Get()
++              ->GetComponentExtensionResourceManager()
++          ? extensions::ExtensionsBrowserClient::Get()
++                ->GetComponentExtensionResourceManager()
++                ->GetTemplateReplacementsForExtension(extension_id)
++          : nullptr;
++  if (!replacements || replacements->empty()) {
++    return body;
++  }
++
++  if (IsHtmlMimeType(mime_type)) {
++    return ui::ReplaceTemplateExpressions(
++        body, *replacements, true /* skip_unexpected_placeholder_check */);
++  }
++  if (IsJavaScriptMimeType(mime_type)) {
++    std::string replaced_body;
++    if (ui::ReplaceTemplateExpressionsInJS(body, *replacements,
++                                           &replaced_body)) {
++      return replaced_body;
++    }
++    LOG(ERROR) << "[issue-792-exp5] bundle-resource-load"
++               << " path= resource_id=" << resource_id << " bytes=0"
++               << " mime=" << mime_type << " ok=0";
++    return {};
++  }
++  return body;
++}
++
++class TsResourceBundleFileLoader : public network::mojom::URLLoader {
++ public:
++  TsResourceBundleFileLoader(const TsResourceBundleFileLoader&) = delete;
++  TsResourceBundleFileLoader& operator=(const TsResourceBundleFileLoader&) =
++      delete;
++
++  static void CreateAndStart(
++      const network::ResourceRequest& request,
++      mojo::PendingReceiver<network::mojom::URLLoader> loader,
++      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++      const base::FilePath& resource_relative_path,
++      int resource_id,
++      scoped_refptr<net::HttpResponseHeaders> headers) {
++    auto* bundle_loader = new TsResourceBundleFileLoader(
++        resource_relative_path, resource_id, std::move(headers));
++    bundle_loader->Start(request, std::move(loader), std::move(client));
++  }
++
++  // network::mojom::URLLoader:
++  void FollowRedirect(
++      const std::vector<std::string>& removed_headers,
++      const net::HttpRequestHeaders& modified_headers,
++      const net::HttpRequestHeaders& modified_cors_exempt_headers,
++      const std::optional<GURL>& new_url) override {
++    NOTREACHED() << "No redirects for resource bundle loads.";
++  }
++
++  void SetPriority(net::RequestPriority priority,
++                   int32_t intra_priority_value) override {}
++
++ private:
++  TsResourceBundleFileLoader(base::FilePath resource_relative_path,
++                             int resource_id,
++                             scoped_refptr<net::HttpResponseHeaders> headers)
++      : resource_relative_path_(std::move(resource_relative_path)),
++        resource_id_(resource_id),
++        headers_(std::move(headers)) {}
++
++  ~TsResourceBundleFileLoader() override = default;
++
++  void Start(const network::ResourceRequest& request,
++             mojo::PendingReceiver<network::mojom::URLLoader> loader,
++             mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
++    client_.Bind(std::move(client));
++    receiver_.Bind(std::move(loader));
++    receiver_.set_disconnect_handler(
++        base::BindOnce(&TsResourceBundleFileLoader::OnReceiverDisconnect,
++                       base::Unretained(this)));
++    client_.set_disconnect_handler(
++        base::BindOnce(&TsResourceBundleFileLoader::OnClientDisconnect,
++                       base::Unretained(this)));
++
++    const std::string mime_type = MimeTypeForPath(resource_relative_path_);
++    std::string body =
++        LoadResourceBody(resource_id_, std::string(request.url.host()),
++                         mime_type);
++    const bool ok = !body.empty();
++    LOG(INFO) << "[issue-792-exp5] bundle-resource-load"
++              << " path=" << resource_relative_path_.AsUTF8Unsafe()
++              << " resource_id=" << resource_id_ << " bytes=" << body.size()
++              << " mime=" << mime_type << " ok=" << ok;
++    if (!ok) {
++      CompleteAndDelete(net::ERR_FAILED);
++      return;
++    }
++
++    auto head = network::mojom::URLResponseHead::New();
++    head->request_start = base::TimeTicks::Now();
++    head->response_start = base::TimeTicks::Now();
++    head->content_length = body.size();
++    head->mime_type = mime_type;
++    if (IsTextLikeMimeType(mime_type)) {
++      head->charset = "utf-8";
++    }
++    head->headers = headers_;
++    head->headers->AddHeader(net::HttpRequestHeaders::kContentLength,
++                             base::NumberToString(head->content_length));
++    head->headers->AddHeader(net::HttpRequestHeaders::kContentType,
++                             mime_type.c_str());
++
++    mojo::ScopedDataPipeProducerHandle producer_handle;
++    mojo::ScopedDataPipeConsumerHandle consumer_handle;
++    if (mojo::CreateDataPipe(body.size(), producer_handle, consumer_handle) !=
++        MOJO_RESULT_OK) {
++      CompleteAndDelete(net::ERR_FAILED);
++      return;
++    }
++
++    size_t actually_written_bytes = 0;
++    MojoResult result = producer_handle->WriteData(
++        base::as_byte_span(body), MOJO_WRITE_DATA_FLAG_NONE,
++        actually_written_bytes);
++    if (result != MOJO_RESULT_OK || actually_written_bytes != body.size()) {
++      CompleteAndDelete(net::ERR_FAILED);
++      return;
++    }
++
++    client_->OnReceiveResponse(std::move(head), std::move(consumer_handle),
++                               std::nullopt);
++    CompleteAndDelete(net::OK);
++  }
++
++  void CompleteAndDelete(int error_code) {
++    if (client_) {
++      client_->OnComplete(network::URLLoaderCompletionStatus(error_code));
++      client_.reset();
++    }
++    MaybeDeleteSelf();
++  }
++
++  void OnReceiverDisconnect() {
++    receiver_.reset();
++    MaybeDeleteSelf();
++  }
++
++  void OnClientDisconnect() {
++    client_.reset();
++    MaybeDeleteSelf();
++  }
++
++  void MaybeDeleteSelf() {
++    if (!receiver_.is_bound() && !client_.is_bound()) {
++      delete this;
++    }
++  }
++
++  mojo::Receiver<network::mojom::URLLoader> receiver_{this};
++  mojo::Remote<network::mojom::URLLoaderClient> client_;
++  base::FilePath resource_relative_path_;
++  int resource_id_ = 0;
++  scoped_refptr<net::HttpResponseHeaders> headers_;
++};
++
++}  // namespace
++
++void LoadTsExtensionResourceFromBundle(
++    const network::ResourceRequest& request,
++    mojo::PendingReceiver<network::mojom::URLLoader> loader,
++    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++    const base::FilePath& resource_relative_path,
++    int resource_id,
++    scoped_refptr<net::HttpResponseHeaders> headers) {
++  TsResourceBundleFileLoader::CreateAndStart(
++      request, std::move(loader), std::move(client), resource_relative_path,
++      resource_id, std::move(headers));
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h
+new file mode 100644
+index 0000000000..7c1414dd5c
+--- /dev/null
++++ b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h
+@@ -0,0 +1,34 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_RESOURCE_LOADER_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_RESOURCE_LOADER_H_
++
++#include "base/files/file_path.h"
++#include "base/memory/scoped_refptr.h"
++#include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "mojo/public/cpp/bindings/pending_remote.h"
++#include "services/network/public/mojom/url_loader.mojom-forward.h"
++
++namespace net {
++class HttpResponseHeaders;
++}
++
++namespace network {
++struct ResourceRequest;
++}
++
++namespace content {
++
++void LoadTsExtensionResourceFromBundle(
++    const network::ResourceRequest& request,
++    mojo::PendingReceiver<network::mojom::URLLoader> loader,
++    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++    const base::FilePath& resource_relative_path,
++    int resource_id,
++    scoped_refptr<net::HttpResponseHeaders> headers);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_EXTENSION_RESOURCE_LOADER_H_
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index bf9f7e8ffe..64da0db784 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -12,6 +12,7 @@
+ #include "components/custom_handlers/simple_protocol_handler_registry_factory.h"
+ #include "components/version_info/version_info.h"
+ #include "content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h"
++#include "content/libtermsurf_chromium/extensions/ts_extension_resource_loader.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extension_system_factory.h"
+ #include "content/public/browser/browser_context.h"
+@@ -34,8 +35,11 @@
+ #include "extensions/browser/updater/null_extension_cache.h"
+ #include "extensions/browser/url_request_util.h"
+ #include "extensions/common/api/runtime.h"
++#include "extensions/common/constants.h"
+ #include "extensions/common/features/feature_channel.h"
++#include "extensions/common/file_util.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
++#include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/mojom/url_loader.mojom.h"
+ 
+ namespace content {
+@@ -259,7 +263,21 @@ base::FilePath TsExtensionsBrowserClient::GetBundleResourcePath(
+     const base::FilePath& extension_resources_path,
+     int* resource_id) const {
+   *resource_id = 0;
+-  return {};
++  if (!request.url.SchemeIs(extensions::kExtensionScheme) ||
++      request.url.host() != extension_misc::kPdfExtensionId) {
++    return {};
++  }
++
++  const base::FilePath resource_relative_path =
++      extensions::file_util::ExtensionURLToRelativeFilePath(request.url);
++  const bool found =
++      component_extension_resource_manager_->IsComponentExtensionResource(
++          base::FilePath(FILE_PATH_LITERAL("pdf")), resource_relative_path,
++          resource_id);
++  LOG(INFO) << "[issue-792-exp5] bundle-resource url=" << request.url
++            << " path=" << resource_relative_path.AsUTF8Unsafe()
++            << " resource_id=" << *resource_id << " found=" << found;
++  return found ? resource_relative_path : base::FilePath();
+ }
+ 
+ void TsExtensionsBrowserClient::LoadResourceFromResourceBundle(
+@@ -269,7 +287,9 @@ void TsExtensionsBrowserClient::LoadResourceFromResourceBundle(
+     int resource_id,
+     scoped_refptr<net::HttpResponseHeaders> headers,
+     mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
+-  NOTREACHED();
++  LoadTsExtensionResourceFromBundle(request, std::move(loader),
++                                    std::move(client), resource_relative_path,
++                                    resource_id, std::move(headers));
+ }
+ 
+ bool TsExtensionsBrowserClient::AllowCrossRendererResourceLoad(
+@@ -282,6 +302,16 @@ bool TsExtensionsBrowserClient::AllowCrossRendererResourceLoad(
+     const extensions::ExtensionSet& extensions,
+     const extensions::ProcessMap& process_map,
+     const GURL& upstream_url) {
++  if (!request.url.SchemeIs(extensions::kExtensionScheme)) {
++    return false;
++  }
++  if (request.url.host().empty()) {
++    return false;
++  }
++  if (extension && request.url.GetWithEmptyPath() != extension->url()) {
++    return false;
++  }
++
+   bool allowed = false;
+   if (extensions::url_request_util::AllowCrossRendererResourceLoad(
+           request, destination, page_transition, child_id, is_incognito,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 0749a023e2..48c4f6516f 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -4,13 +4,17 @@
+ 
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
++#include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
++#include "content/public/browser/browser_context.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/browser/shell_browser_context.h"
++#include "extensions/browser/extension_protocols.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_client.h"
++#include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+@@ -95,6 +99,64 @@ void TsBrowserClient::OverrideWebPreferences(
+   }
+ }
+ 
++mojo::PendingRemote<network::mojom::URLLoaderFactory>
++TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
++    const std::string& scheme,
++    FrameTreeNodeId frame_tree_node_id) {
++  if (scheme == extensions::kExtensionScheme) {
++    WebContents* web_contents =
++        WebContents::FromFrameTreeNodeId(frame_tree_node_id);
++    LOG(INFO) << "[issue-792-exp5] extension-factory"
++              << " scheme=chrome-extension type=navigation";
++    return extensions::CreateExtensionNavigationURLLoaderFactory(
++        web_contents->GetBrowserContext(), false);
++  }
++  return ShellContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
++      scheme, frame_tree_node_id);
++}
++
++void TsBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
++    BrowserContext* browser_context,
++    NonNetworkURLLoaderFactoryMap* factories) {
++  ShellContentBrowserClient::
++      RegisterNonNetworkWorkerMainResourceURLLoaderFactories(browser_context,
++                                                             factories);
++  LOG(INFO) << "[issue-792-exp5] extension-factory"
++            << " scheme=chrome-extension type=worker-main";
++  factories->emplace(
++      extensions::kExtensionScheme,
++      extensions::CreateExtensionWorkerMainResourceURLLoaderFactory(
++          browser_context));
++}
++
++void TsBrowserClient::RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
++    BrowserContext* browser_context,
++    NonNetworkURLLoaderFactoryMap* factories) {
++  ShellContentBrowserClient::
++      RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(browser_context,
++                                                              factories);
++  LOG(INFO) << "[issue-792-exp5] extension-factory"
++            << " scheme=chrome-extension type=service-worker";
++  factories->emplace(
++      extensions::kExtensionScheme,
++      extensions::CreateExtensionServiceWorkerScriptURLLoaderFactory(
++          browser_context));
++}
++
++void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++    int render_process_id,
++    int render_frame_id,
++    const std::optional<url::Origin>& request_initiator_origin,
++    NonNetworkURLLoaderFactoryMap* factories) {
++  ShellContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
++      render_process_id, render_frame_id, request_initiator_origin, factories);
++  LOG(INFO) << "[issue-792-exp5] extension-factory"
++            << " scheme=chrome-extension type=subresource";
++  factories->emplace(extensions::kExtensionScheme,
++                     extensions::CreateExtensionURLLoaderFactory(
++                         render_process_id, render_frame_id));
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index b671edda23..4fe55e0f32 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -6,9 +6,13 @@
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_CLIENT_H_
+ 
+ #include <memory>
++#include <optional>
++#include <string>
+ 
+ #include "content/shell/browser/shell_content_browser_client.h"
+ #include "services/network/public/mojom/network_context.mojom-forward.h"
++#include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
++#include "url/origin.h"
+ 
+ namespace content {
+ 
+@@ -29,10 +33,24 @@ class TsBrowserClient : public ShellContentBrowserClient {
+   void RegisterBrowserInterfaceBindersForFrame(
+       RenderFrameHost* render_frame_host,
+       mojo::BinderMapWithContext<RenderFrameHost*>* map) override;
+-  void OverrideWebPreferences(
+-      WebContents* web_contents,
+-      SiteInstance& main_frame_site,
+-      blink::web_pref::WebPreferences* prefs) override;
++  void OverrideWebPreferences(WebContents* web_contents,
++                              SiteInstance& main_frame_site,
++                              blink::web_pref::WebPreferences* prefs) override;
++  mojo::PendingRemote<network::mojom::URLLoaderFactory>
++  CreateNonNetworkNavigationURLLoaderFactory(
++      const std::string& scheme,
++      FrameTreeNodeId frame_tree_node_id) override;
++  void RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
++      BrowserContext* browser_context,
++      NonNetworkURLLoaderFactoryMap* factories) override;
++  void RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
++      BrowserContext* browser_context,
++      NonNetworkURLLoaderFactoryMap* factories) override;
++  void RegisterNonNetworkSubresourceURLLoaderFactories(
++      int render_process_id,
++      int render_frame_id,
++      const std::optional<url::Origin>& request_initiator_origin,
++      NonNetworkURLLoaderFactoryMap* factories) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+-- 
+2.54.0
+

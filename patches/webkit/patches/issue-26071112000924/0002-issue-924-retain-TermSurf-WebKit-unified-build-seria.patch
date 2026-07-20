@@ -1,0 +1,32 @@
+From 60899f4934ec2f66e175cecd44398d834c745b0c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 16:10:48 -0500
+Subject: [PATCH 2/2] issue-924: retain TermSurf WebKit unified-build
+ serializer rule
+
+Port issue-857/0005 DerivedSources.make intent only; PDF trace renames
+from 0005 are N/A after retiring diagnostic patches 0002-0004.
+---
+ Source/WebKit/DerivedSources.make | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebKit/DerivedSources.make b/Source/WebKit/DerivedSources.make
+index 0341f81653..d4007fea68 100644
+--- a/Source/WebKit/DerivedSources.make
++++ b/Source/WebKit/DerivedSources.make
+@@ -1023,9 +1023,9 @@ GENERATED_SERIALIZERS_OUTPUT_FILES = \
+     IPC/WebKitPlatformGeneratedSerializers.mm \
+ #
+ 
+-GENERATED_SERIALIZERS_OUTPUT_PATTERNS = $(call to-pattern, $(GENERATED_SERIALIZERS_OUTPUT_FILES))
+-
+-$(GENERATED_SERIALIZERS_OUTPUT_PATTERNS) : $(WebKit2)/Scripts/generate-serializers.py $(SERIALIZATION_DESCRIPTION_FILES) $(WebKit2)/DerivedSources.make $(WEBCORE_SERIALIZATION_DESCRIPTION_FILES_FULLPATH) $(WebKit2)/Scripts/webkit/opaque_ipc_types.py $(WebKit2)/Scripts/webkit/opaque_ipc_types.tracking.in
++# TermSurf: depend on concrete output files (not to-pattern) so unified builds
++# regenerate serializers when descriptions change (issue-857/0005 intent).
++$(GENERATED_SERIALIZERS_OUTPUT_FILES) : $(WebKit2)/Scripts/generate-serializers.py $(SERIALIZATION_DESCRIPTION_FILES) $(WebKit2)/DerivedSources.make $(WEBCORE_SERIALIZATION_DESCRIPTION_FILES_FULLPATH) $(WebKit2)/Scripts/webkit/opaque_ipc_types.py $(WebKit2)/Scripts/webkit/opaque_ipc_types.tracking.in
+ 	$(PYTHON) $(WebKit2)/Scripts/generate-serializers.py mm --split-by-directory --output-dir=IPC $(filter %.serialization.in,$^)
+ 
+ EXTENSIONS_DIR = $(WebKit2)/WebProcess/Extensions
+-- 
+2.54.0
+

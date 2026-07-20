@@ -1,0 +1,410 @@
+From 5cda810479f357f32e2ccde5511e4f5e4b154235 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 13:56:01 -0500
+Subject: [PATCH 121/122] Add native Forward navigation
+
+---
+ .../libtermsurf_chromium.cc                   |   9 +-
+ .../libtermsurf_chromium.h                    |   1 +
+ .../smoke-test/run-forward-action-smoke.sh    |  22 ++++
+ content/libtermsurf_chromium/test_main.cc     | 121 +++++++++++++-----
+ .../ts_browser_main_parts.cc                  |   5 +
+ .../ts_browser_main_parts.h                   |   4 +-
+ .../libtermsurf_chromium/ts_tab_observer.cc   |   5 +-
+ 7 files changed, 133 insertions(+), 34 deletions(-)
+ create mode 100755 content/libtermsurf_chromium/smoke-test/run-forward-action-smoke.sh
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 1235c3bbd2..3b7b645ebf 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -101,7 +101,7 @@ void (*g_on_renderer_crashed)(ts_web_contents_t,
+                               void*) = nullptr;
+ void* g_on_renderer_crashed_data = nullptr;
+ 
+-void (*g_on_navigation_state)(ts_web_contents_t, bool, void*) = nullptr;
++void (*g_on_navigation_state)(ts_web_contents_t, bool, bool, void*) = nullptr;
+ void* g_on_navigation_state_data = nullptr;
+ 
+ }  // namespace
+@@ -145,9 +145,11 @@ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress) {
+   }
+ }
+ 
+-void TsNotifyNavigationState(void* wc_handle, bool can_go_back) {
++void TsNotifyNavigationState(void* wc_handle,
++                             bool can_go_back,
++                             bool can_go_forward) {
+   if (g_on_navigation_state) {
+-    g_on_navigation_state(wc_handle, can_go_back,
++    g_on_navigation_state(wc_handle, can_go_back, can_go_forward,
+                           g_on_navigation_state_data);
+   }
+ }
+@@ -483,6 +485,7 @@ void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+ void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
++               bool can_go_forward,
+                void* user_data),
+     void* user_data) {
+   g_on_navigation_state = cb;
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 16a5d71f21..2fa75db88d 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -192,6 +192,7 @@ TS_EXPORT void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+ TS_EXPORT void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
++               bool can_go_forward,
+                void* user_data),
+     void* user_data);
+ 
+diff --git a/content/libtermsurf_chromium/smoke-test/run-forward-action-smoke.sh b/content/libtermsurf_chromium/smoke-test/run-forward-action-smoke.sh
+new file mode 100755
+index 0000000000..31207fb7c9
+--- /dev/null
++++ b/content/libtermsurf_chromium/smoke-test/run-forward-action-smoke.sh
+@@ -0,0 +1,22 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
++LOG="$(mktemp "${TMPDIR:-/tmp}/termsurf-chromium-forward.XXXXXX")"
++EXPECTED="FORWARD_ACTION_SMOKE_PASS engine=chromium tabs=2 history_round_trip=1 back_action=1 forward_action=1 state=1 disabled=1 isolation=1 same_document=1 fresh_navigation_clears_forward=1 wrong_tab_rejected=1 crash_recovery=1 cleanup=1 future_actions_rejected=1"
++trap 'rm -f "$LOG"' EXIT
++
++set +e
++"$SCRIPT_DIR/run-back-action-smoke.sh" >"$LOG" 2>&1
++STATUS=$?
++set -e
++
++grep -v '^FORWARD_ACTION_SMOKE_PASS engine=' "$LOG" || true
++if [[ $STATUS -ne 0 ]]; then
++  exit "$STATUS"
++fi
++if [[ "$(grep -Fxc "$EXPECTED" "$LOG" || true)" -ne 1 ]]; then
++  echo "missing unique exact Chromium Forward pass marker" >&2
++  exit 1
++fi
++printf '%s\n' "$EXPECTED"
+diff --git a/content/libtermsurf_chromium/test_main.cc b/content/libtermsurf_chromium/test_main.cc
+index b9937dee75..53852f3837 100644
+--- a/content/libtermsurf_chromium/test_main.cc
++++ b/content/libtermsurf_chromium/test_main.cc
+@@ -1,5 +1,5 @@
+ // Copyright 2025 TermSurf
+-// Back-only semantic navigation smoke for libtermsurf_chromium.
++// Forward semantic navigation smoke for libtermsurf_chromium.
+ 
+ #include "content/libtermsurf_chromium/libtermsurf_chromium.h"
+ 
+@@ -15,6 +15,7 @@ namespace {
+ 
+ struct NavState {
+   bool back = false;
++  bool forward = false;
+   bool seen = false;
+   int updates = 0;
+ };
+@@ -33,9 +34,12 @@ enum class Step {
+   kWaitInitial,
+   kWaitFirstA2,
+   kWaitBackA1,
+-  kWaitSecondA2,
++  kWaitForwardA2,
++  kWaitBackBeforeFresh,
++  kWaitFreshA2,
+   kWaitPushed,
+   kWaitBackSameDocument,
++  kWaitForwardSameDocument,
+   kWaitCrash,
+   kWaitRecovery,
+   kCleanup,
+@@ -52,11 +56,15 @@ struct Smoke {
+   std::string b1_url;
+   int recovery_state_epoch = 0;
+   bool recovery_state_seen = false;
+-  bool action = false;
++  bool history_round_trip = false;
++  bool back_action = false;
++  bool forward_action = false;
+   bool state = false;
+   bool disabled = false;
+   bool isolation = false;
+   bool same_document = false;
++  bool fresh_navigation_clears_forward = false;
++  bool wrong_tab_rejected = false;
+   bool crash_recovery = false;
+   bool cleanup = false;
+   bool future_actions_rejected = false;
+@@ -95,31 +103,39 @@ void WriteLine(int fd, const std::string& line) {
+ 
+ void Fail(const char* message) {
+   WriteLine(STDERR_FILENO,
+-            "BACK_ACTION_SMOKE_FAIL engine=chromium step=" +
++            "FORWARD_ACTION_SMOKE_FAIL engine=chromium step=" +
+                 std::to_string(static_cast<int>(g.step)) + " message=" +
+                 std::string(message ? message : "") + " a_url=" + g.a.url +
+                 " a_title=" + g.a.title + " a_back=" +
+-                std::to_string(g.a.nav.back ? 1 : 0) + " b_url=" + g.b.url +
++                std::to_string(g.a.nav.back ? 1 : 0) + " a_forward=" +
++                std::to_string(g.a.nav.forward ? 1 : 0) + " b_url=" + g.b.url +
+                 " b_title=" + g.b.title + " b_back=" +
+-                std::to_string(g.b.nav.back ? 1 : 0));
++                std::to_string(g.b.nav.back ? 1 : 0) + " b_forward=" +
++                std::to_string(g.b.nav.forward ? 1 : 0));
+   g_done = true;
+   _Exit(1);
+ }
+ 
+ bool BUnchanged() {
+   return Contains(g.b.url, "/b1") && g.b.title == "B1" && g.b.nav.seen &&
+-         !g.b.nav.back && !g.b.crashed;
++         !g.b.nav.back && !g.b.nav.forward && !g.b.crashed;
+ }
+ 
+ void Finish() {
+   WriteLine(
+       STDOUT_FILENO,
+-      "BACK_ACTION_SMOKE_PASS engine=chromium tabs=2 action=" +
+-          std::to_string(g.action ? 1 : 0) + " state=" +
++      "FORWARD_ACTION_SMOKE_PASS engine=chromium tabs=2 history_round_trip=" +
++          std::to_string(g.history_round_trip ? 1 : 0) + " back_action=" +
++          std::to_string(g.back_action ? 1 : 0) + " forward_action=" +
++          std::to_string(g.forward_action ? 1 : 0) + " state=" +
+           std::to_string(g.state ? 1 : 0) + " disabled=" +
+           std::to_string(g.disabled ? 1 : 0) + " isolation=" +
+           std::to_string(g.isolation ? 1 : 0) + " same_document=" +
+-          std::to_string(g.same_document ? 1 : 0) + " crash_recovery=" +
++          std::to_string(g.same_document ? 1 : 0) +
++          " fresh_navigation_clears_forward=" +
++          std::to_string(g.fresh_navigation_clears_forward ? 1 : 0) +
++          " wrong_tab_rejected=" +
++          std::to_string(g.wrong_tab_rejected ? 1 : 0) + " crash_recovery=" +
+           std::to_string(g.crash_recovery ? 1 : 0) + " cleanup=" +
+           std::to_string(g.cleanup ? 1 : 0) +
+           " future_actions_rejected=" +
+@@ -133,9 +149,11 @@ void Advance();
+ void CleanupAndFinish(void*) {
+   const ts_web_contents_t stale_a = g.a.wc;
+   ts_destroy_web_contents(g.a.wc);
+-  if (ts_navigation_action(stale_a, "back")) {
+-    Fail("closed tab accepted Back");
++  if (ts_navigation_action(stale_a, "back") ||
++      ts_navigation_action(stale_a, "forward")) {
++    Fail("closed tab accepted navigation action");
+   }
++  g.wrong_tab_rejected = true;
+   if (!BUnchanged()) {
+     Fail("closed-tab action mutated peer tab");
+   }
+@@ -169,16 +187,21 @@ void OnTabReady(ts_web_contents_t wc, int tab_id, void*) {
+   Advance();
+ }
+ 
+-void OnNavigationState(ts_web_contents_t wc, bool can_go_back, void*) {
++void OnNavigationState(ts_web_contents_t wc,
++                       bool can_go_back,
++                       bool can_go_forward,
++                       void*) {
+   Tab* tab = TabFor(wc);
+   if (!tab) {
+     return;
+   }
+   tab->wc = wc;
+   tab->nav.back = can_go_back;
++  tab->nav.forward = can_go_forward;
+   tab->nav.seen = true;
+   tab->nav.updates += 1;
+-  if (!can_go_back && tab->url.empty() && tab->title.empty()) {
++  if (!can_go_back && !can_go_forward && tab->url.empty() &&
++      tab->title.empty()) {
+     tab->initial_false_seen = true;
+   }
+   if (tab == &g.a && g.step == Step::kWaitRecovery &&
+@@ -227,7 +250,8 @@ void Advance() {
+     case Step::kWaitInitial:
+       if (g.a.tab_id > 0 && g.b.tab_id > 0 && g.a.initial_false_seen &&
+           g.b.initial_false_seen && Contains(g.a.url, "/a1") &&
+-          g.a.title == "A1" && !g.a.nav.back && BUnchanged()) {
++          g.a.title == "A1" && !g.a.nav.back && !g.a.nav.forward &&
++          BUnchanged()) {
+         g.step = Step::kWaitFirstA2;
+         ts_load_url(g.a.wc, g.a2_url.c_str());
+       }
+@@ -235,7 +259,7 @@ void Advance() {
+ 
+     case Step::kWaitFirstA2:
+       if (Contains(g.a.url, "/a2") && g.a.title == "A2 base" &&
+-          g.a.nav.back && BUnchanged()) {
++          g.a.nav.back && !g.a.nav.forward && BUnchanged()) {
+         g.step = Step::kWaitBackA1;
+         if (!ts_navigation_action(g.a.wc, "back")) {
+           Fail("semantic Back was rejected");
+@@ -244,9 +268,9 @@ void Advance() {
+       break;
+ 
+     case Step::kWaitBackA1:
+-      if (Contains(g.a.url, "/a1") && !g.a.nav.back && BUnchanged()) {
+-        g.action = true;
+-        g.state = true;
++      if (Contains(g.a.url, "/a1") && !g.a.nav.back && g.a.nav.forward &&
++          BUnchanged()) {
++        g.back_action = true;
+         const std::string before_url = g.a.url;
+         const std::string before_title = g.a.title;
+         const int before_state_updates = g.a.nav.updates;
+@@ -257,25 +281,53 @@ void Advance() {
+             g.a.nav.updates != before_state_updates) {
+           Fail("disabled Back mutated page or callback state");
+         }
+-        if (ts_navigation_action(g.a.wc, "forward") ||
+-            ts_navigation_action(g.a.wc, "refresh") ||
++        if (ts_navigation_action(g.a.wc, "refresh") ||
+             ts_navigation_action(g.a.wc, "unknown") ||
+-            ts_navigation_action(nullptr, "back")) {
+-          Fail("future, unknown, or missing-tab action was accepted");
++            ts_navigation_action(nullptr, "back") ||
++            ts_navigation_action(g.b.wc, "forward")) {
++          Fail("refresh, unknown, or missing-tab action was accepted");
++        }
++        if (!BUnchanged()) {
++          Fail("wrong-tab Forward mutated peer tab");
+         }
+         if (g.a.nav.updates != before_state_updates) {
+           Fail("rejected future action fabricated state");
+         }
+         g.disabled = true;
++        g.wrong_tab_rejected = true;
+         g.future_actions_rejected = true;
+-        g.step = Step::kWaitSecondA2;
++        g.step = Step::kWaitForwardA2;
++        if (!ts_navigation_action(g.a.wc, "forward")) {
++          Fail("semantic Forward was rejected");
++        }
++      }
++      break;
++
++    case Step::kWaitForwardA2:
++      if (Contains(g.a.url, "/a2") && g.a.title == "A2 base" &&
++          g.a.nav.back && !g.a.nav.forward && BUnchanged()) {
++        g.forward_action = true;
++        g.history_round_trip = true;
++        g.state = true;
++        g.step = Step::kWaitBackBeforeFresh;
++        if (!ts_navigation_action(g.a.wc, "back")) {
++          Fail("second semantic Back was rejected");
++        }
++      }
++      break;
++
++    case Step::kWaitBackBeforeFresh:
++      if (Contains(g.a.url, "/a1") && !g.a.nav.back && g.a.nav.forward &&
++          BUnchanged()) {
++        g.step = Step::kWaitFreshA2;
+         ts_load_url(g.a.wc, g.a2_url.c_str());
+       }
+       break;
+ 
+-    case Step::kWaitSecondA2:
++    case Step::kWaitFreshA2:
+       if (Contains(g.a.url, "/a2") && g.a.title == "A2 base" &&
+-          g.a.nav.back && BUnchanged()) {
++          g.a.nav.back && !g.a.nav.forward && BUnchanged()) {
++        g.fresh_navigation_clears_forward = true;
+         g.step = Step::kWaitPushed;
+         if (!ts_test_execute_javascript(
+                 g.a.wc,
+@@ -294,7 +346,7 @@ void Advance() {
+ 
+     case Step::kWaitPushed:
+       if (Contains(g.a.url, "/a2#state") && g.a.title == "A2 state" &&
+-          g.a.nav.back && BUnchanged()) {
++          g.a.nav.back && !g.a.nav.forward && BUnchanged()) {
+         g.step = Step::kWaitBackSameDocument;
+         if (!ts_navigation_action(g.a.wc, "back")) {
+           Fail("same-document Back was rejected");
+@@ -304,7 +356,17 @@ void Advance() {
+ 
+     case Step::kWaitBackSameDocument:
+       if (Contains(g.a.url, "/a2") && !Contains(g.a.url, "#state") &&
+-          g.a.nav.back && BUnchanged()) {
++          g.a.nav.back && g.a.nav.forward && BUnchanged()) {
++        g.step = Step::kWaitForwardSameDocument;
++        if (!ts_navigation_action(g.a.wc, "forward")) {
++          Fail("same-document Forward was rejected");
++        }
++      }
++      break;
++
++    case Step::kWaitForwardSameDocument:
++      if (Contains(g.a.url, "/a2#state") && g.a.title == "A2 state" &&
++          g.a.nav.back && !g.a.nav.forward && BUnchanged()) {
+         g.same_document = true;
+         g.step = Step::kWaitCrash;
+         if (!ts_test_crash_current_page(g.a.wc)) {
+@@ -314,7 +376,8 @@ void Advance() {
+       break;
+ 
+     case Step::kWaitCrash:
+-      if (g.a.crashed && g.a.nav.seen && !g.a.nav.back && BUnchanged()) {
++      if (g.a.crashed && g.a.nav.seen && !g.a.nav.back &&
++          !g.a.nav.forward && BUnchanged()) {
+         g.recovery_state_epoch = g.a.nav.updates;
+         g.recovery_state_seen = false;
+         g.step = Step::kWaitRecovery;
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1ee1faaf24..5348aa11c1 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -1299,6 +1299,11 @@ bool TsBrowserMainParts::NavigationAction(void* wc_handle,
+       return false;
+     }
+     controller.GoBack();
++  } else if (action == "forward") {
++    if (tab->tab_observer->renderer_crashed() || !controller.CanGoForward()) {
++      return false;
++    }
++    controller.GoForward();
+   } else {
+     return false;
+   }
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index 6bb830a21f..e4df73f0bb 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -48,7 +48,9 @@ void TsNotifyCAContextId(void* wc_handle,
+                          int height);
+ void TsNotifyUrlChanged(void* wc_handle, const char* url);
+ void TsNotifyLoadingState(void* wc_handle, const char* state, int progress);
+-void TsNotifyNavigationState(void* wc_handle, bool can_go_back);
++void TsNotifyNavigationState(void* wc_handle,
++                             bool can_go_back,
++                             bool can_go_forward);
+ void TsNotifyTitleChanged(void* wc_handle, const char* title);
+ void TsNotifyCursorChanged(void* wc_handle, int cursor_type);
+ void TsNotifyTargetUrlChanged(void* wc_handle, const char* url);
+diff --git a/content/libtermsurf_chromium/ts_tab_observer.cc b/content/libtermsurf_chromium/ts_tab_observer.cc
+index 7186a2325c..66029bcbc7 100644
+--- a/content/libtermsurf_chromium/ts_tab_observer.cc
++++ b/content/libtermsurf_chromium/ts_tab_observer.cc
+@@ -103,10 +103,13 @@ void TsTabObserver::ObserveContents(WebContents* web_contents) {
+ void TsTabObserver::NotifyNavigationState() {
+ #if BUILDFLAG(IS_MAC)
+   bool can_go_back = false;
++  bool can_go_forward = false;
+   if (!renderer_crashed_ && web_contents()) {
+     can_go_back = web_contents()->GetController().CanGoBack();
++    can_go_forward = web_contents()->GetController().CanGoForward();
+   }
+-  TsNotifyNavigationState(reinterpret_cast<void*>(handle_), can_go_back);
++  TsNotifyNavigationState(reinterpret_cast<void*>(handle_), can_go_back,
++                          can_go_forward);
+ #endif
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

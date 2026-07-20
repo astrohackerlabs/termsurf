@@ -1,0 +1,214 @@
+From 71e670ca1005c28f500315760fa66a6bbdbed60b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 08:47:52 -0500
+Subject: [PATCH 050/122] Route TermSurf mouse input through Chromium router
+
+---
+ .../ts_browser_main_parts.cc                  | 168 +++++++++++++-----
+ 1 file changed, 124 insertions(+), 44 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 7e3908d178..7d74321e1f 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -80,6 +80,55 @@ bool Issue794InputTraceEnabled() {
+   return enabled;
+ }
+ 
++void LogIssue794InputFrames(const char* tag,
++                            WebContents* web_contents,
++                            int x,
++                            int y) {
++  if (!Issue794InputTraceEnabled()) {
++    return;
++  }
++
++  web_contents->ForEachRenderFrameHost([&](RenderFrameHost* rfh) {
++    auto* frame_view = rfh->GetView();
++    std::string site_url;
++    if (rfh->GetSiteInstance()) {
++      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++    }
++    const bool pdf_related =
++        rfh->GetLastCommittedURL().spec().find(
++            "mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos ||
++        rfh->GetLastCommittedURL().spec().find("bitcoin.pdf") !=
++            std::string::npos ||
++        site_url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos;
++
++    if (!frame_view) {
++      LOG(INFO) << tag
++                << " frame frame_tree_node_id=" << rfh->GetFrameTreeNodeId()
++                << " has_parent=" << (rfh->GetParent() ? 1 : 0)
++                << " url=" << rfh->GetLastCommittedURL().spec()
++                << " site_url=" << site_url << " view=0"
++                << " pdf_related=" << (pdf_related ? 1 : 0);
++      return;
++    }
++
++    const gfx::Rect view_bounds = frame_view->GetViewBounds();
++    const gfx::PointF root_origin =
++        frame_view->TransformPointToRootCoordSpaceF(gfx::PointF(0, 0));
++    const gfx::RectF root_bounds(root_origin.x(), root_origin.y(),
++                                 view_bounds.width(), view_bounds.height());
++    const bool contains_input = root_bounds.Contains(gfx::PointF(x, y));
++    LOG(INFO) << tag
++              << " frame frame_tree_node_id=" << rfh->GetFrameTreeNodeId()
++              << " has_parent=" << (rfh->GetParent() ? 1 : 0)
++              << " url=" << rfh->GetLastCommittedURL().spec()
++              << " site_url=" << site_url << " view=" << frame_view
++              << " view_bounds=" << view_bounds.ToString()
++              << " root_bounds=" << root_bounds.ToString()
++              << " contains_input=" << (contains_input ? 1 : 0)
++              << " pdf_related=" << (pdf_related ? 1 : 0);
++  });
++}
++
+ void Issue779TraceAnnounce() {
+   static bool announced = false;
+   if (!announced) {
+@@ -640,9 +689,45 @@ void TsBrowserMainParts::ForwardMouseEvent(void* wc_handle,
+                                    gfx::PointF(x, y), btn, click_count,
+                                    web_modifiers, base::TimeTicks::Now());
+ 
+-  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (view) {
++  auto* web_contents = tab->shell->web_contents();
++  auto* view = web_contents->GetRenderWidgetHostView();
++  auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents);
++  auto* router =
++      web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
++
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp5] mouse-event kind="
++              << (type == 0 ? "down" : "up") << " web_contents=" << web_contents
++              << " url=" << web_contents->GetLastCommittedURL().spec()
++              << " view=" << view
++              << " rwh=" << (view ? view->GetRenderWidgetHost() : nullptr)
++              << " router=" << router << " coords=(" << x << ", " << y
++              << ") button=" << button << " click_count=" << click_count
++              << " modifiers=" << modifiers
++              << " web_modifiers=" << web_modifiers;
++    LogIssue794InputFrames("[issue-794-exp5]", web_contents, x, y);
++  }
++
++  if (view && router) {
++    auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++                << (type == 0 ? "down" : "up") << " route_mode=input-router"
++                << " root_view=" << root_view << " router=" << router;
++    }
++    ui::LatencyInfo latency;
++    router->RouteMouseEvent(root_view, &mouse_event, latency);
++  } else if (view) {
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++                << (type == 0 ? "down" : "up") << " route_mode=direct-fallback"
++                << " reason=" << (router ? "missing-view" : "missing-router");
++    }
+     view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++  } else if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp5] mouse-route kind="
++              << (type == 0 ? "down" : "up") << " route_mode=drop"
++              << " reason=missing-view";
+   }
+ #endif
+ }
+@@ -670,9 +755,43 @@ void TsBrowserMainParts::ForwardMouseMove(void* wc_handle,
+                                    gfx::PointF(x, y), gfx::PointF(x, y), btn, 0,
+                                    web_modifiers, base::TimeTicks::Now());
+ 
+-  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
+-  if (view) {
++  auto* web_contents = tab->shell->web_contents();
++  auto* view = web_contents->GetRenderWidgetHostView();
++  auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents);
++  auto* router =
++      web_contents_impl ? web_contents_impl->GetInputEventRouter() : nullptr;
++
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp5] mouse-event kind=move web_contents="
++              << web_contents
++              << " url=" << web_contents->GetLastCommittedURL().spec()
++              << " view=" << view
++              << " rwh=" << (view ? view->GetRenderWidgetHost() : nullptr)
++              << " router=" << router << " coords=(" << x << ", " << y
++              << ") button=none click_count=0 modifiers=" << modifiers
++              << " web_modifiers=" << web_modifiers;
++    LogIssue794InputFrames("[issue-794-exp5]", web_contents, x, y);
++  }
++
++  if (view && router) {
++    auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp5] mouse-route kind=move"
++                << " route_mode=input-router"
++                << " root_view=" << root_view << " router=" << router;
++    }
++    ui::LatencyInfo latency;
++    router->RouteMouseEvent(root_view, &mouse_event, latency);
++  } else if (view) {
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp5] mouse-route kind=move"
++                << " route_mode=direct-fallback"
++                << " reason=" << (router ? "missing-view" : "missing-router");
++    }
+     view->GetRenderWidgetHost()->ForwardMouseEvent(mouse_event);
++  } else if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp5] mouse-route kind=move route_mode=drop"
++              << " reason=missing-view";
+   }
+ #endif
+ }
+@@ -725,46 +844,7 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+               << ") phase=" << phase << " momentum_phase=" << momentum_phase
+               << " precise=" << (precise ? 1 : 0) << " modifiers=" << modifiers;
+ 
+-    web_contents->ForEachRenderFrameHost([&](RenderFrameHost* rfh) {
+-      auto* frame_view = rfh->GetView();
+-      std::string site_url;
+-      if (rfh->GetSiteInstance()) {
+-        site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
+-      }
+-      const bool pdf_related =
+-          rfh->GetLastCommittedURL().spec().find(
+-              "mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos ||
+-          rfh->GetLastCommittedURL().spec().find("bitcoin.pdf") !=
+-              std::string::npos ||
+-          site_url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") !=
+-              std::string::npos;
+-
+-      if (!frame_view) {
+-        LOG(INFO) << "[issue-794-exp4] frame frame_tree_node_id="
+-                  << rfh->GetFrameTreeNodeId()
+-                  << " has_parent=" << (rfh->GetParent() ? 1 : 0)
+-                  << " url=" << rfh->GetLastCommittedURL().spec()
+-                  << " site_url=" << site_url << " view=0"
+-                  << " pdf_related=" << (pdf_related ? 1 : 0);
+-        return;
+-      }
+-
+-      const gfx::Rect view_bounds = frame_view->GetViewBounds();
+-      const gfx::PointF root_origin =
+-          frame_view->TransformPointToRootCoordSpaceF(gfx::PointF(0, 0));
+-      const gfx::RectF root_bounds(root_origin.x(), root_origin.y(),
+-                                   view_bounds.width(), view_bounds.height());
+-      const bool contains_input = root_bounds.Contains(gfx::PointF(x, y));
+-      LOG(INFO) << "[issue-794-exp4] frame frame_tree_node_id="
+-                << rfh->GetFrameTreeNodeId()
+-                << " has_parent=" << (rfh->GetParent() ? 1 : 0)
+-                << " url=" << rfh->GetLastCommittedURL().spec()
+-                << " site_url=" << site_url << " view=" << frame_view
+-                << " view_bounds=" << view_bounds.ToString()
+-                << " root_bounds=" << root_bounds.ToString()
+-                << " contains_input=" << (contains_input ? 1 : 0)
+-                << " pdf_related=" << (pdf_related ? 1 : 0);
+-    });
++    LogIssue794InputFrames("[issue-794-exp4]", web_contents, x, y);
+   }
+ 
+   if (view && router) {
+-- 
+2.50.1 (Apple Git-155)
+

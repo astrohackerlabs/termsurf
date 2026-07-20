@@ -1,0 +1,56 @@
+From 56ff57e016c29c670b09867a1722f1d9854c6c9a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 15:30:28 -0500
+Subject: [PATCH] Default unfocused-split-opacity to 1
+
+No dimming of inactive panes; borders mark focus instead of a fade.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift | 5 +++--
+ src/config/Config.zig                      | 9 ++++++---
+ 2 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index fcfe1ae7a..383f27133 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -540,8 +540,9 @@ extension Ghostty {
+         }
+ 
+         var unfocusedSplitOpacity: Double {
+-            guard let config = self.config else { return 1 }
+-            var opacity: Double = 0.85
++            guard let config = self.config else { return 0 }
++            // Config default is 1 (no dimming); overlay alpha is 1 - opacity.
++            var opacity: Double = 1
+             let key = "unfocused-split-opacity"
+             _ = ghostty_config_get(config, &opacity, key, UInt(key.lengthOfBytes(using: .utf8)))
+             return 1 - opacity
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index bc5d4206f..812881bab 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1067,15 +1067,18 @@ palette: Palette = .{},
+ @"background-blur": BackgroundBlur = .false,
+ 
+ /// The opacity level (opposite of transparency) of an unfocused split.
+-/// Unfocused splits by default are slightly faded out to make it easier to see
+-/// which split is focused. To disable this feature, set this value to 1.
++///
++/// Astrohacker Terminal defaults to **1** (no dimming). Focused vs unfocused
++/// panes are distinguished by split borders (see `split-border-width` and
++/// focused/unfocused border colors), not by fading inactive content. Upstream
++/// Ghostty used 0.7; set a value below 1 if you want that dimming effect.
+ ///
+ /// A value of 1 is fully opaque and a value of 0 is fully transparent. Because
+ /// "0" is not useful (it makes the window look very weird), the minimum value
+ /// is 0.15. This value still looks weird but you can at least see what's going
+ /// on. A value outside of the range 0.15 to 1 will be clamped to the nearest
+ /// valid value.
+-@"unfocused-split-opacity": f64 = 0.7,
++@"unfocused-split-opacity": f64 = 1,
+ 
+ /// The color to dim the unfocused split. Unfocused splits are dimmed by
+ /// rendering a semi-transparent rectangle over the split. This sets the color of
+-- 
+2.50.1 (Apple Git-155)
+

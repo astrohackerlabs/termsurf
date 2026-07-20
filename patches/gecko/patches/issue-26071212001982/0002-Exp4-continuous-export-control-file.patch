@@ -1,0 +1,54 @@
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.mm b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+index 0c54dad1be48..92a5383fc3f8 100644
+--- a/gfx/layers/AstrohackerSurfaceExporterMac.mm
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+@@ -284,12 +284,46 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+   }
+ 
+   DrainAcknowledgements();
++  // Product continuous mode (Exp4): export while SURFACE_SERVICE is live
++  // without requiring SURFACE_PROBE epoch sequencing. Optional control file
++  // (ASTROHACKER_GECKO_SURFACE_CONTROL_PATH) supplies resize_epoch + expected
++  // size written by ah-geckod on TermSurf Resize.
++  const bool continuous =
++      getenv("ASTROHACKER_GECKO_SURFACE_CONTINUOUS") &&
++      getenv("ASTROHACKER_GECKO_SURFACE_CONTINUOUS")[0] == '1';
++  const char* controlPath = getenv("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH");
++  if (controlPath && controlPath[0]) {
++    FILE* cf = fopen(controlPath, "r");
++    if (cf) {
++      unsigned long epoch = 0, ew = 0, eh = 0;
++      if (fscanf(cf, "epoch=%lu width=%lu height=%lu", &epoch, &ew, &eh) >= 1) {
++        char buf[64];
++        snprintf(buf, sizeof(buf), "%lu", epoch);
++        setenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", buf, 1);
++        if (ew > 0) {
++          snprintf(buf, sizeof(buf), "%lu", ew);
++          setenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_WIDTH", buf, 1);
++        }
++        if (eh > 0) {
++          snprintf(buf, sizeof(buf), "%lu", eh);
++          setenv("ASTROHACKER_GECKO_SURFACE_EXPECTED_HEIGHT", buf, 1);
++        }
++      }
++      fclose(cf);
++    }
++  }
+   const char* epochValue =
+       getenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH");
+   uint32_t resizeEpoch = epochValue ? strtoul(epochValue, nullptr, 10) : 0;
+-  if (!resizeEpoch ||
+-      (resizeEpoch == 1 && sTokenSent >= InitialExportTarget())) {
+-    return;
++  if (!continuous) {
++    if (!resizeEpoch ||
++        (resizeEpoch == 1 && sTokenSent >= InitialExportTarget())) {
++      return;
++    }
++  } else if (!resizeEpoch) {
++    // Continuous product path defaults epoch=1 so messages carry a generation.
++    resizeEpoch = 1;
++    setenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", "1", 0);
+   }
+   uint64_t target = ExportTarget();
+   if (target && sTokenSent >= target) {

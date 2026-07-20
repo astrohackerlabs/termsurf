@@ -1,0 +1,888 @@
+From a434d733ac0e0ba9dbf1d3b5dfa4a2203f658c91 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 14 Jul 2026 08:54:40 -0500
+Subject: [PATCH] Route navigation state
+
+Pane names point to engine tabs,
+Stale ghosts are waved away.
+The browser whispers can and cannot,
+And Ghostty keeps the map in play.
+---
+ src/apprt/termsurf.zig       | 245 ++++++++++++++++++++++++++++++++
+ src/protobuf/termsurf.pb-c.c | 263 ++++++++++++++++++++++++++++++++++-
+ src/protobuf/termsurf.pb-c.h | 106 +++++++++++++-
+ 3 files changed, 604 insertions(+), 10 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 4c9938445..c8f2c2fd9 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -902,6 +902,20 @@ const TitleSnapshot = struct {
+     }
+ };
+ 
++const NavigationStateSnapshot = struct {
++    tui_fd: std.posix.fd_t = -1,
++    pane_id: [max_pane_id_len]u8 = undefined,
++    pane_id_len: usize = 0,
++    tab_id: i64 = 0,
++    can_go_back: bool = false,
++    can_go_forward: bool = false,
++    can_refresh: bool = false,
++
++    fn paneId(self: *const NavigationStateSnapshot) []const u8 {
++        return self.pane_id[0..self.pane_id_len];
++    }
++};
++
+ fn geometryTraceEnabled() bool {
+     const value = std.posix.getenv(geometry_trace_env) orelse return false;
+     return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+@@ -1301,9 +1315,15 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATE => {
+                     handleNavigate(msg.*.unnamed_0.navigate);
+                 },
++                c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION => {
++                    handleNavigationAction(msg.*.unnamed_0.navigation_action);
++                },
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE => {
+                     handleLoadingState(fd, msg.*.unnamed_0.loading_state);
+                 },
++                c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE => {
++                    handleNavigationState(fd, msg.*.unnamed_0.navigation_state);
++                },
+                 c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => {
+                     handleCursorChanged(fd, msg.*.unnamed_0.cursor_changed);
+                 },
+@@ -3459,6 +3479,53 @@ fn handleNavigate(req: ?*c.Termsurf__Navigate) void {
+     );
+ }
+ 
++fn handleNavigationAction(req: ?*c.Termsurf__NavigationAction) void {
++    const action_req = req orelse {
++        log.warn("NavigationAction: missing payload", .{});
++        return;
++    };
++    const pane_id = cString(action_req.*.pane_id);
++    const action = cString(action_req.*.action);
++    if (action_req.*.tab_id != 0 or pane_id.len == 0 or !validNavigationAction(action)) {
++        log.warn(
++            "NavigationAction: invalid TUI request pane_id={s} tab_id={} action={s}",
++            .{ pane_id, action_req.*.tab_id, action },
++        );
++        return;
++    }
++    const snapshot = snapshotNavigationAction(pane_id) orelse {
++        log.warn("NavigationAction: unknown or unready pane_id={s}", .{pane_id});
++        return;
++    };
++
++    var forwarded: c.Termsurf__NavigationAction = undefined;
++    c.termsurf__navigation_action__init(&forwarded);
++    forwarded.tab_id = snapshot.tab_id;
++    forwarded.action = action_req.*.action;
++
++    var wrapper: c.Termsurf__TermSurfMessage = undefined;
++    c.termsurf__term_surf_message__init(&wrapper);
++    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION;
++    wrapper.unnamed_0.navigation_action = &forwarded;
++    sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
++        log.warn(
++            "NavigationAction send failed pane_id={s} tab_id={} action={s} err={}",
++            .{ snapshot.paneId(), snapshot.tab_id, action, err },
++        );
++        return;
++    };
++    log.info(
++        "NavigationAction: pane_id={s} tab_id={} action={s}",
++        .{ snapshot.paneId(), snapshot.tab_id, action },
++    );
++}
++
++fn validNavigationAction(action: []const u8) bool {
++    return std.mem.eql(u8, action, "back") or
++        std.mem.eql(u8, action, "forward") or
++        std.mem.eql(u8, action, "refresh");
++}
++
+ fn snapshotNavigate(pane_id: []const u8) ?BrowserInputSnapshot {
+     state_mutex.lock();
+     defer state_mutex.unlock();
+@@ -3478,6 +3545,24 @@ fn snapshotNavigate(pane_id: []const u8) ?BrowserInputSnapshot {
+     return snapshot;
+ }
+ 
++fn snapshotNavigationAction(pane_id: []const u8) ?BrowserInputSnapshot {
++    state_mutex.lock();
++    defer state_mutex.unlock();
++
++    const pane_index = findPane(pane_id) orelse return null;
++    const pane = &panes[pane_index];
++    if (pane.tab_id <= 0) return null;
++    const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
++    if (servers[server_index].attached_fd < 0) return null;
++
++    var snapshot: BrowserInputSnapshot = .{
++        .browser_fd = servers[server_index].attached_fd,
++        .tab_id = pane.tab_id,
++    };
++    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
++    return snapshot;
++}
++
+ fn clearNavigationPending(pane_id: []const u8, tab_id: i64) void {
+     state_mutex.lock();
+     defer state_mutex.unlock();
+@@ -3534,6 +3619,91 @@ fn handleLoadingState(fd: std.posix.fd_t, req: ?*c.Termsurf__LoadingState) void
+     );
+ }
+ 
++fn handleNavigationState(fd: std.posix.fd_t, req: ?*c.Termsurf__NavigationState) void {
++    const navigation_state = req orelse {
++        log.warn("NavigationState: missing payload", .{});
++        return;
++    };
++    if (navigation_state.*.tab_id == 0) {
++        log.warn("NavigationState: missing tab id", .{});
++        return;
++    }
++
++    var snapshot: ?NavigationStateSnapshot = null;
++
++    state_mutex.lock();
++    const server_index = findServerByFd(fd) orelse {
++        log.warn("NavigationState: unknown browser fd={} tab_id={}", .{ fd, navigation_state.*.tab_id });
++        state_mutex.unlock();
++        return;
++    };
++    const profile = servers[server_index].profileName();
++    const browser = servers[server_index].browserName();
++    const lookup_index = findTabLookup(profile, browser, navigation_state.*.tab_id) orelse {
++        log.warn(
++            "NavigationState: unknown tab key={s}/{s} tab_id={}",
++            .{ profile, browser, navigation_state.*.tab_id },
++        );
++        state_mutex.unlock();
++        return;
++    };
++    const pane_id = tab_lookups[lookup_index].paneId();
++    const pane_index = findPane(pane_id) orelse {
++        log.warn("NavigationState: tab maps to missing pane_id={s}", .{pane_id});
++        state_mutex.unlock();
++        return;
++    };
++    const pane = &panes[pane_index];
++    if (pane.tui_fd >= 0) {
++        var value: NavigationStateSnapshot = .{
++            .tui_fd = pane.tui_fd,
++            .tab_id = navigation_state.*.tab_id,
++            .can_go_back = navigation_state.*.can_go_back != 0,
++            .can_go_forward = navigation_state.*.can_go_forward != 0,
++            .can_refresh = navigation_state.*.can_refresh != 0,
++        };
++        if (copyText(&value.pane_id, &value.pane_id_len, pane.paneId())) {
++            snapshot = value;
++        }
++    }
++    log.info(
++        "NavigationState: pane_id={s} tab_id={} back={} forward={} refresh={}",
++        .{
++            pane.paneId(),
++            navigation_state.*.tab_id,
++            navigation_state.*.can_go_back != 0,
++            navigation_state.*.can_go_forward != 0,
++            navigation_state.*.can_refresh != 0,
++        },
++    );
++    state_mutex.unlock();
++
++    if (snapshot) |state_snapshot| {
++        sendNavigationStateToTui(&state_snapshot) catch |err| {
++            log.warn(
++                "NavigationState send failed pane_id={s} tab_id={} err={}",
++                .{ state_snapshot.paneId(), state_snapshot.tab_id, err },
++            );
++        };
++    }
++}
++
++fn sendNavigationStateToTui(snapshot: *const NavigationStateSnapshot) !void {
++    var state: c.Termsurf__NavigationState = undefined;
++    c.termsurf__navigation_state__init(&state);
++    state.tab_id = snapshot.tab_id;
++    state.can_go_back = if (snapshot.can_go_back) 1 else 0;
++    state.can_go_forward = if (snapshot.can_go_forward) 1 else 0;
++    state.can_refresh = if (snapshot.can_refresh) 1 else 0;
++
++    var wrapper: c.Termsurf__TermSurfMessage = undefined;
++    c.termsurf__term_surf_message__init(&wrapper);
++    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE;
++    wrapper.unnamed_0.navigation_state = &state;
++
++    try sendProtobuf(snapshot.tui_fd, &wrapper);
++}
++
+ fn snapshotModeChanged(pane: *const PaneState, browsing: bool) ?ModeChangedSnapshot {
+     if (pane.tui_fd < 0) return null;
+ 
+@@ -6479,6 +6649,7 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_RESIZE => "Resize",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_TAB => "CloseTab",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATE => "Navigate",
++        c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION => "NavigationAction",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_MOUSE_EVENT => "MouseEvent",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_MOUSE_MOVE => "MouseMove",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SCROLL_EVENT => "ScrollEvent",
+@@ -6492,6 +6663,7 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE => "RenderSurface",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_URL_CHANGED => "UrlChanged",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_LOADING_STATE => "LoadingState",
++        c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE => "NavigationState",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_TITLE_CHANGED => "TitleChanged",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_CURSOR_CHANGED => "CursorChanged",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_TARGET_URL_CHANGED => "TargetUrlChanged",
+@@ -7807,6 +7979,79 @@ test "termsurf TUI navigate resolves pane to owning browser tab" {
+     try testing.expect(!navigationActiveForPane("pane-unknown"));
+ }
+ 
++test "termsurf TUI navigation action resolves pane to owning browser tab" {
++    const testing = std.testing;
++
++    resetTermsurfStateForTest();
++    defer resetTermsurfStateForTest();
++
++    var browser = try testSocketPair();
++    defer testCloseSocketPair(&browser);
++    var tui = try testSocketPair();
++    defer testCloseSocketPair(&tui);
++
++    try testSetPendingServer(0, "default", "webkit");
++    servers[0].attached_fd = browser[0];
++    try testSetPane(0, "pane-webkit", "default", "webkit", "https://old.test/", tui[0]);
++    panes[0].tab_id = 77;
++    _ = upsertTabLookup(&panes[0], 77);
++
++    var action: c.Termsurf__NavigationAction = undefined;
++    c.termsurf__navigation_action__init(&action);
++    action.pane_id = @constCast("pane-webkit");
++    action.action = @constCast("back");
++    handleNavigationAction(&action);
++
++    const forwarded = try readTestMessage(browser[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(forwarded, null);
++    try testing.expectEqual(
++        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION),
++        forwarded.*.msg_case,
++    );
++    try testing.expectEqual(@as(i64, 77), forwarded.*.unnamed_0.navigation_action.*.tab_id);
++    try testing.expectEqualStrings("", cString(forwarded.*.unnamed_0.navigation_action.*.pane_id));
++    try testing.expectEqualStrings("back", cString(forwarded.*.unnamed_0.navigation_action.*.action));
++    try testing.expect(!panes[0].navigation_pending);
++    try testing.expect(!navigationActiveForPane("pane-webkit"));
++}
++
++test "termsurf browser navigation state relays only through owning pane" {
++    const testing = std.testing;
++
++    resetTermsurfStateForTest();
++    defer resetTermsurfStateForTest();
++
++    var browser = try testSocketPair();
++    defer testCloseSocketPair(&browser);
++    var tui = try testSocketPair();
++    defer testCloseSocketPair(&tui);
++
++    try testSetPendingServer(0, "default", "chromium");
++    servers[0].attached_fd = browser[0];
++    try testSetPane(0, "pane-chromium", "default", "chromium", "https://old.test/", tui[0]);
++    panes[0].tab_id = 88;
++    _ = upsertTabLookup(&panes[0], 88);
++
++    var state: c.Termsurf__NavigationState = undefined;
++    c.termsurf__navigation_state__init(&state);
++    state.tab_id = 88;
++    state.can_go_back = 1;
++    state.can_go_forward = 0;
++    state.can_refresh = 1;
++    handleNavigationState(browser[0], &state);
++
++    const relayed = try readTestMessage(tui[1], testing.allocator);
++    defer c.termsurf__term_surf_message__free_unpacked(relayed, null);
++    try testing.expectEqual(
++        @as(c.Termsurf__TermSurfMessage__MsgCase, c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE),
++        relayed.*.msg_case,
++    );
++    try testing.expectEqual(@as(i64, 88), relayed.*.unnamed_0.navigation_state.*.tab_id);
++    try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_go_back);
++    try testing.expectEqual(@as(c_int, 0), relayed.*.unnamed_0.navigation_state.*.can_go_forward);
++    try testing.expectEqual(@as(c_int, 1), relayed.*.unnamed_0.navigation_state.*.can_refresh);
++}
++
+ test "termsurf navigation send failure clears pending state" {
+     const testing = std.testing;
+ 
+diff --git a/src/protobuf/termsurf.pb-c.c b/src/protobuf/termsurf.pb-c.c
+index 8579615bf..3f9f53173 100644
+--- a/src/protobuf/termsurf.pb-c.c
++++ b/src/protobuf/termsurf.pb-c.c
+@@ -277,6 +277,51 @@ void   termsurf__navigate__free_unpacked
+   assert(message->base.descriptor == &termsurf__navigate__descriptor);
+   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+ }
++void   termsurf__navigation_action__init
++                     (Termsurf__NavigationAction         *message)
++{
++  static const Termsurf__NavigationAction init_value = TERMSURF__NAVIGATION_ACTION__INIT;
++  *message = init_value;
++}
++size_t termsurf__navigation_action__get_packed_size
++                     (const Termsurf__NavigationAction *message)
++{
++  assert(message->base.descriptor == &termsurf__navigation_action__descriptor);
++  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
++}
++size_t termsurf__navigation_action__pack
++                     (const Termsurf__NavigationAction *message,
++                      uint8_t       *out)
++{
++  assert(message->base.descriptor == &termsurf__navigation_action__descriptor);
++  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
++}
++size_t termsurf__navigation_action__pack_to_buffer
++                     (const Termsurf__NavigationAction *message,
++                      ProtobufCBuffer *buffer)
++{
++  assert(message->base.descriptor == &termsurf__navigation_action__descriptor);
++  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
++}
++Termsurf__NavigationAction *
++       termsurf__navigation_action__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data)
++{
++  return (Termsurf__NavigationAction *)
++     protobuf_c_message_unpack (&termsurf__navigation_action__descriptor,
++                                allocator, len, data);
++}
++void   termsurf__navigation_action__free_unpacked
++                     (Termsurf__NavigationAction *message,
++                      ProtobufCAllocator *allocator)
++{
++  if(!message)
++    return;
++  assert(message->base.descriptor == &termsurf__navigation_action__descriptor);
++  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
++}
+ void   termsurf__mouse_event__init
+                      (Termsurf__MouseEvent         *message)
+ {
+@@ -907,6 +952,51 @@ void   termsurf__loading_state__free_unpacked
+   assert(message->base.descriptor == &termsurf__loading_state__descriptor);
+   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+ }
++void   termsurf__navigation_state__init
++                     (Termsurf__NavigationState         *message)
++{
++  static const Termsurf__NavigationState init_value = TERMSURF__NAVIGATION_STATE__INIT;
++  *message = init_value;
++}
++size_t termsurf__navigation_state__get_packed_size
++                     (const Termsurf__NavigationState *message)
++{
++  assert(message->base.descriptor == &termsurf__navigation_state__descriptor);
++  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
++}
++size_t termsurf__navigation_state__pack
++                     (const Termsurf__NavigationState *message,
++                      uint8_t       *out)
++{
++  assert(message->base.descriptor == &termsurf__navigation_state__descriptor);
++  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
++}
++size_t termsurf__navigation_state__pack_to_buffer
++                     (const Termsurf__NavigationState *message,
++                      ProtobufCBuffer *buffer)
++{
++  assert(message->base.descriptor == &termsurf__navigation_state__descriptor);
++  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
++}
++Termsurf__NavigationState *
++       termsurf__navigation_state__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data)
++{
++  return (Termsurf__NavigationState *)
++     protobuf_c_message_unpack (&termsurf__navigation_state__descriptor,
++                                allocator, len, data);
++}
++void   termsurf__navigation_state__free_unpacked
++                     (Termsurf__NavigationState *message,
++                      ProtobufCAllocator *allocator)
++{
++  if(!message)
++    return;
++  assert(message->base.descriptor == &termsurf__navigation_state__descriptor);
++  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
++}
+ void   termsurf__title_changed__init
+                      (Termsurf__TitleChanged         *message)
+ {
+@@ -2077,7 +2167,7 @@ void   termsurf__query_tabs_reply__free_unpacked
+   assert(message->base.descriptor == &termsurf__query_tabs_reply__descriptor);
+   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+ }
+-static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[44] =
++static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[46] =
+ {
+   {
+     "create_tab",
+@@ -2607,6 +2697,30 @@ static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descrip
+     PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "navigation_action",
++    45,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_MESSAGE,
++    offsetof(Termsurf__TermSurfMessage, msg_case),
++    offsetof(Termsurf__TermSurfMessage, navigation_action),
++    &termsurf__navigation_action__descriptor,
++    NULL,
++    PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "navigation_state",
++    46,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_MESSAGE,
++    offsetof(Termsurf__TermSurfMessage, msg_case),
++    offsetof(Termsurf__TermSurfMessage, navigation_state),
++    &termsurf__navigation_state__descriptor,
++    NULL,
++    PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
+   30,   /* field[30] = browser_ready */
+@@ -2630,6 +2744,8 @@ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
+   5,   /* field[5] = mouse_event */
+   6,   /* field[6] = mouse_move */
+   4,   /* field[4] = navigate */
++  44,   /* field[44] = navigation_action */
++  45,   /* field[45] = navigation_state */
+   39,   /* field[39] = open_app */
+   40,   /* field[40] = open_app_reply */
+   20,   /* field[20] = open_split */
+@@ -2657,7 +2773,7 @@ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
+ static const ProtobufCIntRange termsurf__term_surf_message__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 44 }
++  { 0, 46 }
+ };
+ const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
+ {
+@@ -2667,7 +2783,7 @@ const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
+   "Termsurf__TermSurfMessage",
+   "termsurf",
+   sizeof(Termsurf__TermSurfMessage),
+-  44,
++  46,
+   termsurf__term_surf_message__field_descriptors,
+   termsurf__term_surf_message__field_indices_by_name,
+   1,  termsurf__term_surf_message__number_ranges,
+@@ -3085,6 +3201,70 @@ const ProtobufCMessageDescriptor termsurf__navigate__descriptor =
+   (ProtobufCMessageInit) termsurf__navigate__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
++static const ProtobufCFieldDescriptor termsurf__navigation_action__field_descriptors[3] =
++{
++  {
++    "tab_id",
++    1,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_INT64,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationAction, tab_id),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "pane_id",
++    2,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_STRING,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationAction, pane_id),
++    NULL,
++    &protobuf_c_empty_string,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "action",
++    3,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_STRING,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationAction, action),
++    NULL,
++    &protobuf_c_empty_string,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++};
++static const unsigned termsurf__navigation_action__field_indices_by_name[] = {
++  2,   /* field[2] = action */
++  1,   /* field[1] = pane_id */
++  0,   /* field[0] = tab_id */
++};
++static const ProtobufCIntRange termsurf__navigation_action__number_ranges[1 + 1] =
++{
++  { 1, 0 },
++  { 0, 3 }
++};
++const ProtobufCMessageDescriptor termsurf__navigation_action__descriptor =
++{
++  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
++  "termsurf.NavigationAction",
++  "NavigationAction",
++  "Termsurf__NavigationAction",
++  "termsurf",
++  sizeof(Termsurf__NavigationAction),
++  3,
++  termsurf__navigation_action__field_descriptors,
++  termsurf__navigation_action__field_indices_by_name,
++  1,  termsurf__navigation_action__number_ranges,
++  (ProtobufCMessageInit) termsurf__navigation_action__init,
++  NULL,NULL,NULL    /* reserved[123] */
++};
+ static const ProtobufCFieldDescriptor termsurf__mouse_event__field_descriptors[7] =
+ {
+   {
+@@ -4215,6 +4395,83 @@ const ProtobufCMessageDescriptor termsurf__loading_state__descriptor =
+   (ProtobufCMessageInit) termsurf__loading_state__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
++static const ProtobufCFieldDescriptor termsurf__navigation_state__field_descriptors[4] =
++{
++  {
++    "tab_id",
++    1,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_INT64,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, tab_id),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "can_go_back",
++    2,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_BOOL,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, can_go_back),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "can_go_forward",
++    3,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_BOOL,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, can_go_forward),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "can_refresh",
++    4,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_BOOL,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__NavigationState, can_refresh),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++};
++static const unsigned termsurf__navigation_state__field_indices_by_name[] = {
++  1,   /* field[1] = can_go_back */
++  2,   /* field[2] = can_go_forward */
++  3,   /* field[3] = can_refresh */
++  0,   /* field[0] = tab_id */
++};
++static const ProtobufCIntRange termsurf__navigation_state__number_ranges[1 + 1] =
++{
++  { 1, 0 },
++  { 0, 4 }
++};
++const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor =
++{
++  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
++  "termsurf.NavigationState",
++  "NavigationState",
++  "Termsurf__NavigationState",
++  "termsurf",
++  sizeof(Termsurf__NavigationState),
++  4,
++  termsurf__navigation_state__field_descriptors,
++  termsurf__navigation_state__field_indices_by_name,
++  1,  termsurf__navigation_state__number_ranges,
++  (ProtobufCMessageInit) termsurf__navigation_state__init,
++  NULL,NULL,NULL    /* reserved[123] */
++};
+ static const ProtobufCFieldDescriptor termsurf__title_changed__field_descriptors[2] =
+ {
+   {
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index 21dc207a0..5fe7718fe 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -21,6 +21,7 @@ typedef struct Termsurf__CreateDevtoolsTab Termsurf__CreateDevtoolsTab;
+ typedef struct Termsurf__Resize Termsurf__Resize;
+ typedef struct Termsurf__CloseTab Termsurf__CloseTab;
+ typedef struct Termsurf__Navigate Termsurf__Navigate;
++typedef struct Termsurf__NavigationAction Termsurf__NavigationAction;
+ typedef struct Termsurf__MouseEvent Termsurf__MouseEvent;
+ typedef struct Termsurf__MouseMove Termsurf__MouseMove;
+ typedef struct Termsurf__ScrollEvent Termsurf__ScrollEvent;
+@@ -35,6 +36,7 @@ typedef struct Termsurf__CaContext Termsurf__CaContext;
+ typedef struct Termsurf__RenderSurface Termsurf__RenderSurface;
+ typedef struct Termsurf__UrlChanged Termsurf__UrlChanged;
+ typedef struct Termsurf__LoadingState Termsurf__LoadingState;
++typedef struct Termsurf__NavigationState Termsurf__NavigationState;
+ typedef struct Termsurf__TitleChanged Termsurf__TitleChanged;
+ typedef struct Termsurf__CursorChanged Termsurf__CursorChanged;
+ typedef struct Termsurf__TargetUrlChanged Termsurf__TargetUrlChanged;
+@@ -75,6 +77,7 @@ typedef enum {
+   TERMSURF__TERM_SURF_MESSAGE__MSG_RESIZE = 3,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_TAB = 4,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATE = 5,
++  TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION = 45,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_MOUSE_EVENT = 6,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_MOUSE_MOVE = 7,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_SCROLL_EVENT = 8,
+@@ -113,7 +116,8 @@ typedef enum {
+   TERMSURF__TERM_SURF_MESSAGE__MSG_OPEN_APP_REPLY = 41,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_CLOSE_APP_FRONTEND = 42,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE = 43,
+-  TERMSURF__TERM_SURF_MESSAGE__MSG_TEXT_INPUT = 44
++  TERMSURF__TERM_SURF_MESSAGE__MSG_TEXT_INPUT = 44,
++  TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE = 46
+     PROTOBUF_C__FORCE_ENUM_TO_BE_INT_SIZE(TERMSURF__TERM_SURF_MESSAGE__MSG__CASE)
+ } Termsurf__TermSurfMessage__MsgCase;
+ 
+@@ -138,12 +142,12 @@ struct  Termsurf__TermSurfMessage
+     Termsurf__ConsoleMessage *console_message;
+     Termsurf__CreateDevtoolsTab *create_devtools_tab;
+     /*
+-     * Tab lifecycle (GUI → Chromium)
++     * Tab lifecycle (GUI → engine)
+      */
+     Termsurf__CreateTab *create_tab;
+     Termsurf__CursorChanged *cursor_changed;
+     /*
+-     * State (GUI → Chromium)
++     * State (GUI → engine)
+      */
+     Termsurf__FocusChanged *focus_changed;
+     Termsurf__HelloReply *hello_reply;
+@@ -168,14 +172,19 @@ struct  Termsurf__TermSurfMessage
+      */
+     Termsurf__ModeChanged *mode_changed;
+     /*
+-     * Input (GUI → Chromium)
++     * Input (GUI → engine)
+      */
+     Termsurf__MouseEvent *mouse_event;
+     Termsurf__MouseMove *mouse_move;
+     /*
+-     * Navigation (GUI → Chromium, TUI → GUI)
++     * Navigation (GUI → engine, TUI → GUI)
+      */
+     Termsurf__Navigate *navigate;
++    Termsurf__NavigationAction *navigation_action;
++    /*
++     * Navigation capability state (engine → GUI → TUI)
++     */
++    Termsurf__NavigationState *navigation_state;
+     /*
+      * TermSurf app lifecycle (TUI ↔ GUI)
+      */
+@@ -199,7 +208,7 @@ struct  Termsurf__TermSurfMessage
+     Termsurf__Resize *resize;
+     Termsurf__ScrollEvent *scroll_event;
+     /*
+-     * Chromium → GUI
++     * Engine → GUI
+      */
+     Termsurf__ServerRegister *server_register;
+     Termsurf__SetColorScheme *set_color_scheme;
+@@ -298,7 +307,7 @@ struct  Termsurf__Navigate
+ {
+   ProtobufCMessage base;
+   /*
+-   * nonzero when GUI → Chromium
++   * nonzero when GUI → engine
+    */
+   int64_t tab_id;
+   /*
+@@ -312,6 +321,25 @@ struct  Termsurf__Navigate
+ , 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
+ 
+ 
++/*
++ * Semantic history/reload action. TUI → GUI uses pane_id with tab_id == 0;
++ * GUI → engine uses tab_id with an empty pane_id. Unknown actions fail closed.
++ */
++struct  Termsurf__NavigationAction
++{
++  ProtobufCMessage base;
++  int64_t tab_id;
++  char *pane_id;
++  /*
++   * "back", "forward", or "refresh"
++   */
++  char *action;
++};
++#define TERMSURF__NAVIGATION_ACTION__INIT \
++ { PROTOBUF_C_MESSAGE_INIT (&termsurf__navigation_action__descriptor) \
++, 0, (char *)protobuf_c_empty_string, (char *)protobuf_c_empty_string }
++
++
+ struct  Termsurf__MouseEvent
+ {
+   ProtobufCMessage base;
+@@ -533,6 +561,24 @@ struct  Termsurf__LoadingState
+ , 0, (char *)protobuf_c_empty_string, 0 }
+ 
+ 
++/*
++ * Authoritative native state for one engine tab. No state is valid for tab_id
++ * 0. A disconnected owner clears cached state because the engine cannot emit a
++ * final update.
++ */
++struct  Termsurf__NavigationState
++{
++  ProtobufCMessage base;
++  int64_t tab_id;
++  protobuf_c_boolean can_go_back;
++  protobuf_c_boolean can_go_forward;
++  protobuf_c_boolean can_refresh;
++};
++#define TERMSURF__NAVIGATION_STATE__INIT \
++ { PROTOBUF_C_MESSAGE_INIT (&termsurf__navigation_state__descriptor) \
++, 0, 0, 0, 0 }
++
++
+ struct  Termsurf__TitleChanged
+ {
+   ProtobufCMessage base;
+@@ -1005,6 +1051,25 @@ Termsurf__Navigate *
+ void   termsurf__navigate__free_unpacked
+                      (Termsurf__Navigate *message,
+                       ProtobufCAllocator *allocator);
++/* Termsurf__NavigationAction methods */
++void   termsurf__navigation_action__init
++                     (Termsurf__NavigationAction         *message);
++size_t termsurf__navigation_action__get_packed_size
++                     (const Termsurf__NavigationAction   *message);
++size_t termsurf__navigation_action__pack
++                     (const Termsurf__NavigationAction   *message,
++                      uint8_t             *out);
++size_t termsurf__navigation_action__pack_to_buffer
++                     (const Termsurf__NavigationAction   *message,
++                      ProtobufCBuffer     *buffer);
++Termsurf__NavigationAction *
++       termsurf__navigation_action__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data);
++void   termsurf__navigation_action__free_unpacked
++                     (Termsurf__NavigationAction *message,
++                      ProtobufCAllocator *allocator);
+ /* Termsurf__MouseEvent methods */
+ void   termsurf__mouse_event__init
+                      (Termsurf__MouseEvent         *message);
+@@ -1271,6 +1336,25 @@ Termsurf__LoadingState *
+ void   termsurf__loading_state__free_unpacked
+                      (Termsurf__LoadingState *message,
+                       ProtobufCAllocator *allocator);
++/* Termsurf__NavigationState methods */
++void   termsurf__navigation_state__init
++                     (Termsurf__NavigationState         *message);
++size_t termsurf__navigation_state__get_packed_size
++                     (const Termsurf__NavigationState   *message);
++size_t termsurf__navigation_state__pack
++                     (const Termsurf__NavigationState   *message,
++                      uint8_t             *out);
++size_t termsurf__navigation_state__pack_to_buffer
++                     (const Termsurf__NavigationState   *message,
++                      ProtobufCBuffer     *buffer);
++Termsurf__NavigationState *
++       termsurf__navigation_state__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data);
++void   termsurf__navigation_state__free_unpacked
++                     (Termsurf__NavigationState *message,
++                      ProtobufCAllocator *allocator);
+ /* Termsurf__TitleChanged methods */
+ void   termsurf__title_changed__init
+                      (Termsurf__TitleChanged         *message);
+@@ -1785,6 +1869,9 @@ typedef void (*Termsurf__CloseTab_Closure)
+ typedef void (*Termsurf__Navigate_Closure)
+                  (const Termsurf__Navigate *message,
+                   void *closure_data);
++typedef void (*Termsurf__NavigationAction_Closure)
++                 (const Termsurf__NavigationAction *message,
++                  void *closure_data);
+ typedef void (*Termsurf__MouseEvent_Closure)
+                  (const Termsurf__MouseEvent *message,
+                   void *closure_data);
+@@ -1827,6 +1914,9 @@ typedef void (*Termsurf__UrlChanged_Closure)
+ typedef void (*Termsurf__LoadingState_Closure)
+                  (const Termsurf__LoadingState *message,
+                   void *closure_data);
++typedef void (*Termsurf__NavigationState_Closure)
++                 (const Termsurf__NavigationState *message,
++                  void *closure_data);
+ typedef void (*Termsurf__TitleChanged_Closure)
+                  (const Termsurf__TitleChanged *message,
+                   void *closure_data);
+@@ -1917,6 +2007,7 @@ extern const ProtobufCMessageDescriptor termsurf__create_devtools_tab__descripto
+ extern const ProtobufCMessageDescriptor termsurf__resize__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__close_tab__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__navigate__descriptor;
++extern const ProtobufCMessageDescriptor termsurf__navigation_action__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__mouse_event__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__mouse_move__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__scroll_event__descriptor;
+@@ -1931,6 +2022,7 @@ extern const ProtobufCMessageDescriptor termsurf__ca_context__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__render_surface__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__url_changed__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__loading_state__descriptor;
++extern const ProtobufCMessageDescriptor termsurf__navigation_state__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__title_changed__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__cursor_changed__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__target_url_changed__descriptor;
+-- 
+2.54.0
+

@@ -1,0 +1,48 @@
+From 8abbcd0fd8dcc680a543f02cf97e6cbe5c9add4e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:45:43 -0500
+Subject: [PATCH 108/119] issue-924: rename PDF stream frame trackers to
+ MIME-handler APIs
+
+MimeHandlerStreamManager dropped IsPdf*/DidPdf* helpers in favor of
+IsExtensionFrameTreeNodeId / DidExtensionFrameFinishNavigation and
+content-frame equivalents.
+---
+ .../libtermsurf_chromium/ts_pdf_stream_delegate.cc | 14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+index 4c94f66eed..32bf25a8ea 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
++++ b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+@@ -197,9 +197,11 @@ bool TsPdfStreamDelegate::ShouldAllowPdfFrameNavigation(
+   base::WeakPtr<extensions::StreamContainer> stream =
+       manager->GetStreamContainer(parent_frame);
+   if (stream) {
+-    return !manager->IsPdfExtensionFrameTreeNodeId(parent_frame,
+-                                                  frame_tree_node_id) ||
+-           (!manager->DidPdfExtensionFinishNavigation(parent_frame) &&
++    // Chromium 150 renamed PDF-specific trackers to generic MIME-handler
++    // extension/content frame trackers on MimeHandlerStreamManager.
++    return !manager->IsExtensionFrameTreeNodeId(parent_frame,
++                                                frame_tree_node_id) ||
++           (!manager->DidExtensionFrameFinishNavigation(parent_frame) &&
+             url == stream->handler_url());
+   }
+ 
+@@ -213,9 +215,9 @@ bool TsPdfStreamDelegate::ShouldAllowPdfFrameNavigation(
+     return true;
+   }
+ 
+-  return !manager->IsPdfContentFrameTreeNodeId(grandparent_frame,
+-                                               frame_tree_node_id) ||
+-         (!manager->DidPdfContentNavigate(grandparent_frame) &&
++  return !manager->IsContentFrameTreeNodeId(grandparent_frame,
++                                            frame_tree_node_id) ||
++         (!manager->DidContentFrameFinishNavigation(grandparent_frame) &&
+           url == stream->original_url());
+ }
+ 
+-- 
+2.54.0
+

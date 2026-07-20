@@ -1,0 +1,26 @@
+From 5e0604df8fae0a6f8f48b6e4488e82b5a81917e8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 14:00:38 -0500
+Subject: [PATCH 093/122] issue-924: fix PDF controller.ts type for Chromium
+ 150 tsc
+
+---
+ chrome/browser/resources/pdf/controller.ts | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/resources/pdf/controller.ts b/chrome/browser/resources/pdf/controller.ts
+index d733be0b32..fcc0fe5130 100644
+--- a/chrome/browser/resources/pdf/controller.ts
++++ b/chrome/browser/resources/pdf/controller.ts
+@@ -793,7 +793,7 @@ export class PluginController implements ContentController {
+     const delayedMessages = this.delayedMessages_;
+     traceTermSurfPdfPrintBridge('bind-message-handler', {
+       delayedCount: delayedMessages.length,
+-      delayedTypes: delayedMessages.map(({message}) => String(message?.type)),
++      delayedTypes: delayedMessages.map(({message}) => String((message as {type?: string})?.type)),
+     });
+     this.delayedMessages_ = null;
+ 
+-- 
+2.50.1 (Apple Git-155)
+

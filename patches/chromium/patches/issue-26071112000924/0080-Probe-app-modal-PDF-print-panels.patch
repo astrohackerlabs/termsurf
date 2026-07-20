@@ -1,0 +1,184 @@
+From 5d9022777d576423ae0e143a3543cacdd1117d30 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 15:19:27 -0500
+Subject: [PATCH 080/119] Probe app-modal PDF print panels
+
+A print sheet tried the center stage,
+With helper held outside the cage.
+No panel sang, no queues were stirred,
+But silence became a sharper word.
+---
+ printing/printing_context_mac.mm | 148 +++++++++++++++++++------------
+ 1 file changed, 93 insertions(+), 55 deletions(-)
+
+diff --git a/printing/printing_context_mac.mm b/printing/printing_context_mac.mm
+index fed3bf7135..09d030ced3 100644
+--- a/printing/printing_context_mac.mm
++++ b/printing/printing_context_mac.mm
+@@ -44,6 +44,40 @@
+ #include "base/types/expected.h"
+ #endif
+ 
++typedef void (^TermSurfPrintPanelCompletion)(NSInteger selection);
++
++@interface TermSurfPrintPanelDelegate : NSObject
++- (instancetype)initWithCompletion:(TermSurfPrintPanelCompletion)completion;
++- (void)printPanelDidEnd:(NSPrintPanel*)printPanel
++              returnCode:(NSInteger)returnCode
++             contextInfo:(void*)contextInfo;
++@end
++
++@implementation TermSurfPrintPanelDelegate {
++  TermSurfPrintPanelCompletion _completion;
++}
++
++- (instancetype)initWithCompletion:(TermSurfPrintPanelCompletion)completion {
++  if ((self = [super init])) {
++    _completion = [completion copy];
++  }
++  return self;
++}
++
++- (void)printPanelDidEnd:(NSPrintPanel*)printPanel
++              returnCode:(NSInteger)returnCode
++             contextInfo:(void*)contextInfo {
++  TermSurfPrintPanelDelegate* retained_self =
++      (__bridge_transfer TermSurfPrintPanelDelegate*)contextInfo;
++  TermSurfPrintPanelCompletion completion = retained_self->_completion;
++  retained_self->_completion = nil;
++  if (completion) {
++    completion(returnCode);
++  }
++}
++
++@end
++
+ namespace printing {
+ 
+ // Not in an anonymous namespace so it can be friends with
+@@ -569,63 +603,67 @@ void PrintingContextMac::AskUserForSettings(int max_pages,
+       }
+       TraceMacPrintPresentationState("mac-ask-user-after-activation", panel,
+                                      parent_window);
+-      if (parent_window) {
+-        if (@available(macOS 14.0, *)) {
+-          TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-enter");
+-          [panel beginSheetUsingPrintInfo:print_info_
+-                                 onWindow:parent_window
+-                        completionHandler:^(NSPrintPanelResult result) {
+-                          TraceTermSurfPdfNativePrint(base::StrCat(
+-                              {"mac-ask-user-sheet-response-",
+-                               result == NSPrintPanelResultPrinted ? "printed"
+-                                                                   : "cancel",
+-                               " code=", base::NumberToString(result)}));
+-                          if (NSApp.activationPolicy !=
+-                              previous_activation_policy) {
+-                            TraceTermSurfPdfNativePrint(
+-                                "mac-ask-user-restore-activation-policy-enter");
+-                            [NSApp
+-                                setActivationPolicy:previous_activation_policy];
+-                            TraceTermSurfPdfNativePrint(
+-                                "mac-ask-user-restore-activation-policy-exit");
+-                          }
+-                          if (result == NSPrintPanelResultPrinted) {
+-                            print_info_ = [panel printInfo];
+-                            settings_->set_ranges(
+-                                GetPageRangesFromPrintInfo());
+-                            InitPrintSettingsFromPrintInfo();
+-                            mojom::ResultCode result_code =
+-                                mojom::ResultCode::kSuccess;
++      if (IsTermSurfPdfNativePrintTraceEnabled()) {
++        TraceTermSurfPdfNativePrint("mac-ask-user-begin-app-modal-sheet-enter");
++        TermSurfPrintPanelDelegate* app_modal_delegate =
++            [[TermSurfPrintPanelDelegate alloc]
++                initWithCompletion:^(NSInteger selection) {
++                  TraceTermSurfPdfNativePrint(base::StrCat(
++                      {"mac-ask-user-app-modal-sheet-response-",
++                       selection == NSModalResponseOK ? "printed" : "cancel",
++                       " code=", base::NumberToString(selection)}));
++                  if (NSApp.activationPolicy != previous_activation_policy) {
++                    TraceTermSurfPdfNativePrint(
++                        "mac-ask-user-restore-activation-policy-enter");
++                    [NSApp setActivationPolicy:previous_activation_policy];
++                    TraceTermSurfPdfNativePrint(
++                        "mac-ask-user-restore-activation-policy-exit");
++                  }
++                  if (selection == NSModalResponseOK) {
++                    print_info_ = [panel printInfo];
++                    settings_->set_ranges(GetPageRangesFromPrintInfo());
++                    InitPrintSettingsFromPrintInfo();
++                    mojom::ResultCode result_code =
++                        mojom::ResultCode::kSuccess;
+ #if BUILDFLAG(ENABLE_OOP_PRINTING_NO_OOP_BASIC_PRINT_DIALOG)
+-                            if (out_of_process_behavior() ==
+-                                OutOfProcessBehavior::
+-                                    kEnabledSkipSystemCalls) {
+-                              // This is running in the browser process, where
+-                              // system calls are normally not allowed except for
+-                              // this system dialog exception. Capture the
+-                              // setting here to be transmitted to a PrintBackend
+-                              // service when the document is printed.
+-                              result_code = CaptureSystemPrintDialogData(
+-                                  print_info_, settings_.get());
+-                            }
++                    if (out_of_process_behavior() ==
++                        OutOfProcessBehavior::kEnabledSkipSystemCalls) {
++                      // This is running in the browser process, where system
++                      // calls are normally not allowed except for this system
++                      // dialog exception. Capture the setting here to be
++                      // transmitted to a PrintBackend service when the document
++                      // is printed.
++                      result_code =
++                          CaptureSystemPrintDialogData(print_info_,
++                                                       settings_.get());
++                    }
+ #endif
+-                            TraceTermSurfPdfNativePrint(base::StrCat(
+-                                {"mac-ask-user-callback-",
+-                                 result_code == mojom::ResultCode::kSuccess
+-                                     ? "success"
+-                                     : "non-success"}));
+-                            std::move(block_callback).Run(result_code);
+-                          } else {
+-                            TraceTermSurfPdfNativePrint(
+-                                "mac-ask-user-callback-canceled");
+-                            std::move(block_callback)
+-                                .Run(mojom::ResultCode::kCanceled);
+-                          }
+-                        }];
+-          TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-exit");
+-          return;
+-        }
+-        TraceTermSurfPdfNativePrint("mac-ask-user-begin-sheet-unavailable");
++                    TraceTermSurfPdfNativePrint(base::StrCat(
++                        {"mac-ask-user-callback-",
++                         result_code == mojom::ResultCode::kSuccess
++                             ? "success"
++                             : "non-success"}));
++                    std::move(block_callback).Run(result_code);
++                  } else {
++                    TraceTermSurfPdfNativePrint(
++                        "mac-ask-user-callback-canceled");
++                    std::move(block_callback)
++                        .Run(mojom::ResultCode::kCanceled);
++                  }
++                }];
++        void* app_modal_context = (__bridge_retained void*)app_modal_delegate;
++        NSWindow* app_modal_parent_window = nil;
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++        [panel beginSheetWithPrintInfo:print_info_
++                        modalForWindow:app_modal_parent_window
++                               delegate:app_modal_delegate
++                         didEndSelector:@selector(printPanelDidEnd:returnCode:
++                                                          contextInfo:)
++                            contextInfo:app_modal_context];
++#pragma clang diagnostic pop
++        TraceTermSurfPdfNativePrint("mac-ask-user-begin-app-modal-sheet-exit");
++        return;
+       }
+       TraceTermSurfPdfNativePrint("mac-ask-user-run-modal-enter");
+       NSInteger selection = [panel runModalWithPrintInfo:print_info_];
+-- 
+2.54.0
+

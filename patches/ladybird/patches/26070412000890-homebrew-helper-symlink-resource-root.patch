@@ -1,0 +1,25 @@
+From 53ecd819952f3992b6b634378a372b3d3ad5c82d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 4 Jul 2026 20:14:02 -0500
+Subject: [PATCH] Resolve helper symlink resource roots
+
+---
+ Libraries/LibWebView/Utilities.cpp | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/Libraries/LibWebView/Utilities.cpp b/Libraries/LibWebView/Utilities.cpp
+index 3e2673b58d..a2034068b8 100644
+--- a/Libraries/LibWebView/Utilities.cpp
++++ b/Libraries/LibWebView/Utilities.cpp
+@@ -60,6 +60,8 @@ static ErrorOr<ByteString> application_directory()
+         return *s_ladybird_binary_path;
+ 
+     auto current_executable_path = TRY(Core::System::current_executable_path());
++    if (auto real_path = FileSystem::real_path(current_executable_path); !real_path.is_error())
++        current_executable_path = real_path.release_value();
+     return LexicalPath::dirname(current_executable_path);
+ }
+ 
+-- 
+2.54.0
+

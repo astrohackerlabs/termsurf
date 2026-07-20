@@ -1,0 +1,7 @@
+{
+  "name": "@astrohacker/terminal-bun-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+  ]
+}

@@ -1,0 +1,34 @@
+From 10e0fddc5e917213e23848e8e70334d9f9c7fe76 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 18:16:51 -0500
+Subject: [PATCH 048/119] Restore PDF embedder CSS
+
+A frame was small and shy,
+Its stylesheet locked outside.
+We opened just one little door,
+And pages grew full-wide.
+---
+ .../extensions/ts_pdf_component_extension.cc               | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+index 642482f3b3..3f7b998d83 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+@@ -102,11 +102,8 @@ std::optional<base::DictValue> LoadPdfManifest(
+     LOG(INFO) << "[issue-792-exp8] pdf-permissions-stripped values="
+               << base::JoinString(stripped_permissions, ",");
+   }
+-  if (manifest->Remove("web_accessible_resources")) {
+-    stripped_manifest_keys->push_back("web_accessible_resources");
+-    LOG(INFO) << "[issue-792-exp3] pdf-component-extension-stripped-value"
+-              << " key=web_accessible_resources values=pdf_embedder.css";
+-  }
++  LOG(INFO) << "[issue-793-exp1] pdf-web-accessible-resource kept=1"
++            << " path=pdf_embedder.css";
+   LOG(INFO) << "[issue-792-exp3] pdf-resource-manager-ready count="
+             << std::size(kPdfResources) << " manifest_parsed=1";
+ 
+-- 
+2.54.0
+

@@ -1,0 +1,277 @@
+From a563906b7ce57c7aa15052f1d8d2113e71729b64 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 10:18:29 -0500
+Subject: [PATCH 27/90] Register extension renderers
+
+The viewer knocked with chrome-extension keys,
+A nameless scheme on process seas.
+Now hosts stay put, the map can see,
+And scripts come home for PDF.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../libtermsurf_chromium/ts_browser_client.cc | 76 +++++++++++++++++++
+ .../libtermsurf_chromium/ts_browser_client.h  |  6 ++
+ .../libtermsurf_chromium/ts_content_client.cc | 34 +++++++++
+ .../libtermsurf_chromium/ts_content_client.h  | 25 ++++++
+ .../libtermsurf_chromium/ts_main_delegate.cc  |  6 ++
+ .../libtermsurf_chromium/ts_main_delegate.h   |  2 +
+ 7 files changed, 151 insertions(+)
+ create mode 100644 content/libtermsurf_chromium/ts_content_client.cc
+ create mode 100644 content/libtermsurf_chromium/ts_content_client.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 30fbe61295..ae6ed04f9a 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -37,6 +37,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_browser_client.h",
+     "ts_browser_main_parts.cc",
+     "ts_browser_main_parts.h",
++    "ts_content_client.cc",
++    "ts_content_client.h",
+     "ts_content_renderer_client.cc",
+     "ts_content_renderer_client.h",
+     "ts_main_delegate.cc",
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 48c4f6516f..9ec7db7563 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -8,13 +8,18 @@
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_process_host.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "extensions/browser/extension_protocols.h"
++#include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_client.h"
++#include "extensions/browser/process_map.h"
+ #include "extensions/common/constants.h"
++#include "extensions/common/extension.h"
+ #include "mojo/public/cpp/bindings/binder_map.h"
+ #include "mojo/public/cpp/bindings/pending_receiver.h"
+ #include "mojo/public/cpp/bindings/receiver_set.h"
+@@ -157,6 +162,77 @@ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+                          render_process_id, render_frame_id));
+ }
+ 
++bool TsBrowserClient::ShouldUseProcessPerSite(BrowserContext* browser_context,
++                                              const GURL& site_url) {
++  if (!site_url.SchemeIs(extensions::kExtensionScheme)) {
++    return ShellContentBrowserClient::ShouldUseProcessPerSite(browser_context,
++                                                              site_url);
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return false;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetByID(site_url.GetHost());
++  if (!extension) {
++    return false;
++  }
++
++  LOG(INFO) << "[issue-792-exp6] process-per-site extension_id="
++            << extension->id() << " effective_url=" << site_url;
++  return true;
++}
++
++bool TsBrowserClient::IsHandledURL(const GURL& url) {
++  if (url.SchemeIs(extensions::kExtensionScheme)) {
++    static bool logged_once = false;
++    if (!logged_once) {
++      logged_once = true;
++      LOG(INFO) << "[issue-792-exp6] handled-url url=" << url;
++    }
++    return true;
++  }
++
++  return ShellContentBrowserClient::IsHandledURL(url);
++}
++
++void TsBrowserClient::SiteInstanceGotProcessAndSite(
++    SiteInstance* site_instance) {
++  BrowserContext* browser_context = site_instance->GetBrowserContext();
++  if (browser_context->IsOffTheRecord()) {
++    return;
++  }
++
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetExtensionOrAppByURL(
++          site_instance->GetSiteURL());
++  if (!extension) {
++    if (site_instance->GetSiteURL().SchemeIs(extensions::kExtensionScheme)) {
++      LOG(INFO) << "[issue-792-exp6] process-map-miss site_url="
++                << site_instance->GetSiteURL();
++    }
++    return;
++  }
++
++  if (site_instance->GetSecurityPrincipal().IsSandboxed()) {
++    return;
++  }
++
++  const int process_id = site_instance->GetProcess()->GetDeprecatedID();
++  extensions::ProcessMap::Get(browser_context)
++      ->Insert(extension->id(), process_id);
++  LOG(INFO) << "[issue-792-exp6] process-map-insert extension_id="
++            << extension->id() << " process_id=" << process_id
++            << " site_url=" << site_instance->GetSiteURL();
++}
++
+ void TsBrowserClient::ConfigureNetworkContextParamsForShell(
+     BrowserContext* context,
+     network::mojom::NetworkContextParams* context_params,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 4fe55e0f32..22b1157cd4 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -14,6 +14,8 @@
+ #include "services/network/public/mojom/url_loader_factory.mojom-forward.h"
+ #include "url/origin.h"
+ 
++class GURL;
++
+ namespace content {
+ 
+ // TsBrowserClient overrides ShellContentBrowserClient to return
+@@ -51,6 +53,10 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       int render_frame_id,
+       const std::optional<url::Origin>& request_initiator_origin,
+       NonNetworkURLLoaderFactoryMap* factories) override;
++  bool ShouldUseProcessPerSite(BrowserContext* browser_context,
++                               const GURL& site_url) override;
++  bool IsHandledURL(const GURL& url) override;
++  void SiteInstanceGotProcessAndSite(SiteInstance* site_instance) override;
+ 
+  protected:
+   void ConfigureNetworkContextParamsForShell(
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+new file mode 100644
+index 0000000000..48f05351f3
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -0,0 +1,34 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_content_client.h"
++
++#include "base/command_line.h"
++#include "base/logging.h"
++#include "content/public/common/content_switches.h"
++#include "extensions/common/constants.h"
++
++namespace content {
++
++TsContentClient::TsContentClient() = default;
++TsContentClient::~TsContentClient() = default;
++
++void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
++  ShellContentClient::AddAdditionalSchemes(schemes);
++
++  schemes->standard_schemes.push_back(extensions::kExtensionScheme);
++  schemes->savable_schemes.push_back(extensions::kExtensionScheme);
++  schemes->secure_schemes.push_back(extensions::kExtensionScheme);
++  schemes->cors_enabled_schemes.push_back(extensions::kExtensionScheme);
++  schemes->csp_bypassing_schemes.push_back(extensions::kExtensionScheme);
++
++  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
++          switches::kProcessType)
++          .empty()) {
++    LOG(INFO) << "[issue-792-exp6] extension-scheme-registered scheme="
++              << extensions::kExtensionScheme;
++  }
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_content_client.h b/content/libtermsurf_chromium/ts_content_client.h
+new file mode 100644
+index 0000000000..9de8bc9f15
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_content_client.h
+@@ -0,0 +1,25 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
++
++#include "content/shell/common/shell_content_client.h"
++
++namespace content {
++
++class TsContentClient : public ShellContentClient {
++ public:
++  TsContentClient();
++  ~TsContentClient() override;
++
++  TsContentClient(const TsContentClient&) = delete;
++  TsContentClient& operator=(const TsContentClient&) = delete;
++
++  void AddAdditionalSchemes(Schemes* schemes) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.cc b/content/libtermsurf_chromium/ts_main_delegate.cc
+index 9532f1e4e4..7164afccef 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.cc
++++ b/content/libtermsurf_chromium/ts_main_delegate.cc
+@@ -14,6 +14,7 @@
+ #include "build/build_config.h"
+ #include "content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.h"
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
++#include "content/libtermsurf_chromium/ts_content_client.h"
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ #include "content/public/common/content_switches.h"
+ #include "content/shell/common/shell_paths.h"
+@@ -116,6 +117,11 @@ std::optional<int> TsMainDelegate::BasicStartupComplete() {
+   return std::nullopt;
+ }
+ 
++ContentClient* TsMainDelegate::CreateContentClient() {
++  content_client_ = std::make_unique<TsContentClient>();
++  return content_client_.get();
++}
++
+ ContentBrowserClient* TsMainDelegate::CreateContentBrowserClient() {
+   browser_client_ = std::make_unique<TsBrowserClient>();
+   return browser_client_.get();
+diff --git a/content/libtermsurf_chromium/ts_main_delegate.h b/content/libtermsurf_chromium/ts_main_delegate.h
+index e49cc03a07..461064b26b 100644
+--- a/content/libtermsurf_chromium/ts_main_delegate.h
++++ b/content/libtermsurf_chromium/ts_main_delegate.h
+@@ -11,6 +11,7 @@
+ 
+ namespace content {
+ 
++class ContentClient;
+ class ContentRendererClient;
+ 
+ // TsMainDelegate overrides ShellMainDelegate to swap in TsBrowserClient
+@@ -25,6 +26,7 @@ class TsMainDelegate : public ShellMainDelegate {
+ 
+   // ContentMainDelegate:
+   std::optional<int> BasicStartupComplete() override;
++  ContentClient* CreateContentClient() override;
+   void PreSandboxStartup() override;
+   ContentBrowserClient* CreateContentBrowserClient() override;
+   ContentRendererClient* CreateContentRendererClient() override;
+-- 
+2.54.0
+

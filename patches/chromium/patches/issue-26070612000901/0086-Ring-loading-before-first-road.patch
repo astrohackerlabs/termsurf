@@ -1,0 +1,30 @@
+From 2465f7bfa567bb8a80ef5e9517d8417a90f581c1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 17 Jun 2026 22:38:45 -0500
+Subject: [PATCH 86/90] Ring loading before first road
+
+Before the first page found its lane,
+Progress sprinted past the train.
+Now loading rings the starting bell,
+And every watcher hears it well.
+---
+ content/libtermsurf_chromium/ts_browser_main_parts.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1329772206..5b5e9a2925 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -499,6 +499,9 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+   tab->tab_observer = std::move(tab_observer);
+   tabs_.push_back(std::move(tab));
+ 
++  // The initial LoadURL can report progress before WebContentsObserver emits
++  // DidStartLoading, so make the protocol's initial loading edge deterministic.
++  TsNotifyLoadingState(handle, "loading", 0);
+   NavigateTab(handle, url);
+ 
+   return handle;
+-- 
+2.54.0
+

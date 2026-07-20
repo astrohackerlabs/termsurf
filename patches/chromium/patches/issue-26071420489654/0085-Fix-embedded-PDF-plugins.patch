@@ -1,0 +1,48 @@
+From 353c17af3f93b35e3057fe0bed8fbf4059ecea72 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Wed, 24 Jun 2026 19:40:55 -0500
+Subject: [PATCH 085/119] Fix embedded PDF plugins
+
+A page-born PDF knocked at the gate,
+But lacked the magic internal freight.
+Now MIME handlers answer the bell,
+And marker pages render well.
+---
+ .../ts_pdf_renderer_support.cc                     | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+index 4c76fd06e8..206bc8fdaf 100644
+--- a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+@@ -14,6 +14,7 @@
+ #include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "components/printing/renderer/print_render_frame_helper.h"
+ #include "content/public/common/url_constants.h"
++#include "content/public/common/webplugininfo.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/mojom/guest_view.mojom.h"
+@@ -119,6 +120,19 @@ bool MaybeHandleTsPdfPluginExternally(RenderFrame* render_frame,
+   const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
+                            mime_type == pdf::kInternalPluginMimeType;
+   *handled = has_internal_id && is_pdf_mime;
++  if (!*handled && mime_type == pdf::kPDFMimeType && render_frame) {
++    content::WebPluginInfo plugin_info;
++    plugin_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_PLUGIN;
++    auto* container_manager = extensions::MimeHandlerViewContainerManager::Get(
++        render_frame, /*create_if_does_not_exist=*/true);
++    *handled = container_manager &&
++               container_manager->CreateFrameContainer(
++                   plugin_element, original_url, mime_type, plugin_info);
++    LOG(INFO) << "[termsurf-pdf] page-plugin-frame-container "
++              << "document_url=" << TsPdfDocumentUrl(render_frame)
++              << " original_url=" << original_url << " mime_type=" << mime_type
++              << " created=" << (*handled ? 1 : 0);
++  }
+ 
+   LOG(INFO) << "[termsurf-pdf] is-plugin-handled-externally mime_type="
+             << mime_type << " url=" << original_url
+-- 
+2.54.0
+

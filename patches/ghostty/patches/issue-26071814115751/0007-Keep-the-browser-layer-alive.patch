@@ -1,0 +1,193 @@
+From f6080ce61ec59dc389b8c945f07406c18193dcfe Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 16 Jul 2026 07:43:53 -0500
+Subject: [PATCH 07/17] Keep the browser layer alive
+
+The split tree sheds its window coat,
+but browser layers stay afloat.
+Only a true goodbye may clear;
+focused tests keep lifetimes clear.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 59 +++++++++++++++++--
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 49 +++++++++++++++
+ macos/build.nu                                |  8 +++
+ 3 files changed, 111 insertions(+), 5 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 3634abe41..5e32c0344 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -9,6 +9,44 @@ import UserNotifications
+ extension Ghostty {
+   /// The NSView implementation for a terminal surface.
+   class SurfaceView: OSSurfaceView, Codable, Identifiable {
++    enum TermSurfOverlayWindowMembershipAction: Equatable {
++      case attached
++      case detachedWithoutOverlay
++      case detachedPreservingOverlay
++    }
++
++    struct TermSurfOverlayWindowState {
++      var hasActiveCAContextRequest = false
++      var hasNonzeroContextID = false
++      var hasRootLayer = false
++      var hasHostLayer = false
++      var hasDeferredCAContextRequest = false
++      var hasActiveIOSurfaceRequest = false
++      var hasIOSurfaceLayer = false
++      var hasRetainedIOSurface = false
++
++      var hasOverlayState: Bool {
++        hasActiveCAContextRequest
++          || hasNonzeroContextID
++          || hasRootLayer
++          || hasHostLayer
++          || hasDeferredCAContextRequest
++          || hasActiveIOSurfaceRequest
++          || hasIOSurfaceLayer
++          || hasRetainedIOSurface
++      }
++    }
++
++    static func termSurfOverlayWindowMembershipAction(
++      windowAttached: Bool,
++      overlayState: TermSurfOverlayWindowState
++    ) -> TermSurfOverlayWindowMembershipAction {
++      if windowAttached { return .attached }
++      return overlayState.hasOverlayState
++        ? .detachedPreservingOverlay
++        : .detachedWithoutOverlay
++    }
++
+     // The current title of the surface as defined by the pty. This can be
+     // changed with escape codes.
+     @Published private(set) var title: String = "" {
+@@ -1460,11 +1498,22 @@ extension Ghostty {
+     override func viewDidMoveToWindow() {
+       super.viewDidMoveToWindow()
+       termSurfLogGeometry(event: "view_moved_to_window", note: "window-membership-changed")
+-      if window == nil
+-        && (termsurfOverlayRootLayer != nil || termsurfDeferredOverlay != nil
+-          || termsurfOverlayContextID != 0 || termsurfOverlayIOSurface != nil)
+-      {
+-        clearTermSurfOverlay()
++      let overlayState = TermSurfOverlayWindowState(
++        hasActiveCAContextRequest: termsurfActiveOverlay != nil,
++        hasNonzeroContextID: termsurfOverlayContextID != 0,
++        hasRootLayer: termsurfOverlayRootLayer != nil,
++        hasHostLayer: termsurfOverlayHostLayer != nil,
++        hasDeferredCAContextRequest: termsurfDeferredOverlay != nil,
++        hasActiveIOSurfaceRequest: termsurfActiveIOSurfaceOverlay != nil,
++        hasIOSurfaceLayer: termsurfOverlayIOSurfaceLayer != nil,
++        hasRetainedIOSurface: termsurfOverlayIOSurface != nil)
++      if Self.termSurfOverlayWindowMembershipAction(
++        windowAttached: window != nil,
++        overlayState: overlayState) == .detachedPreservingOverlay {
++        termSurfLogGeometry(
++          event: "window_detach_preserved",
++          visible: termsurfOverlayRootLayer != nil,
++          note: "transient-window-detach-preserving-overlay")
+       }
+     }
+ 
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 03ad63539..e276f748a 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -2,6 +2,9 @@
+ import Testing
+ 
+ struct SurfaceViewAppKitTests {
++    typealias MembershipAction = Ghostty.SurfaceView.TermSurfOverlayWindowMembershipAction
++    typealias WindowState = Ghostty.SurfaceView.TermSurfOverlayWindowState
++
+     @Test(arguments: [
+         ("\u{0008}", true),
+         ("\u{001F}", true),
+@@ -41,4 +44,50 @@ struct SurfaceViewAppKitTests {
+             ) == false
+         )
+     }
++
++    @Test func attachedWindowNeverChangesOverlayLifetime() {
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: true,
++                overlayState: WindowState()
++            ) == MembershipAction.attached
++        )
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: true,
++                overlayState: WindowState(hasActiveCAContextRequest: true)
++            ) == MembershipAction.attached
++        )
++    }
++
++    @Test func detachedWindowWithoutOverlayIsNoOp() {
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: false,
++                overlayState: WindowState()
++            ) == MembershipAction.detachedWithoutOverlay
++        )
++    }
++
++    @Test func detachedWindowPreservesEveryOverlayState() {
++        let states = [
++            WindowState(hasActiveCAContextRequest: true),
++            WindowState(hasNonzeroContextID: true),
++            WindowState(hasRootLayer: true),
++            WindowState(hasHostLayer: true),
++            WindowState(hasDeferredCAContextRequest: true),
++            WindowState(hasActiveIOSurfaceRequest: true),
++            WindowState(hasIOSurfaceLayer: true),
++            WindowState(hasRetainedIOSurface: true),
++        ]
++
++        for state in states {
++            #expect(
++                Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                    windowAttached: false,
++                    overlayState: state
++                ) == MembershipAction.detachedPreservingOverlay
++            )
++        }
++    }
+ }
+diff --git a/macos/build.nu b/macos/build.nu
+index 5c5b34967..da1bbcfd0 100755
+--- a/macos/build.nu
++++ b/macos/build.nu
+@@ -8,6 +8,7 @@ def main [
+     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
+     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+     --version: string = ""             # Optional release version for MARKETING_VERSION and CURRENT_PROJECT_VERSION
++    --only-testing: string = ""        # Optional xcodebuild test identifier
+ ] {
+     let project = ($env.FILE_PWD | path join "Ghostty.xcodeproj")
+     let build_dir = ($env.FILE_PWD | path join "build")
+@@ -29,6 +30,12 @@ def main [
+         ]
+     }
+ 
++    let only_testing = if $only_testing == "" {
++        []
++    } else {
++        [$"-only-testing:($only_testing)"]
++    }
++
+     (^env -i
+         $"HOME=($env.HOME)"
+         "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+@@ -38,6 +45,7 @@ def main [
+         -configuration $configuration
+         $"SYMROOT=($build_dir)"
+         ...$skip_testing
++        ...$only_testing
+         ...$version_settings
+         $action)
+ }
+-- 
+2.50.1 (Apple Git-155)
+

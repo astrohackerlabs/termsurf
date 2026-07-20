@@ -1,67 +1,63 @@
-# TermSurf
+# Astrohacker Terminal
 
-TermSurf embeds a real web browser inside a terminal emulator. Run `web`, open a
-URL, and the page appears in a terminal pane alongside shells, editors, and
-other terminal workflows.
+Astrohacker Terminal is a terminal with a real browser in the pane. Run `ahweb`,
+open a URL, and the page appears alongside shells, editors, and other terminal
+workflows.
 
-TermSurf is also a protocol: TUIs, terminal frontends, and browser engine
-processes communicate over Unix sockets with protobuf messages. The current
-client includes:
+This public repository contains the open source client material synced from the
+private Astrohacker monorepo for source releases. It includes:
 
-- `ghostboard/` — the primary terminal frontend, based on Ghostty.
-- `webtui/` — the `web` TUI and browser controls.
-- `roamium/` — the Chromium-backed browser engine process.
-- `surfari/` — the WebKit-backed browser engine process.
-- `proto/` — the TermSurf wire protocol.
-- `chromium/` and `webkit/` — patch archives and workspace instructions for the
-  engine integrations.
+- `assets/astrohacker-terminal/` — product images and Terminal assets.
+- `docs/` — product docs and public Terminal records.
+- `scripts/` — public build/install helpers and smoke scripts.
+- `rust/` — Rust workspace crates for `ahweb`, Chromium, WebKit, Ladybird, GTUI,
+  and protocol/native support code.
+- `patches/` — fork patch archives and reconstruction notes for Chromium,
+  WebKit, Ladybird, Ghostty, and Gecko.
 
-This public repository contains the open source client code needed to build the
-terminal/browser experience. TermSurf Cloud, private planning, internal issue
-records, and release orchestration live outside this repository.
+Large upstream fork checkouts and build outputs are not committed here. Use the
+patch records under `patches/` to reconstruct local engine workspaces when
+developing browser integrations.
 
 ## Install
 
-The Homebrew cask currently targets Apple silicon macOS and installs
-`TermSurf.app`, the `web` CLI, Roamium with Chromium runtime resources, and
-Surfari with WebKit runtime resources:
+The Astrohacker Homebrew cask targets Apple silicon macOS and installs into
+`/Applications`:
 
 ```bash
-brew tap termsurf/termsurf
-brew trust termsurf/termsurf
-brew install --cask termsurf
+brew tap astrohackerlabs/astrohacker
+brew trust astrohackerlabs/astrohacker
+brew install --cask astrohacker
 ```
 
 To upgrade:
 
 ```bash
-brew update && brew upgrade --cask termsurf
+brew update
+brew upgrade --cask astrohacker
 ```
 
 ## Build
 
-Development builds require Xcode, Zig, Rust, Chromium's `depot_tools`, and the
-WebKit build tooling described in `webkit/README.md`. Chromium and WebKit are
-large; plan for significant disk space and long first builds.
+Development builds require Xcode, Zig, Rust, Bun, Chromium's `depot_tools`, and
+the WebKit/Ladybird build tooling described in the patch documentation.
 
 ```bash
 brew install zig
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git \
-  chromium/depot_tools
+curl -fsSL https://bun.sh/install | bash
 ```
 
-Fetch the Chromium and WebKit checkouts described by `chromium/README.md` and
-`webkit/README.md`, apply the current patch archives, then build the client
-components:
+Prepare local engine workspaces from the recorded patch archives, then build the
+client components:
 
 ```bash
 ./scripts/build.sh chromium
-./scripts/build.sh roamium
+./scripts/build.sh chromium
 ./scripts/build.sh webkit
-./scripts/build.sh surfari
-./scripts/build.sh webtui
-./scripts/build.sh ghostboard
+./scripts/build.sh webkit
+./scripts/build.sh ahweb
+./scripts/build.sh ahterm
 ```
 
 For a release-style local build:
@@ -70,27 +66,30 @@ For a release-style local build:
 ./scripts/build.sh all --release
 ```
 
-The Ghostboard app bundle is written to:
+The app bundle is written to:
 
 ```text
-ghostboard/macos/build/Release/TermSurf.app
+forks/ghostty/macos/build/Release/Astrohacker Terminal.app
 ```
 
 ## Run
 
-During development, launch Ghostboard from the source tree:
+During development, launch the Ghostty-based frontend from the reconstructed
+Ghostty workspace:
 
 ```bash
-cd ghostboard
-zig build run
+cd forks/ghostty
+zig build -Demit-macos-app=false
+cd macos
+./build.nu --configuration Debug --action build
 ```
 
-Inside that terminal, run the debug `web` binary and point it at the locally
-built Roamium engine:
+Inside Astrohacker Terminal, run the debug `ahweb` binary and point it at a local
+engine build:
 
 ```bash
-../target/debug/web \
-  --browser ../chromium/src/out/Default/roamium \
+./rust/target/debug/ahweb \
+  --browser ./forks/chromium/src/out/Default/ah-chromiumd \
   https://example.com
 ```
 

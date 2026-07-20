@@ -1,0 +1,413 @@
+diff --git a/macos/Sources/App/macOS/ghostty-bridging-header.h b/macos/Sources/App/macOS/ghostty-bridging-header.h
+index 50e38af3d..b29e31251 100644
+--- a/macos/Sources/App/macOS/ghostty-bridging-header.h
++++ b/macos/Sources/App/macOS/ghostty-bridging-header.h
+@@ -8,3 +8,4 @@ void termsurf_pane_focus_changed(const char *pane_id, int focused);
+ void termsurf_gui_active_changed(int active);
+ void termsurf_hello_config_changed(const char *homepage, const char *browsers);
+ void termsurf_color_scheme_changed(int dark);
++int termsurf_navigation_action_for_pane(const char *pane_id, const char *action);
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 0c50ba12d..9905b2dda 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -306,7 +306,7 @@ extension Ghostty {
+       note: String
+     ) {
+       let context = contextID.map { String($0) } ?? String(termsurfOverlayContextID)
+-      let visibleValue = visible ?? (termsurfOverlayHostLayer != nil)
++      let visibleValue = visible ?? (termsurfOverlayHostLayer != nil || termsurfOverlayIOSurfaceLayer != nil)
+       let rootFrame = termsurfOverlayRootLayer.map { NSStringFromRect($0.frame) } ?? "none"
+       let positioningFrame =
+         termsurfOverlayPositioningLayer.map { NSStringFromRect($0.frame) } ?? "none"
+@@ -2414,6 +2414,22 @@ extension Ghostty {
+       }
+ 
+       if isTermSurfBrowserNavigationKeyEquivalent(event) {
++        if termSurfScriptHasActiveOverlay,
++          let navigationAction = termSurfBrowserNavigationAction(for: event)
++        {
++          let dispatched = dispatchTermSurfNavigationAction(navigationAction)
++          termSurfLogGeometry(
++            event:
++              dispatched
++              ? "perform_key_equivalent_browser_navigation_action"
++              : "perform_key_equivalent_browser_navigation_disabled",
++            note:
++              "key_code=\(event.keyCode) modifiers=\(termSurfModifiers(event.modifierFlags)) focused=\(focused) action=\(navigationAction)"
++          )
++          termsurfBrowserKeyState.acceptProductDown(event.keyCode)
++          return true
++        }
++
+         if forwardTermSurfKeyDown(event) {
+           termSurfLogGeometry(
+             event: "perform_key_equivalent_browser_forwarded",
+@@ -2895,7 +2911,7 @@ extension Ghostty {
+     }
+ 
+     private var termSurfScriptHasActiveOverlay: Bool {
+-      (termsurfOverlayHostLayer != nil && termsurfOverlayFrame != nil)
++      ((termsurfOverlayHostLayer != nil || termsurfOverlayIOSurfaceLayer != nil) && termsurfOverlayFrame != nil)
+         || geckoMultiTileRoot != nil
+     }
+ 
+@@ -2946,6 +2962,17 @@ extension Ghostty {
+         hit: hit)
+     }
+ 
++    private func termSurfBrowserForwardingPoint(_ point: TermSurfOverlayPoint) -> TermSurfOverlayPoint {
++      guard termsurfOverlayIOSurfaceLayer != nil, termsurfOverlayHostLayer == nil else {
++        return point
++      }
++      let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
++      return TermSurfOverlayPoint(
++        x: point.x * Double(scale),
++        y: point.y * Double(scale),
++        hit: point.hit)
++    }
++
+     private func termSurfCursor() -> NSCursor {
+       switch termsurfCursorType {
+       case 2:
+@@ -3101,6 +3128,29 @@ extension Ghostty {
+       return forwarded != 0
+     }
+ 
++    private func termSurfBrowserNavigationAction(for event: NSEvent) -> String? {
++      switch event.keyCode {
++      case 0x21:
++        return "back"
++      case 0x1E:
++        return "forward"
++      case 0x0F:
++        return "refresh"
++      default:
++        return nil
++      }
++    }
++
++    private func dispatchTermSurfNavigationAction(_ action: String) -> Bool {
++      let paneID = id.uuidString
++      let dispatched: Int32 = paneID.withCString { paneIDPointer in
++        action.withCString { actionPointer in
++          termsurf_navigation_action_for_pane(paneIDPointer, actionPointer)
++        }
++      }
++      return dispatched != 0
++    }
++
+     private func forwardTermSurfTextInput(
+       type: String,
+       text: String,
+@@ -3247,6 +3297,7 @@ extension Ghostty {
+       } else if type == "up" {
+         modifiers &= ~buttonModifier
+       }
++      let browserPoint = termSurfBrowserForwardingPoint(point)
+       let forwarded: Int32 = paneID.withCString { paneIDPointer in
+         type.withCString { typePointer in
+           button.withCString { buttonPointer in
+@@ -3254,8 +3305,8 @@ extension Ghostty {
+               paneIDPointer,
+               typePointer,
+               buttonPointer,
+-              point.x,
+-              point.y,
++              browserPoint.x,
++              browserPoint.y,
+               Int64(max(event.clickCount, 1)),
+               modifiers)
+           }
+@@ -3267,7 +3318,7 @@ extension Ghostty {
+         hit: point.hit,
+         webPoint: CGPoint(x: point.x, y: point.y),
+         note:
+-          "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) forwarded=\(forwarded != 0) terminal_fallback=false"
++          "kind=event ns_event=\(event.type.rawValue) type=\(type) button=\(button) click_count=\(max(event.clickCount, 1)) modifiers=\(modifiers) browser_point=\(browserPoint.x),\(browserPoint.y) forwarded=\(forwarded != 0) terminal_fallback=false"
+       )
+       return forwarded != 0
+     }
+@@ -3311,11 +3362,12 @@ extension Ghostty {
+       default:
+         break
+       }
++      let browserPoint = termSurfBrowserForwardingPoint(point)
+       let forwarded: Int32 = paneID.withCString { paneIDPointer in
+         termsurf_forward_mouse_move(
+           paneIDPointer,
+-          point.x,
+-          point.y,
++          browserPoint.x,
++          browserPoint.y,
+           modifiers)
+       }
+ 
+@@ -3331,7 +3383,7 @@ extension Ghostty {
+         hit: point.hit,
+         webPoint: CGPoint(x: point.x, y: point.y),
+         note:
+-          "kind=move ns_event=\(event.type.rawValue) modifiers=\(modifiers) forwarded=\(forwarded != 0) terminal_fallback=false"
++          "kind=move ns_event=\(event.type.rawValue) modifiers=\(modifiers) browser_point=\(browserPoint.x),\(browserPoint.y) forwarded=\(forwarded != 0) terminal_fallback=false"
+       )
+       return true
+     }
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index c8f2c2fd9..a6028b95d 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -45,6 +45,8 @@ const fallback_cell_width: u64 = 10;
+ const fallback_cell_height: u64 = 20;
+ const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
+ const browser_startup_trace_env = "TERMSURF_BROWSER_STARTUP_TRACE";
++const test_wrong_navigation_state_env = "TERMSURF_TEST_WRONG_NAVIGATION_STATE";
++var test_wrong_navigation_state_injected = false;
+ const devtools_reservation_timeout_env = "TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_MS";
+ const default_devtools_reservation_timeout_ms: i64 = 15_000;
+ // Product primary engine path overrides (preferred).
+@@ -352,6 +354,9 @@ const PaneState = struct {
+     focused: bool = false,
+     navigation_pending: bool = false,
+     navigation_loading: bool = false,
++    can_go_back: bool = false,
++    can_go_forward: bool = false,
++    can_refresh: bool = false,
+     inspected_tab_id: i64 = 0,
+     tab_id: i64 = 0,
+     ca_context_id: u64 = 0,
+@@ -926,6 +931,11 @@ fn browserStartupTraceEnabled() bool {
+     return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+ }
+ 
++fn testWrongNavigationStateEnabled() bool {
++    const value = std.posix.getenv(test_wrong_navigation_state_env) orelse return false;
++    return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
++}
++
+ fn wallMs() i64 {
+     return std.time.milliTimestamp();
+ }
+@@ -3057,6 +3067,41 @@ pub fn navigationActiveForPane(pane_id: []const u8) bool {
+     return pane.tab_id > 0 and (pane.navigation_pending or pane.navigation_loading);
+ }
+ 
++pub fn sendNavigationActionForPane(pane_id: []const u8, action: []const u8) bool {
++    if (!validNavigationAction(action)) {
++        log.warn(
++            "NavigationAction rejected pane_id={s} action={s}",
++            .{ pane_id, action },
++        );
++        return false;
++    }
++
++    const snapshot = snapshotEnabledNavigationAction(pane_id, action) orelse return false;
++
++    var forwarded: c.Termsurf__NavigationAction = undefined;
++    c.termsurf__navigation_action__init(&forwarded);
++    forwarded.tab_id = snapshot.tab_id;
++    forwarded.action = @constCast(action.ptr);
++
++    var wrapper: c.Termsurf__TermSurfMessage = undefined;
++    c.termsurf__term_surf_message__init(&wrapper);
++    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION;
++    wrapper.unnamed_0.navigation_action = &forwarded;
++
++    sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
++        log.warn(
++            "NavigationAction send failed pane_id={s} tab_id={} action={s} err={}",
++            .{ snapshot.paneId(), snapshot.tab_id, action, err },
++        );
++        return false;
++    };
++    log.info(
++        "NavigationAction: pane_id={s} tab_id={} action={s}",
++        .{ snapshot.paneId(), snapshot.tab_id, action },
++    );
++    return true;
++}
++
+ pub fn forwardTextInput(
+     pane_id: []const u8,
+     input_type: []const u8,
+@@ -3493,31 +3538,10 @@ fn handleNavigationAction(req: ?*c.Termsurf__NavigationAction) void {
+         );
+         return;
+     }
+-    const snapshot = snapshotNavigationAction(pane_id) orelse {
++    if (!sendNavigationActionForPane(pane_id, action)) {
+         log.warn("NavigationAction: unknown or unready pane_id={s}", .{pane_id});
+         return;
+-    };
+-
+-    var forwarded: c.Termsurf__NavigationAction = undefined;
+-    c.termsurf__navigation_action__init(&forwarded);
+-    forwarded.tab_id = snapshot.tab_id;
+-    forwarded.action = action_req.*.action;
+-
+-    var wrapper: c.Termsurf__TermSurfMessage = undefined;
+-    c.termsurf__term_surf_message__init(&wrapper);
+-    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION;
+-    wrapper.unnamed_0.navigation_action = &forwarded;
+-    sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
+-        log.warn(
+-            "NavigationAction send failed pane_id={s} tab_id={} action={s} err={}",
+-            .{ snapshot.paneId(), snapshot.tab_id, action, err },
+-        );
+-        return;
+-    };
+-    log.info(
+-        "NavigationAction: pane_id={s} tab_id={} action={s}",
+-        .{ snapshot.paneId(), snapshot.tab_id, action },
+-    );
++    }
+ }
+ 
+ fn validNavigationAction(action: []const u8) bool {
+@@ -3563,6 +3587,35 @@ fn snapshotNavigationAction(pane_id: []const u8) ?BrowserInputSnapshot {
+     return snapshot;
+ }
+ 
++fn snapshotEnabledNavigationAction(pane_id: []const u8, action: []const u8) ?BrowserInputSnapshot {
++    state_mutex.lock();
++    defer state_mutex.unlock();
++
++    const pane_index = findPane(pane_id) orelse return null;
++    const pane = &panes[pane_index];
++    if (pane.tab_id <= 0) return null;
++    const enabled =
++        (std.mem.eql(u8, action, "back") and pane.can_go_back) or
++        (std.mem.eql(u8, action, "forward") and pane.can_go_forward) or
++        (std.mem.eql(u8, action, "refresh") and pane.can_refresh);
++    if (!enabled) {
++        log.info(
++            "NavigationAction disabled pane_id={s} tab_id={} action={s}",
++            .{ pane.paneId(), pane.tab_id, action },
++        );
++        return null;
++    }
++    const server_index = findServer(pane.profileName(), pane.browserName()) orelse return null;
++    if (servers[server_index].attached_fd < 0) return null;
++
++    var snapshot: BrowserInputSnapshot = .{
++        .browser_fd = servers[server_index].attached_fd,
++        .tab_id = pane.tab_id,
++    };
++    if (!copyText(&snapshot.pane_id, &snapshot.pane_id_len, pane.paneId())) return null;
++    return snapshot;
++}
++
+ fn clearNavigationPending(pane_id: []const u8, tab_id: i64) void {
+     state_mutex.lock();
+     defer state_mutex.unlock();
+@@ -3630,6 +3683,7 @@ fn handleNavigationState(fd: std.posix.fd_t, req: ?*c.Termsurf__NavigationState)
+     }
+ 
+     var snapshot: ?NavigationStateSnapshot = null;
++    var wrong_snapshot: ?NavigationStateSnapshot = null;
+ 
+     state_mutex.lock();
+     const server_index = findServerByFd(fd) orelse {
+@@ -3655,16 +3709,36 @@ fn handleNavigationState(fd: std.posix.fd_t, req: ?*c.Termsurf__NavigationState)
+     };
+     const pane = &panes[pane_index];
+     if (pane.tui_fd >= 0) {
++        pane.can_go_back = navigation_state.*.can_go_back != 0;
++        pane.can_go_forward = navigation_state.*.can_go_forward != 0;
++        pane.can_refresh = navigation_state.*.can_refresh != 0;
+         var value: NavigationStateSnapshot = .{
+             .tui_fd = pane.tui_fd,
+             .tab_id = navigation_state.*.tab_id,
+-            .can_go_back = navigation_state.*.can_go_back != 0,
+-            .can_go_forward = navigation_state.*.can_go_forward != 0,
+-            .can_refresh = navigation_state.*.can_refresh != 0,
++            .can_go_back = pane.can_go_back,
++            .can_go_forward = pane.can_go_forward,
++            .can_refresh = pane.can_refresh,
+         };
+         if (copyText(&value.pane_id, &value.pane_id_len, pane.paneId())) {
+             snapshot = value;
+         }
++        if (testWrongNavigationStateEnabled() and !test_wrong_navigation_state_injected) {
++            var wrong_value: NavigationStateSnapshot = .{
++                .tui_fd = pane.tui_fd,
++                .tab_id = navigation_state.*.tab_id + 999_000,
++                .can_go_back = !pane.can_go_back,
++                .can_go_forward = !pane.can_go_forward,
++                .can_refresh = !pane.can_refresh,
++            };
++            if (copyText(&wrong_value.pane_id, &wrong_value.pane_id_len, pane.paneId())) {
++                wrong_snapshot = wrong_value;
++                test_wrong_navigation_state_injected = true;
++                log.info(
++                    "NavigationState test wrong-tab injected key={s}/{s} tab_id={} original_tab_id={}",
++                    .{ profile, browser, wrong_value.tab_id, navigation_state.*.tab_id },
++                );
++            }
++        }
+     }
+     log.info(
+         "NavigationState: pane_id={s} tab_id={} back={} forward={} refresh={}",
+@@ -3686,6 +3760,14 @@ fn handleNavigationState(fd: std.posix.fd_t, req: ?*c.Termsurf__NavigationState)
+             );
+         };
+     }
++    if (wrong_snapshot) |state_snapshot| {
++        sendNavigationStateToTui(&state_snapshot) catch |err| {
++            log.warn(
++                "NavigationState test wrong-tab send failed pane_id={s} tab_id={} err={}",
++                .{ state_snapshot.paneId(), state_snapshot.tab_id, err },
++            );
++        };
++    }
+ }
+ 
+ fn sendNavigationStateToTui(snapshot: *const NavigationStateSnapshot) !void {
+@@ -3827,6 +3909,9 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+     };
+ 
+     panes[pane_index].tab_id = tab_id;
++    panes[pane_index].can_go_back = false;
++    panes[pane_index].can_go_forward = false;
++    panes[pane_index].can_refresh = false;
+     const lookup_count = upsertTabLookup(&panes[pane_index], tab_id);
+     if (panes[pane_index].inspected_tab_id == 0) {
+         _ = copyText(&last_browser_pane, &last_browser_pane_len, pane_id);
+@@ -4871,6 +4956,9 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+             if (!std.mem.eql(u8, pane.browserName(), server.browserName())) continue;
+             pane.navigation_pending = false;
+             pane.navigation_loading = false;
++            pane.can_go_back = false;
++            pane.can_go_forward = false;
++            pane.can_refresh = false;
+         }
+         releaseRenderSideChannel(&server.render_side_channel);
+         stopGeckoTileHost(server.gecko_tile_host_ctx);
+@@ -7996,6 +8084,10 @@ test "termsurf TUI navigation action resolves pane to owning browser tab" {
+     panes[0].tab_id = 77;
+     _ = upsertTabLookup(&panes[0], 77);
+ 
++    try testing.expect(!sendNavigationActionForPane("pane-webkit", "back"));
++    try testing.expect(!sendNavigationActionForPane("pane-webkit", "unknown"));
++    panes[0].can_go_back = true;
++
+     var action: c.Termsurf__NavigationAction = undefined;
+     c.termsurf__navigation_action__init(&action);
+     action.pane_id = @constCast("pane-webkit");
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 83c69f6e3..e68fb1272 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -313,6 +313,13 @@ pub export fn termsurf_navigation_active_for_pane(pane_id: [*:0]const u8) c_int
+     return if (termsurf.navigationActiveForPane(std.mem.span(pane_id))) 1 else 0;
+ }
+ 
++pub export fn termsurf_navigation_action_for_pane(pane_id: [*:0]const u8, action: [*:0]const u8) c_int {
++    return if (termsurf.sendNavigationActionForPane(
++        std.mem.span(pane_id),
++        std.mem.span(action),
++    )) 1 else 0;
++}
++
+ pub export fn termsurf_copy_current_url(
+     pane_id: [*:0]const u8,
+     out: [*]u8,

@@ -1,0 +1,336 @@
+From d8a7f90a3751d53b8b516abdb520790981b88168 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 21:11:45 -0500
+Subject: [PATCH] Bug Astrohacker 932: visible chrome window CLI for Exp7
+
+Add --astrohacker-visible-window=<url> command-line handler that opens
+a real browser window, loads the URL, dumps geometry markers, holds
+1.5s, and quits.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 282 ++++++++++++++++++
+ .../components/astrohacker/components.conf    |   9 +
+ browser/components/astrohacker/moz.build      |   1 +
+ 3 files changed, 292 insertions(+)
+ create mode 100644 browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+new file mode 100644
+index 000000000000..b075f191a7a2
+--- /dev/null
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -0,0 +1,282 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
++
++/**
++ * Private Astrohacker Exp7: --astrohacker-visible-window=<url>
++ * Opens a real browser chrome window (not headless), loads URL, dumps markers.
++ */
++
++import { BrowserWindowTracker } from "resource:///modules/BrowserWindowTracker.sys.mjs";
++
++const progressListeners = new Set();
++
++export class CommandLineHandler {
++  static classID = Components.ID("{a932e007-0932-4007-8000-000000000007}");
++  static contractID = "@astrohacker.org/visible-window-clh;1";
++
++  QueryInterface = ChromeUtils.generateQI([Ci.nsICommandLineHandler]);
++
++  get helpInfo() {
++    return "  --astrohacker-visible-window <url>  Astrohacker visible window probe\n";
++  }
++
++  handle(aCmdLine) {
++    let urlParam = aCmdLine.handleFlagWithParam(
++      "astrohacker-visible-window",
++      false
++    );
++    if (!urlParam) {
++      return;
++    }
++
++    aCmdLine.preventDefault = true;
++    dump("init_ok=1\n");
++    dump("main_thread=1\n");
++    dump("flag=--astrohacker-visible-window\n");
++    try {
++      dump(`firefox_pid=${Services.appinfo.processID}\n`);
++    } catch (e) {
++      dump("firefox_pid=0\n");
++    }
++
++    let headless = false;
++    try {
++      headless = Services.appinfo.isHeadless || false;
++    } catch (e) {}
++    if (Services.env.get("MOZ_HEADLESS") === "1") {
++      headless = true;
++    }
++    dump(`headless=${headless ? 1 : 0}\n`);
++
++    runVisible(urlParam, headless)
++      .catch(err => {
++        dump(`probe_error=${String(err)}\n`);
++        dump("visible_window_ok=0\n");
++      })
++      .finally(() => {
++        try {
++          Services.startup.quit(
++            Ci.nsIAppStartup.eForceQuit | Ci.nsIAppStartup.eAttemptQuit
++          );
++        } catch (e) {
++          // Last resort: hard exit so the harness reaps the process.
++          dump("force_exit=1\n");
++          // eslint-disable-next-line no-undef
++          quit(0);
++        }
++      });
++  }
++}
++
++function delay(ms) {
++  return new Promise(resolve => {
++    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    timer.initWithCallback(() => resolve(), ms, Ci.nsITimer.TYPE_ONE_SHOT);
++  });
++}
++
++function waitTabLoad(browser, expectedUrlHint) {
++  return new Promise((resolve, reject) => {
++    let settled = false;
++    let { webProgress } = browser;
++    let progressListener = {
++      onLocationChange(progress, _request, location, flags) {
++        if (!progress.isTopLevel) {
++          return;
++        }
++        if (flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) {
++          return;
++        }
++        if (
++          progress.browsingContext.currentWindowGlobal
++            ?.isUncommittedInitialDocument
++        ) {
++          return;
++        }
++        dump(`location_change=${location.spec}\n`);
++      },
++      onStateChange(progress, _request, stateFlags, _status) {
++        if (!progress.isTopLevel) {
++          return;
++        }
++        const L = Ci.nsIWebProgressListener;
++        if (
++          !(stateFlags & L.STATE_STOP) ||
++          !(stateFlags & L.STATE_IS_NETWORK) ||
++          !(stateFlags & L.STATE_IS_WINDOW)
++        ) {
++          return;
++        }
++        if (
++          progress.browsingContext.currentWindowGlobal
++            ?.isUncommittedInitialDocument
++        ) {
++          return;
++        }
++        let loc = "";
++        try {
++          loc = browser.currentURI?.spec || "";
++        } catch (e) {}
++        if (!loc || loc === "about:blank") {
++          return;
++        }
++        if (settled) {
++          return;
++        }
++        settled = true;
++        dump("STATE_STOP\n");
++        dump("load_complete=1\n");
++        dump(`location=${loc}\n`);
++        progressListeners.delete(progressListener);
++        try {
++          webProgress.removeProgressListener(progressListener);
++        } catch (e) {}
++        resolve(loc);
++      },
++      QueryInterface: ChromeUtils.generateQI([
++        "nsIWebProgressListener",
++        "nsISupportsWeakReference",
++      ]),
++    };
++    progressListeners.add(progressListener);
++    webProgress.addProgressListener(
++      progressListener,
++      Ci.nsIWebProgress.NOTIFY_LOCATION | Ci.nsIWebProgress.NOTIFY_STATE_ALL
++    );
++    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    timer.initWithCallback(
++      () => {
++        if (settled) {
++          return;
++        }
++        settled = true;
++        progressListeners.delete(progressListener);
++        try {
++          webProgress.removeProgressListener(progressListener);
++        } catch (e) {}
++        reject(new Error("load_timeout"));
++      },
++      60000,
++      Ci.nsITimer.TYPE_ONE_SHOT
++    );
++    // trigger navigation if needed — openWindow may already load args
++    try {
++      if (
++        expectedUrlHint &&
++        browser.currentURI?.spec !== expectedUrlHint &&
++        browser.currentURI?.spec === "about:blank"
++      ) {
++        const principal = Services.scriptSecurityManager.getSystemPrincipal();
++        browser.loadURI(Services.io.newURI(expectedUrlHint), {
++          triggeringPrincipal: principal,
++        });
++      }
++    } catch (e) {
++      dump(`nav_hint_error=${String(e)}\n`);
++    }
++  });
++}
++
++async function runVisible(urlStr, headless) {
++  dump("state=open_browser_window\n");
++  let args = Cc["@mozilla.org/supports-string;1"].createInstance(
++    Ci.nsISupportsString
++  );
++  args.data = urlStr;
++  let win = await BrowserWindowTracker.promiseOpenWindow({
++    args,
++    features: "width=800,height=600,left=100,top=100",
++  });
++
++  // Ensure size/position
++  try {
++    win.resizeTo(800, 600);
++    win.moveTo(100, 100);
++  } catch (e) {}
++
++  let browser = win.gBrowser?.selectedBrowser;
++  if (!browser) {
++    dump("probe_error=no_selected_browser\n");
++    dump("visible_window_ok=0\n");
++    try {
++      win.close();
++    } catch (e) {}
++    return;
++  }
++
++  let finalUri;
++  try {
++    // If openWindow already navigated, wait for stop; else load
++    if (
++      !browser.currentURI ||
++      browser.currentURI.spec === "about:blank" ||
++      browser.currentURI.spec !== urlStr
++    ) {
++      const principal = Services.scriptSecurityManager.getSystemPrincipal();
++      browser.loadURI(Services.io.newURI(urlStr), {
++        triggeringPrincipal: principal,
++      });
++    }
++    finalUri = await waitTabLoad(browser, urlStr);
++  } catch (e) {
++    dump(`probe_error=${String(e)}\n`);
++    if (String(e).includes("timeout")) {
++      dump("timeout=1\n");
++    }
++    try {
++      win.close();
++    } catch (e2) {}
++    dump("visible_window_ok=0\n");
++    return;
++  }
++
++  let title = "";
++  for (let i = 0; i < 20; i++) {
++    await delay(100);
++    try {
++      title = browser.contentTitle || win.gBrowser?.contentTitle || "";
++    } catch (e) {}
++    if (title.includes("EXP3_FIXTURE_OK")) {
++      break;
++    }
++  }
++
++  dump(`final_uri=${finalUri}\n`);
++  dump(`title=${title}\n`);
++  dump(`window_outer_w=${win.outerWidth | 0}\n`);
++  dump(`window_outer_h=${win.outerHeight | 0}\n`);
++  dump(`window_screen_x=${win.screenX | 0}\n`);
++  dump(`window_screen_y=${win.screenY | 0}\n`);
++
++  let marker = title.includes("EXP3_FIXTURE_OK");
++  if (marker) {
++    dump("EXP3_FIXTURE_OK\n");
++    dump("fixture_marker=1\n");
++  } else {
++    dump("fixture_marker=0\n");
++  }
++
++  let outerOk = (win.outerWidth | 0) >= 100 && (win.outerHeight | 0) >= 100;
++  if (!headless && marker && outerOk && finalUri && finalUri !== "about:blank") {
++    dump("visible_window_ok=1\n");
++  } else {
++    dump("visible_window_ok=0\n");
++  }
++  dump("hold_ms=1500\n");
++  // Spin the main event loop so timers/paint keep running while we hold
++  // the window open for external CG observation.
++  let holdEnd = Date.now() + 1500;
++  Services.tm.spinEventLoopUntilOrQuit("astrohacker-visible-hold", () => {
++    return Date.now() >= holdEnd;
++  });
++  dump("teardown_ok=1\n");
++  try {
++    win.close();
++  } catch (e) {}
++  try {
++    Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
++  } catch (e) {
++    dump("force_exit=1\n");
++  }
++}
+diff --git a/browser/components/astrohacker/components.conf b/browser/components/astrohacker/components.conf
+index a401b83ea9d6..4a2013ef5d00 100644
+--- a/browser/components/astrohacker/components.conf
++++ b/browser/components/astrohacker/components.conf
+@@ -12,4 +12,13 @@ Classes = [
+         "esModule": "resource:///modules/astrohacker/AstrohackerWindowlessProbe.sys.mjs",
+         "constructor": "CommandLineHandler",
+     },
++    {
++        "cid": "{a932e007-0932-4007-8000-000000000007}",
++        "contract_ids": ["@astrohacker.org/visible-window-clh;1"],
++        "categories": {
++            "command-line-handler": "l-astrohacker-visible",
++        },
++        "esModule": "resource:///modules/astrohacker/AstrohackerVisibleWindow.sys.mjs",
++        "constructor": "CommandLineHandler",
++    },
+ ]
+diff --git a/browser/components/astrohacker/moz.build b/browser/components/astrohacker/moz.build
+index 59f745ede9c6..9407e128e832 100644
+--- a/browser/components/astrohacker/moz.build
++++ b/browser/components/astrohacker/moz.build
+@@ -3,6 +3,7 @@
+ # file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ 
+ EXTRA_JS_MODULES.astrohacker += [
++    "AstrohackerVisibleWindow.sys.mjs",
+     "AstrohackerWindowlessProbe.sys.mjs",
+ ]
+ 
+-- 
+2.54.0
+

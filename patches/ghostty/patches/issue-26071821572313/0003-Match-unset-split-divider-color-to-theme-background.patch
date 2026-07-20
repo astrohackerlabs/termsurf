@@ -1,0 +1,41 @@
+From 3328348e9030fad8a234bb76017418005d3bfc23 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 17:24:38 -0500
+Subject: [PATCH] Match unset split divider color to theme background
+
+Drop darken fallback so the 1pt hairline blends with background when
+split-divider-color is unset; explicit color still overrides.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift | 11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 7bfa4236e..9cddecd19 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -565,17 +565,16 @@ extension Ghostty {
+             )
+         }
+ 
++        /// Inter-pane hairline color. Explicit `split-divider-color` wins; when
++        /// unset, match theme `background` (no darken — avoids a black 1pt line
++        /// on dark themes while keeping the drag seam paint).
+         var splitDividerColor: Color {
+-            let backgroundColor = OSColor(backgroundColor)
+-            let isLightBackground = backgroundColor.isLightColor
+-            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
+-
+-            guard let config = self.config else { return Color(newColor) }
++            guard let config = self.config else { return backgroundColor }
+ 
+             var color: ghostty_config_color_s = .init()
+             let key = "split-divider-color"
+             if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return Color(newColor)
++                return backgroundColor
+             }
+ 
+             return .init(
+-- 
+2.50.1 (Apple Git-155)
+

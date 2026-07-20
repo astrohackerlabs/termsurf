@@ -1,0 +1,190 @@
+From 85b75034c9b77c3e511e0dea3c990f7982fddb3a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 30 May 2026 09:07:58 -0500
+Subject: [PATCH 051/122] Route TermSurf keyboard input to focused widget
+
+---
+ .../ts_browser_main_parts.cc                  | 131 +++++++++++++++++-
+ 1 file changed, 124 insertions(+), 7 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 7d74321e1f..c6bee9b889 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -129,6 +129,63 @@ void LogIssue794InputFrames(const char* tag,
+   });
+ }
+ 
++std::string Issue794FrameClassification(RenderFrameHost* rfh) {
++  std::string site_url;
++  if (rfh->GetSiteInstance()) {
++    site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++  }
++  const std::string url = rfh->GetLastCommittedURL().spec();
++  if (!rfh->GetParent()) {
++    return "root";
++  }
++  if (url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos ||
++      site_url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos) {
++    return "pdf-extension";
++  }
++  if (url.find(".pdf") != std::string::npos) {
++    return "pdf-plugin";
++  }
++  return "other-subframe";
++}
++
++void LogIssue794KeyTarget(const char* tag,
++                          WebContents* web_contents,
++                          RenderWidgetHostImpl* root_widget,
++                          RenderWidgetHostImpl* target_widget) {
++  if (!Issue794InputTraceEnabled()) {
++    return;
++  }
++
++  bool found = false;
++  web_contents->ForEachRenderFrameHost([&](RenderFrameHost* rfh) {
++    auto* frame_view = rfh->GetView();
++    if (!frame_view || frame_view->GetRenderWidgetHost() != target_widget) {
++      return;
++    }
++
++    found = true;
++    std::string site_url;
++    if (rfh->GetSiteInstance()) {
++      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++    }
++    LOG(INFO) << tag
++              << " key-target frame_tree_node_id=" << rfh->GetFrameTreeNodeId()
++              << " classification=" << Issue794FrameClassification(rfh)
++              << " has_parent=" << (rfh->GetParent() ? 1 : 0)
++              << " url=" << rfh->GetLastCommittedURL().spec()
++              << " site_url=" << site_url << " view=" << frame_view
++              << " root_widget=" << root_widget
++              << " target_widget=" << target_widget;
++  });
++
++  if (!found) {
++    LOG(INFO) << tag << " key-target frame_tree_node_id=-1"
++              << " classification=unknown"
++              << " root_widget=" << root_widget
++              << " target_widget=" << target_widget;
++  }
++}
++
+ void Issue779TraceAnnounce() {
+   static bool announced = false;
+   if (!announced) {
+@@ -930,12 +987,49 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+         static_cast<int>(static_cast<ui::DomKey::Base>(dom_key));
+   }
+ 
+-  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  auto* web_contents = tab->shell->web_contents();
++  auto* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp6] key-route route_mode=drop"
++                << " reason=missing-view"
++                << " type=" << type << " keycode=" << keycode;
++    }
+     return;
+   }
+ 
+-  auto* rwhi = static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++  auto* receiving_widget =
++      static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++  auto* web_contents_impl = static_cast<WebContentsImpl*>(web_contents);
++  auto* target_widget =
++      web_contents_impl
++          ? web_contents_impl->GetFocusedRenderWidgetHost(receiving_widget)
++          : receiving_widget;
++
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp6] key-event type=" << type
++              << " keycode=" << keycode << " utf8_len=" << utf8.size()
++              << " modifiers=" << modifiers
++              << " web_modifiers=" << web_modifiers
++              << " web_contents=" << web_contents
++              << " url=" << web_contents->GetLastCommittedURL().spec()
++              << " view=" << view << " root_widget=" << receiving_widget
++              << " focused_widget=" << target_widget;
++    LogIssue794InputFrames("[issue-794-exp6]", web_contents, 0, 0);
++    if (target_widget) {
++      LogIssue794KeyTarget("[issue-794-exp6]", web_contents, receiving_widget,
++                           target_widget);
++    }
++  }
++
++  if (!target_widget) {
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp6] key-route route_mode=drop"
++                << " reason=missing-focused-widget"
++                << " root_widget=" << receiving_widget;
++    }
++    return;
++  }
+ 
+   std::vector<blink::mojom::EditCommandPtr> commands;
+   if (has_meta && type != 1) {
+@@ -965,8 +1059,15 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+   }
+ 
+   ui::LatencyInfo latency;
+-  rwhi->ForwardKeyboardEventWithCommands(key_event, latency,
+-                                         std::move(commands));
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp6] key-route route_mode="
++              << (target_widget == receiving_widget ? "root-direct"
++                                                    : "focused-widget")
++              << " root_widget=" << receiving_widget
++              << " target_widget=" << target_widget;
++  }
++  target_widget->ForwardKeyboardEventWithCommands(key_event, latency,
++                                                  std::move(commands));
+ 
+   if (type != 1 && !utf8.empty() && !has_meta) {
+     input::NativeWebKeyboardEvent char_event(blink::WebInputEvent::Type::kChar,
+@@ -981,8 +1082,16 @@ void TsBrowserMainParts::ForwardKeyEvent(void* wc_handle,
+     }
+ 
+     std::vector<blink::mojom::EditCommandPtr> no_commands;
+-    rwhi->ForwardKeyboardEventWithCommands(char_event, latency,
+-                                           std::move(no_commands));
++    if (Issue794InputTraceEnabled()) {
++      LOG(INFO) << "[issue-794-exp6] key-route route_mode="
++                << (target_widget == receiving_widget ? "root-direct"
++                                                      : "focused-widget")
++                << " char_event=1"
++                << " root_widget=" << receiving_widget
++                << " target_widget=" << target_widget;
++    }
++    target_widget->ForwardKeyboardEventWithCommands(char_event, latency,
++                                                    std::move(no_commands));
+   }
+ #endif
+ }
+@@ -994,11 +1103,19 @@ void TsBrowserMainParts::SetFocus(void* wc_handle, bool focused) {
+     return;
+   }
+ 
+-  auto* view = tab->shell->web_contents()->GetRenderWidgetHostView();
++  auto* web_contents = tab->shell->web_contents();
++  auto* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+     return;
+   }
+ 
++  if (Issue794InputTraceEnabled()) {
++    LOG(INFO) << "[issue-794-exp6] focus focused=" << (focused ? 1 : 0)
++              << " web_contents=" << web_contents
++              << " url=" << web_contents->GetLastCommittedURL().spec()
++              << " view=" << view;
++  }
++
+   if (focused) {
+     view->Focus();
+     view->SetActive(true);
+-- 
+2.50.1 (Apple Git-155)
+

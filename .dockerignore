@@ -1,0 +1,7 @@
+*
+!website/
+!blog/
+website/node_modules
+website/dist
+website/.output
+website/.tanstack

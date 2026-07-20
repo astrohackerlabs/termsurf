@@ -1,0 +1,493 @@
+From 4f000871a51141c37d03f07addb5ad78cf0fc11e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 19 Jul 2026 17:08:31 -0500
+Subject: [PATCH] Exp 7: Browse chrome key allowlist for TermSurf
+
+When browse-forwardable, host-steal only allowlisted chrome
+bindings (splits/tabs/zoom/quit); else bulk-forward to webview.
+Zig classify + unit tests; AppKit preflight before forward.
+---
+ include/ghostty.h                             |   4 +
+ .../App/macOS/ghostty-bridging-header.h       |   1 +
+ macos/Sources/Ghostty/Ghostty.Surface.swift   |  12 ++
+ .../Surface View/SurfaceView_AppKit.swift     |  42 ++++-
+ src/Surface.zig                               |  66 ++++---
+ src/apprt/embedded.zig                        |  12 ++
+ src/apprt/termsurf.zig                        |   5 +
+ src/input.zig                                 |   2 +
+ src/input/browse_chrome.zig                   | 174 ++++++++++++++++++
+ src/main_c.zig                                |   5 +
+ 10 files changed, 287 insertions(+), 36 deletions(-)
+ create mode 100644 src/input/browse_chrome.zig
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 8e6038573..da2bb1628 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1076,6 +1076,7 @@ GHOSTTY_API void termsurf_hello_config_changed(const char*, const char*);
+ GHOSTTY_API void termsurf_color_scheme_changed(int);
+ GHOSTTY_API void termsurf_overlay_presented_pixels(const char*, uint64_t, uint64_t);
+ GHOSTTY_API int termsurf_forward_key_event(const char*, const char*, int64_t, const char*, uint64_t);
++GHOSTTY_API int termsurf_pane_browse_forwardable(const char*);
+ GHOSTTY_API int termsurf_forward_mouse_event(const char*, const char*, const char*, double, double, int64_t, uint64_t);
+ GHOSTTY_API int termsurf_forward_mouse_move(const char*, double, double, uint64_t);
+ GHOSTTY_API int termsurf_forward_scroll_event(const char*, double, double, double, double, uint64_t, uint64_t, bool, uint64_t);
+@@ -1143,6 +1144,9 @@ GHOSTTY_API bool ghostty_surface_key(ghostty_surface_t, ghostty_input_key_s);
+ GHOSTTY_API bool ghostty_surface_key_is_binding(ghostty_surface_t,
+                                                    ghostty_input_key_s,
+                                                    ghostty_binding_flags_e*);
++/** Exp 7: true if key binding is entirely browse-chrome allowlisted. */
++GHOSTTY_API bool ghostty_surface_key_is_browse_chrome(ghostty_surface_t,
++                                                         ghostty_input_key_s);
+ GHOSTTY_API void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
+ GHOSTTY_API void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
+ GHOSTTY_API bool ghostty_surface_mouse_captured(ghostty_surface_t);
+diff --git a/macos/Sources/App/macOS/ghostty-bridging-header.h b/macos/Sources/App/macOS/ghostty-bridging-header.h
+index b29e31251..d3adb25e8 100644
+--- a/macos/Sources/App/macOS/ghostty-bridging-header.h
++++ b/macos/Sources/App/macOS/ghostty-bridging-header.h
+@@ -9,3 +9,4 @@ void termsurf_gui_active_changed(int active);
+ void termsurf_hello_config_changed(const char *homepage, const char *browsers);
+ void termsurf_color_scheme_changed(int dark);
+ int termsurf_navigation_action_for_pane(const char *pane_id, const char *action);
++int termsurf_pane_browse_forwardable(const char *pane_id);
+diff --git a/macos/Sources/Ghostty/Ghostty.Surface.swift b/macos/Sources/Ghostty/Ghostty.Surface.swift
+index 440b1b373..57a805c45 100644
+--- a/macos/Sources/Ghostty/Ghostty.Surface.swift
++++ b/macos/Sources/Ghostty/Ghostty.Surface.swift
+@@ -82,6 +82,18 @@ extension Ghostty {
+             event.withCValue { keyIsBinding($0) }
+         }
+ 
++        /// Exp 7: true if this key's binding is entirely browse-chrome allowlisted
++        /// (goto_split, tabs, quit, …). Leaders and mixed chains are false.
++        @MainActor
++        func keyIsBrowseChrome(_ event: ghostty_input_key_s) -> Bool {
++            ghostty_surface_key_is_browse_chrome(surface, event)
++        }
++
++        @MainActor
++        func keyIsBrowseChrome(_ event: Input.KeyEvent) -> Bool {
++            event.withCValue { keyIsBrowseChrome($0) }
++        }
++
+         /// Whether the terminal has captured mouse input.
+         ///
+         /// When the mouse is captured, the terminal application is receiving mouse events
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 5e32c0344..ed5e5ad28 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -1859,7 +1859,10 @@ extension Ghostty {
+         note:
+           "key_code=\(event.keyCode) modifiers=\(termSurfModifiers(event.modifierFlags)) focused=\(focused)"
+       )
+-      if forwardTermSurfKeyDown(event) {
++      // Exp 7: browse-chrome bindings stay on Ghostty (do not bulk-forward).
++      if !shouldSkipTermSurfKeyForwardForBrowseChrome(event),
++        forwardTermSurfKeyDown(event)
++      {
+         termSurfLogGeometry(
+           event: "key_down_forwarded",
+           note:
+@@ -2503,13 +2506,31 @@ extension Ghostty {
+       termSurfCursor().set()
+     }
+ 
++    /// Exp 7: when the pane is browse-forwardable and the key is a chrome
++    /// allowlist binding, keep the event on Ghostty (skip webview bulk forward).
++    private func shouldSkipTermSurfKeyForwardForBrowseChrome(_ event: NSEvent) -> Bool {
++      // Esc is already blocked inside forwardTermSurfKeyEvent.
++      guard event.keyCode != 0x35 else { return false }
++      let paneID = id.uuidString
++      let forwardable: Bool = paneID.withCString { termsurf_pane_browse_forwardable($0) != 0 }
++      guard forwardable else { return false }
++      guard let surfaceModel else { return false }
++      var ghosttyEvent = event.ghosttyKeyEvent(GHOSTTY_ACTION_PRESS)
++      return (event.characters ?? "").withCString { ptr in
++        ghosttyEvent.text = ptr
++        return surfaceModel.keyIsBrowseChrome(ghosttyEvent)
++      }
++    }
++
+     private func forwardTermSurfKeyDown(_ event: NSEvent) -> Bool {
+-      let type: String
+-      if event.isARepeat || termsurfPressedBrowserKeys.contains(event.keyCode) {
+-        type = "repeat"
+-      } else {
+-        type = "down"
++      // Exp 7: repeats only continue bulk-forward if press was browser-owned.
++      // Chrome host-steal never inserts into termsurfPressedBrowserKeys.
++      if event.isARepeat, !termsurfPressedBrowserKeys.contains(event.keyCode) {
++        return false
+       }
++      let type: String =
++        (event.isARepeat || termsurfPressedBrowserKeys.contains(event.keyCode))
++        ? "repeat" : "down"
+       let forwarded = forwardTermSurfKeyEvent(event, type: type)
+       if forwarded {
+         termsurfPressedBrowserKeys.insert(event.keyCode)
+@@ -2518,10 +2539,13 @@ extension Ghostty {
+     }
+ 
+     private func forwardTermSurfKeyUp(_ event: NSEvent) -> Bool {
+-      let forwarded = forwardTermSurfKeyEvent(event, type: "up")
+-      if forwarded {
+-        termsurfPressedBrowserKeys.remove(event.keyCode)
++      // Exp 7: only browser-owned presses get bulk-forward release.
++      // Unmatched / chrome-host keys: suppress webview up (return false → Ghostty RELEASE).
++      guard termsurfPressedBrowserKeys.contains(event.keyCode) else {
++        return false
+       }
++      let forwarded = forwardTermSurfKeyEvent(event, type: "up")
++      termsurfPressedBrowserKeys.remove(event.keyCode)
+       return forwarded
+     }
+ 
+diff --git a/src/Surface.zig b/src/Surface.zig
+index 2c4edc497..78d6b6c7f 100644
+--- a/src/Surface.zig
++++ b/src/Surface.zig
+@@ -2594,19 +2594,12 @@ pub fn preeditCallback(self: *Surface, preedit_: ?[]const u8) !void {
+     try self.queueRender();
+ }
+ 
+-/// Returns true if the given key event would trigger a keybinding
+-/// if it were to be processed. This is useful for determining if
+-/// a key event should be sent to the terminal or not.
+-///
+-/// Note that this function does not check if the binding itself
+-/// is performable, only if the key event would trigger a binding.
+-/// If a performable binding is found and the event is not performable,
+-/// then Ghosty will act as though the binding does not exist.
+-pub fn keyEventIsBinding(
++/// Look up the binding set entry for a key event (same order as keyCallback).
++/// Returns null for release events or when no binding matches.
++fn keyEventBindingEntry(
+     self: *Surface,
+     event_orig: input.KeyEvent,
+-) ?input.Binding.Flags {
+-    // Apply key remappings for consistency with keyCallback
++) ?input.Binding.Set.Entry {
+     var event = event_orig;
+     if (self.config.key_remaps.isRemapped(event_orig.mods)) {
+         event.mods = self.config.key_remaps.apply(event_orig.mods);
+@@ -2617,25 +2610,34 @@ pub fn keyEventIsBinding(
+         .press, .repeat => {},
+     }
+ 
+-    // Look up our entry
+-    const entry: input.Binding.Set.Entry = entry: {
+-        // If we're in a sequence, check the sequence set
+-        if (self.keyboard.sequence_set) |set| {
+-            break :entry set.getEvent(event) orelse return null;
+-        }
++    if (self.keyboard.sequence_set) |set| {
++        return set.getEvent(event);
++    }
+ 
+-        // Check active key tables (inner-most to outer-most)
+-        const table_items = self.keyboard.table_stack.items;
+-        for (0..table_items.len) |i| {
+-            const rev_i: usize = table_items.len - 1 - i;
+-            if (table_items[rev_i].set.getEvent(event)) |entry| {
+-                break :entry entry;
+-            }
++    const table_items = self.keyboard.table_stack.items;
++    for (0..table_items.len) |i| {
++        const rev_i: usize = table_items.len - 1 - i;
++        if (table_items[rev_i].set.getEvent(event)) |entry| {
++            return entry;
+         }
++    }
+ 
+-        // Check the root set
+-        break :entry self.config.keybind.set.getEvent(event) orelse return null;
+-    };
++    return self.config.keybind.set.getEvent(event);
++}
++
++/// Returns true if the given key event would trigger a keybinding
++/// if it were to be processed. This is useful for determining if
++/// a key event should be sent to the terminal or not.
++///
++/// Note that this function does not check if the binding itself
++/// is performable, only if the key event would trigger a binding.
++/// If a performable binding is found and the event is not performable,
++/// then Ghosty will act as though the binding does not exist.
++pub fn keyEventIsBinding(
++    self: *Surface,
++    event_orig: input.KeyEvent,
++) ?input.Binding.Flags {
++    const entry = self.keyEventBindingEntry(event_orig) orelse return null;
+ 
+     // Return flags based on the
+     return switch (entry.value_ptr.*) {
+@@ -2644,6 +2646,16 @@ pub fn keyEventIsBinding(
+     };
+ }
+ 
++/// Exp 7: classify whether this key's binding is entirely browse-chrome.
++/// Leaders and mixed chains are `.none` (do not host-steal in Browse).
++pub fn keyEventBrowseChromeClass(
++    self: *Surface,
++    event_orig: input.KeyEvent,
++) input.BrowseKeyClass {
++    const entry = self.keyEventBindingEntry(event_orig) orelse return .none;
++    return input.browse_chrome.classifySetValue(entry.value_ptr.*);
++}
++
+ /// Called for any key events. This handles keybindings, encoding and
+ /// sending to the terminal, etc.
+ pub fn keyCallback(
+diff --git a/src/apprt/embedded.zig b/src/apprt/embedded.zig
+index a2d043aca..893a88a08 100644
+--- a/src/apprt/embedded.zig
++++ b/src/apprt/embedded.zig
+@@ -1820,6 +1820,18 @@ pub const CAPI = struct {
+         return true;
+     }
+ 
++    /// Exp 7: 1 if the key's binding is entirely browse-chrome allowlisted.
++    export fn ghostty_surface_key_is_browse_chrome(
++        surface: *Surface,
++        event: KeyEvent,
++    ) bool {
++        const core_event = event.keyEvent().core() orelse {
++            log.warn("error processing key event", .{});
++            return false;
++        };
++        return surface.core_surface.keyEventBrowseChromeClass(core_event) == .browse_chrome;
++    }
++
+     /// Send raw text to the terminal. This is treated like a paste
+     /// so this isn't useful for sending escape sequences. For that,
+     /// individual key input should be used.
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 4591aab02..0cffd2c7f 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -2832,6 +2832,11 @@ fn snapshotBrowserInput(pane_id: []const u8, require_browsing: bool) ?BrowserInp
+     return snapshot;
+ }
+ 
++/// Exp 7: side-effect-free — would browser key forward succeed for this pane?
++pub fn isBrowseForwardable(pane_id: []const u8) bool {
++    return snapshotBrowserInput(pane_id, true) != null;
++}
++
+ fn handleNavigationAction(
+     tui_fd: std.posix.fd_t,
+     req: ?*c.Termsurf__NavigationAction,
+diff --git a/src/input.zig b/src/input.zig
+index 833e05820..448565646 100644
+--- a/src/input.zig
++++ b/src/input.zig
+@@ -18,6 +18,8 @@ pub const paste = @import("input/paste.zig");
+ pub const ctrlOrSuper = key.ctrlOrSuper;
+ pub const Action = key.Action;
+ pub const Binding = @import("input/Binding.zig");
++pub const browse_chrome = @import("input/browse_chrome.zig");
++pub const BrowseKeyClass = browse_chrome.BrowseKeyClass;
+ pub const Command = command.Command;
+ pub const Link = @import("input/Link.zig");
+ pub const Key = key.Key;
+diff --git a/src/input/browse_chrome.zig b/src/input/browse_chrome.zig
+new file mode 100644
+index 000000000..1b0a6ceb7
+--- /dev/null
++++ b/src/input/browse_chrome.zig
+@@ -0,0 +1,174 @@
++//! Browse-mode chrome key allowlist (Astrohacker Exp 7).
++//! When a TermSurf overlay is browse-forwardable, only these Ghostty actions
++//! should host-steal keys; everything else goes to the webview.
++const std = @import("std");
++const Binding = @import("Binding.zig");
++
++pub const BrowseKeyClass = enum(c_int) {
++    none = 0,
++    browse_chrome = 1,
++};
++
++/// Locked chrome action tags (Exp 7).
++pub fn isBrowseChromeAction(action: Binding.Action) bool {
++    return switch (action) {
++        .goto_split,
++        .new_split,
++        .resize_split,
++        .toggle_split_zoom,
++        .previous_tab,
++        .next_tab,
++        .move_tab,
++        .new_tab,
++        .close_tab,
++        .toggle_fullscreen,
++        .quit,
++        => true,
++        else => false,
++    };
++}
++
++/// True iff every action is chrome (empty slice is not chrome).
++pub fn isBrowseChromeActions(actions: []const Binding.Action) bool {
++    if (actions.len == 0) return false;
++    for (actions) |a| {
++        if (!isBrowseChromeAction(a)) return false;
++    }
++    return true;
++}
++
++/// Classify a set value from binding lookup (leaders are never chrome).
++pub fn classifySetValue(value: Binding.Set.Value) BrowseKeyClass {
++    return switch (value) {
++        .leader => .none,
++        .leaf => |leaf| if (isBrowseChromeAction(leaf.action)) .browse_chrome else .none,
++        .leaf_chained => |chained| if (isBrowseChromeActions(chained.actions.items))
++            .browse_chrome
++        else
++            .none,
++    };
++}
++
++test "chrome tags true" {
++    const testing = std.testing;
++    try testing.expect(isBrowseChromeAction(.{ .goto_split = .left }));
++    try testing.expect(isBrowseChromeAction(.{ .new_split = .right }));
++    try testing.expect(isBrowseChromeAction(.{ .resize_split = .{ .left, 80 } }));
++    try testing.expect(isBrowseChromeAction(.toggle_split_zoom));
++    try testing.expect(isBrowseChromeAction(.previous_tab));
++    try testing.expect(isBrowseChromeAction(.next_tab));
++    try testing.expect(isBrowseChromeAction(.{ .move_tab = 1 }));
++    try testing.expect(isBrowseChromeAction(.new_tab));
++    try testing.expect(isBrowseChromeAction(.{ .close_tab = .this }));
++    try testing.expect(isBrowseChromeAction(.toggle_fullscreen));
++    try testing.expect(isBrowseChromeAction(.quit));
++}
++
++test "non-chrome tags false" {
++    const testing = std.testing;
++    try testing.expect(!isBrowseChromeAction(.{ .copy_to_clipboard = .mixed }));
++    try testing.expect(!isBrowseChromeAction(.paste_from_clipboard));
++    try testing.expect(!isBrowseChromeAction(.{ .increase_font_size = 1 }));
++    try testing.expect(!isBrowseChromeAction(.open_config));
++    try testing.expect(!isBrowseChromeAction(.clear_screen));
++    try testing.expect(!isBrowseChromeAction(.new_window));
++}
++
++test "chain all chrome vs mixed" {
++    const testing = std.testing;
++    const all_chrome = [_]Binding.Action{
++        .{ .goto_split = .left },
++        .toggle_split_zoom,
++    };
++    try testing.expect(isBrowseChromeActions(&all_chrome));
++
++    const mixed = [_]Binding.Action{
++        .{ .goto_split = .left },
++        .{ .copy_to_clipboard = .mixed },
++    };
++    try testing.expect(!isBrowseChromeActions(&mixed));
++    try testing.expect(!isBrowseChromeActions(&.{}));
++}
++
++test "classifySetValue leaf and leader" {
++    const testing = std.testing;
++    const leaf_chrome: Binding.Set.Value = .{
++        .leaf = .{
++            .action = .{ .goto_split = .down },
++            .flags = .{},
++        },
++    };
++    try testing.expectEqual(BrowseKeyClass.browse_chrome, classifySetValue(leaf_chrome));
++
++    const leaf_copy: Binding.Set.Value = .{
++        .leaf = .{
++            .action = .{ .copy_to_clipboard = .mixed },
++            .flags = .{},
++        },
++    };
++    try testing.expectEqual(BrowseKeyClass.none, classifySetValue(leaf_copy));
++
++    var nested: Binding.Set = .{};
++    defer nested.deinit(testing.allocator);
++    const leader: Binding.Set.Value = .{ .leader = &nested };
++    try testing.expectEqual(BrowseKeyClass.none, classifySetValue(leader));
++}
++
++/// Exp 7 ownership helpers (pure) — bulk-forward only when browser owns the press.
++pub const BulkPhase = enum { press, repeat, release };
++
++/// Whether TermSurf bulk-forward is allowed for this phase given press ownership.
++/// Press: always try (unless host-steal preflight skipped the call).
++/// Repeat/release: only if press was accepted into browser-owned set.
++pub fn allowBrowserBulkForward(browser_owns_press: bool, phase: BulkPhase) bool {
++    return switch (phase) {
++        .press => true,
++        .repeat, .release => browser_owns_press,
++    };
++}
++
++/// Host-steal (skip bulk-forward) when browse-forwardable and chrome class.
++/// Esc is never bulk-forwarded elsewhere; this returns false for esc so callers
++/// do not double-special-case (AppKit still blocks Esc inside forward).
++pub fn shouldHostStealBrowseKey(browse_forwardable: bool, is_browse_chrome: bool) bool {
++    return browse_forwardable and is_browse_chrome;
++}
++
++test "bulk forward ownership phases" {
++    const testing = std.testing;
++    try testing.expect(allowBrowserBulkForward(false, .press));
++    try testing.expect(!allowBrowserBulkForward(false, .repeat));
++    try testing.expect(!allowBrowserBulkForward(false, .release));
++    try testing.expect(allowBrowserBulkForward(true, .press));
++    try testing.expect(allowBrowserBulkForward(true, .repeat));
++    try testing.expect(allowBrowserBulkForward(true, .release));
++}
++
++test "host steal only when forwardable and chrome" {
++    const testing = std.testing;
++    try testing.expect(shouldHostStealBrowseKey(true, true));
++    try testing.expect(!shouldHostStealBrowseKey(true, false));
++    try testing.expect(!shouldHostStealBrowseKey(false, true));
++    try testing.expect(!shouldHostStealBrowseKey(false, false));
++}
++
++test "classifySetValue leaf_chained all vs mixed" {
++    const testing = std.testing;
++    var all: std.ArrayList(Binding.Action) = .empty;
++    defer all.deinit(testing.allocator);
++    try all.append(testing.allocator, .{ .goto_split = .left });
++    try all.append(testing.allocator, .new_tab);
++    const v_all: Binding.Set.Value = .{
++        .leaf_chained = .{ .actions = all, .flags = .{} },
++    };
++    try testing.expectEqual(BrowseKeyClass.browse_chrome, classifySetValue(v_all));
++
++    var mixed: std.ArrayList(Binding.Action) = .empty;
++    defer mixed.deinit(testing.allocator);
++    try mixed.append(testing.allocator, .{ .goto_split = .left });
++    try mixed.append(testing.allocator, .{ .copy_to_clipboard = .mixed });
++    const v_mixed: Binding.Set.Value = .{
++        .leaf_chained = .{ .actions = mixed, .flags = .{} },
++    };
++    try testing.expectEqual(BrowseKeyClass.none, classifySetValue(v_mixed));
++}
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 82d606598..d42bdc6c1 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -201,6 +201,11 @@ pub export fn termsurf_forward_key_event(
+     )) 1 else 0;
+ }
+ 
++/// Exp 7: true if this pane would accept browser key forward (no side effects).
++pub export fn termsurf_pane_browse_forwardable(pane_id: [*:0]const u8) c_int {
++    return if (termsurf.isBrowseForwardable(std.mem.span(pane_id))) 1 else 0;
++}
++
+ pub export fn termsurf_navigation_action_for_pane(
+     pane_id: [*:0]const u8,
+     action: [*:0]const u8,
+-- 
+2.50.1 (Apple Git-155)
+

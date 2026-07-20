@@ -1,0 +1,67 @@
+From 63ced9b469a213c161b6b1b9c74d9e9d024b7552 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 11:37:30 -0500
+Subject: [PATCH 22/22] Port TermSurf dialog hooks to Utf16String
+
+Ladybird master now delivers JS dialog messages as Utf16String and
+expects Optional<Utf16String> on prompt_closed. Convert at the ABI
+boundary without changing product dialog queue semantics.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp     | 16 +++++++++-------
+ 1 file changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 6db36115a5..df1c401f69 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -617,7 +617,7 @@ static int termsurf_cursor_type(Gfx::Cursor const& cursor)
+         });
+ }
+ 
+-static void queue_javascript_dialog_request(TsLadybirdView* wrapper, ByteString dialog_type, String const& message, String const& default_prompt_text = {})
++static void queue_javascript_dialog_request(TsLadybirdView* wrapper, ByteString dialog_type, Utf16String const& message, Utf16String const& default_prompt_text = {})
+ {
+     auto request_id = wrapper->next_javascript_dialog_request_id++;
+     wrapper->active_javascript_dialog_request_id = request_id;
+@@ -627,8 +627,9 @@ static void queue_javascript_dialog_request(TsLadybirdView* wrapper, ByteString
+     request.request_id = request_id;
+     request.dialog_type = dialog_type;
+     request.origin_url = wrapper->view->url().to_byte_string();
+-    request.message = message.to_byte_string();
+-    request.default_prompt_text = default_prompt_text.to_byte_string();
++    // LibWebView dialog hooks now deliver Utf16String; store as UTF-8 ByteString for the ABI queue.
++    request.message = message.to_utf8().to_byte_string();
++    request.default_prompt_text = default_prompt_text.to_utf8().to_byte_string();
+ 
+     outln("PROBE: TermSurf Ladybird ABI javascript_dialog request_id={} type={} origin={} message={} default={}",
+         request.request_id, request.dialog_type, request.origin_url, request.message, request.default_prompt_text);
+@@ -966,13 +967,13 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         }
+         wrapper->pending_target_urls.append({});
+     };
+-    wrapper->view->on_request_alert = [wrapper](String const& message) {
++    wrapper->view->on_request_alert = [wrapper](Utf16String const& message) {
+         queue_javascript_dialog_request(wrapper, "alert", message);
+     };
+-    wrapper->view->on_request_confirm = [wrapper](String const& message) {
++    wrapper->view->on_request_confirm = [wrapper](Utf16String const& message) {
+         queue_javascript_dialog_request(wrapper, "confirm", message);
+     };
+-    wrapper->view->on_request_prompt = [wrapper](String const& message, String const& default_prompt_text) {
++    wrapper->view->on_request_prompt = [wrapper](Utf16String const& message, Utf16String const& default_prompt_text) {
+         queue_javascript_dialog_request(wrapper, "prompt", message, default_prompt_text);
+     };
+     wrapper->view->on_ready_to_paint = [wrapper] {
+@@ -1364,7 +1365,8 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_reply_javascript_dialog(TsLadybir
+     } else if (dialog_type == "prompt") {
+         if (accepted) {
+             auto prompt_text_view = StringView { prompt_text ? prompt_text : "", prompt_text ? strlen(prompt_text) : 0 };
+-            view->view->prompt_closed(MUST(String::from_utf8(prompt_text_view)));
++            // prompt_closed now takes Optional<Utf16String>, not String.
++            view->view->prompt_closed(Utf16String::from_utf8(prompt_text_view));
+         } else {
+             view->view->prompt_closed({});
+         }
+-- 
+2.50.1 (Apple Git-155)
+

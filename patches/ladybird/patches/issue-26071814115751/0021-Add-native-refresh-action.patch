@@ -1,0 +1,72 @@
+From 611846b5d459df8d648be27b128d6396d815b579 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 15 Jul 2026 17:47:07 -0500
+Subject: [PATCH 21/22] Add native refresh action
+
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp    | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index e7c212bb73..6db36115a5 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -254,6 +254,7 @@ struct TsLadybirdView {
+     ByteString active_javascript_dialog_type;
+     bool did_finish_load { false };
+     bool did_crash { false };
++    bool has_committed_document { false };
+     bool title_changed { false };
+     bool destroyed { false };
+ };
+@@ -283,6 +284,7 @@ typedef struct TsLadybirdRendererCrash {
+ typedef struct TsLadybirdNavigationState {
+     bool can_go_back;
+     bool can_go_forward;
++    bool can_refresh;
+ } TsLadybirdNavigationState;
+ 
+ extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
+@@ -905,6 +907,7 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         }
+         outln("TIER3: TermSurf Ladybird ABI load_finish url={}", wrapper->last_url);
+         wrapper->did_finish_load = true;
++        wrapper->has_committed_document = true;
+     };
+     wrapper->view->on_web_content_crashed = [wrapper] {
+         RendererCrash crash;
+@@ -1184,6 +1187,16 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_action(TsLadybirdView*
+         set_runtime_error(view->runtime, "navigation action is null");
+         return false;
+     }
++    if (!strcmp(action, "refresh")) {
++        if (!view->has_committed_document) {
++            set_runtime_error(view->runtime, "refresh navigation is unavailable");
++            return false;
++        }
++        view->did_finish_load = false;
++        view->did_crash = false;
++        view->view->reload();
++        return true;
++    }
+     int delta = 0;
+     if (!strcmp(action, "back"))
+         delta = -1;
+@@ -1225,10 +1238,14 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_navigation_state(TsLadybirdView c
+     if (!validate_view(const_cast<TsLadybirdView*>(view)))
+         return false;
+     if (view->did_crash)
++    {
++        out_state->can_refresh = view->has_committed_document;
+         return true;
++    }
+ 
+     out_state->can_go_back = view->view->navigate_back_action().enabled();
+     out_state->can_go_forward = view->view->navigate_forward_action().enabled();
++    out_state->can_refresh = view->has_committed_document;
+     return true;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

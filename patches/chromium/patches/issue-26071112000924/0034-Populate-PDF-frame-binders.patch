@@ -1,0 +1,138 @@
+From 2a87ad519684e81250ab1b7ebe1d7eec2c6351ee Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 29 May 2026 12:30:57 -0500
+Subject: [PATCH 034/119] Populate PDF frame binders
+
+The frame had no committed name,
+But SiteInstance knew the same.
+We followed that clue,
+Let binders flow through,
+And KeepAlive bowed out of blame.
+---
+ .../ts_extensions_browser_client.cc           |  5 ++
+ .../libtermsurf_chromium/ts_browser_client.cc | 72 ++++++++++++++++---
+ 2 files changed, 68 insertions(+), 9 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 1e018264f2..5babef1c76 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -21,6 +21,7 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/media_stream_request.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/site_instance.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_user_data.h"
+@@ -387,6 +388,10 @@ void TsExtensionsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+     mojo::BinderMapWithContext<RenderFrameHost*>* binder_map,
+     RenderFrameHost* render_frame_host,
+     const extensions::Extension* extension) const {
++  LOG(INFO) << "[issue-792-exp13] extensions-frame-binder-invoked frame_url="
++            << render_frame_host->GetLastCommittedURL() << " site_url="
++            << render_frame_host->GetSiteInstance()->GetSiteURL()
++            << " extension_id=" << extension->id() << " populate_called=1";
+   extensions::PopulateExtensionFrameBinders(binder_map, render_frame_host,
+                                             extension);
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 343e3747b4..8fc50d86c7 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -24,6 +24,7 @@
+ #include "extensions/browser/extension_registry.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_client.h"
++#include "extensions/browser/extensions_browser_interface_binders.h"
+ #include "extensions/browser/process_map.h"
+ #include "extensions/browser/renderer_startup_helper.h"
+ #include "extensions/common/api/mime_handler.mojom.h"
+@@ -50,6 +51,23 @@ bool IsTsPdfComponentExtension(const extensions::Extension* extension) {
+          extensions::Manifest::IsComponentLocation(extension->location());
+ }
+ 
++bool IsTsPdfComponentExtensionUrl(const GURL& url) {
++  return url.SchemeIs(extensions::kExtensionScheme) &&
++         url.host() == extension_misc::kPdfExtensionId;
++}
++
++const extensions::Extension* GetEnabledPdfExtension(
++    content::BrowserContext* browser_context) {
++  auto* registry = extensions::ExtensionRegistry::Get(browser_context);
++  if (!registry) {
++    return nullptr;
++  }
++
++  const extensions::Extension* extension =
++      registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
++  return IsTsPdfComponentExtension(extension) ? extension : nullptr;
++}
++
+ const extensions::Extension* GetExtensionForInitiatorOrigin(
+     content::BrowserContext* browser_context,
+     const std::optional<url::Origin>& request_initiator_origin) {
+@@ -103,15 +121,51 @@ void TsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+   // Call base class first to get NetworkHintsHandler etc.
+   ShellContentBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+       render_frame_host, map);
+-  if (auto* observer =
+-          extensions::ExtensionWebContentsObserver::GetForWebContents(
+-              WebContents::FromRenderFrameHost(render_frame_host))) {
+-    const extensions::Extension* extension =
+-        observer->GetExtensionFromFrame(render_frame_host, false);
+-    if (extension) {
+-      extensions::ExtensionsBrowserClient::Get()
+-          ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
+-                                                    extension);
++  WebContents* web_contents =
++      WebContents::FromRenderFrameHost(render_frame_host);
++  auto* observer =
++      extensions::ExtensionWebContentsObserver::GetForWebContents(web_contents);
++  const extensions::Extension* extension =
++      observer ? observer->GetExtensionFromFrame(render_frame_host, false)
++               : nullptr;
++  const bool is_pdf_extension = IsTsPdfComponentExtension(extension);
++  const std::string frame_url = render_frame_host->GetLastCommittedURL().spec();
++  const std::string site_url =
++      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++  const std::string extension_id = extension ? extension->id() : "none";
++
++  LOG(INFO) << "[issue-792-exp13] extension-frame-binder-check frame_url="
++            << frame_url << " site_url=" << site_url
++            << " observer=" << (observer ? 1 : 0)
++            << " extension_id=" << extension_id
++            << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0);
++
++  bool populated_extension_binders = false;
++  if (extension) {
++    extensions::ExtensionsBrowserClient::Get()
++        ->RegisterBrowserInterfaceBindersForFrame(map, render_frame_host,
++                                                  extension);
++    populated_extension_binders = true;
++    if (is_pdf_extension) {
++      LOG(INFO) << "[issue-792-exp13] pdf-extension-frame-binders frame_url="
++                << frame_url << " site_url=" << site_url
++                << " extension_id=" << extension->id() << " source=canonical";
++    }
++  }
++
++  if (!populated_extension_binders &&
++      (IsTsPdfComponentExtensionUrl(render_frame_host->GetLastCommittedURL()) ||
++       IsTsPdfComponentExtensionUrl(
++           render_frame_host->GetSiteInstance()->GetSiteURL()))) {
++    const extensions::Extension* pdf_extension = GetEnabledPdfExtension(
++        render_frame_host->GetProcess()->GetBrowserContext());
++    if (pdf_extension) {
++      extensions::PopulateExtensionFrameBinders(map, render_frame_host,
++                                                pdf_extension);
++      LOG(INFO) << "[issue-792-exp13] pdf-extension-frame-binders frame_url="
++                << frame_url << " site_url=" << site_url
++                << " extension_id=" << pdf_extension->id()
++                << " source=direct-populate";
+     }
+   }
+   // Add BadgeService stub (Issue 655).
+-- 
+2.54.0
+

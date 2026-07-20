@@ -1,0 +1,147 @@
+From b0ad4bef31459bd21178586ad3f4f1d44cbeee6c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 2 Jul 2026 04:26:55 -0500
+Subject: [PATCH 13/18] Add TermSurf crash callbacks
+
+WebContent took the stage,
+Then exited with flair.
+Girlbat caught the curtain fall,
+And filed a crash report there.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 64 ++++++++++++++++++-
+ 1 file changed, 63 insertions(+), 1 deletion(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 75114c87d6..e02aa8981a 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -87,6 +87,13 @@ struct JavaScriptDialogRequest {
+     ByteString default_prompt_text;
+ };
+ 
++struct RendererCrash {
++    ByteString termination_status;
++    int termination_status_code { 0 };
++    ByteString url;
++    bool can_reload { true };
++};
++
+ class TermSurfWebView final : public WebView::HeadlessWebView {
+ public:
+     static NonnullOwnPtr<TermSurfWebView> create(Core::AnonymousBuffer theme, Web::DevicePixelSize window_size)
+@@ -226,6 +233,7 @@ struct TsLadybirdView {
+     Vector<int> pending_cursor_changes;
+     Vector<ByteString> pending_target_urls;
+     Vector<JavaScriptDialogRequest> pending_javascript_dialog_requests;
++    Vector<RendererCrash> pending_renderer_crashes;
+     u64 next_javascript_dialog_request_id { 1 };
+     u64 active_javascript_dialog_request_id { 0 };
+     ByteString active_javascript_dialog_type;
+@@ -250,6 +258,13 @@ typedef struct TsLadybirdJavaScriptDialogRequest {
+     char default_prompt_text[1024];
+ } TsLadybirdJavaScriptDialogRequest;
+ 
++typedef struct TsLadybirdRendererCrash {
++    char termination_status[64];
++    int termination_status_code;
++    char url[1024];
++    bool can_reload;
++} TsLadybirdRendererCrash;
++
+ extern "C" TsLadybirdRuntime* ts_ladybird_runtime_create();
+ extern "C" void ts_ladybird_runtime_destroy(TsLadybirdRuntime*);
+ extern "C" bool ts_ladybird_runtime_pump(TsLadybirdRuntime*);
+@@ -270,6 +285,8 @@ extern "C" bool ts_ladybird_view_take_cursor_changed(TsLadybirdView*, int*);
+ extern "C" bool ts_ladybird_view_take_target_url_changed(TsLadybirdView*, char*, size_t);
+ extern "C" bool ts_ladybird_view_take_javascript_dialog_request(TsLadybirdView*, TsLadybirdJavaScriptDialogRequest*);
+ extern "C" bool ts_ladybird_view_reply_javascript_dialog(TsLadybirdView*, unsigned long long, bool, char const*);
++extern "C" bool ts_ladybird_view_take_renderer_crashed(TsLadybirdView*, TsLadybirdRendererCrash*);
++extern "C" bool ts_ladybird_view_crash_current_page_for_testing(TsLadybirdView*);
+ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+@@ -720,6 +737,8 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_cursor_changed(TsLadybirdVie
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_target_url_changed(TsLadybirdView*, char*, size_t);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_javascript_dialog_request(TsLadybirdView*, TsLadybirdJavaScriptDialogRequest*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_reply_javascript_dialog(TsLadybirdView*, unsigned long long, bool, char const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_renderer_crashed(TsLadybirdView*, TsLadybirdRendererCrash*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_crash_current_page_for_testing(TsLadybirdView*);
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ {
+@@ -728,7 +747,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-javascript-dialogs";
++    return "ladybird-a80d01fc-issue-0884-renderer-crashed";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -827,6 +846,7 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+     wrapper->pending_cursor_changes.clear();
+     wrapper->pending_target_urls.clear();
+     wrapper->pending_javascript_dialog_requests.clear();
++    wrapper->pending_renderer_crashes.clear();
+     wrapper->next_javascript_dialog_request_id = 1;
+     wrapper->active_javascript_dialog_request_id = 0;
+     wrapper->active_javascript_dialog_type = {};
+@@ -844,6 +864,17 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         }
+     };
+     wrapper->view->on_web_content_crashed = [wrapper] {
++        RendererCrash crash;
++        crash.termination_status = "crashed";
++        crash.termination_status_code = 0;
++        crash.url = wrapper->view->url().to_byte_string();
++        crash.can_reload = true;
++        outln("PROBE: TermSurf Ladybird ABI renderer_crashed url={}", crash.url);
++        if (wrapper->pending_renderer_crashes.size() >= 16) {
++            warnln("TermSurf Ladybird ABI renderer crash queue full; dropping url={}", crash.url);
++        } else {
++            wrapper->pending_renderer_crashes.append(move(crash));
++        }
+         wrapper->did_crash = true;
+         set_runtime_error(wrapper->runtime, "WebContent crashed");
+     };
+@@ -1215,6 +1246,37 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_reply_javascript_dialog(TsLadybir
+     return true;
+ }
+ 
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_take_renderer_crashed(TsLadybirdView* view, TsLadybirdRendererCrash* out_crash)
++{
++    if (!out_crash) {
++        set_runtime_error(view ? view->runtime : nullptr, "renderer crash output is null");
++        return false;
++    }
++
++    memset(out_crash, 0, sizeof(*out_crash));
++    if (!validate_view(view))
++        return false;
++    if (view->pending_renderer_crashes.is_empty())
++        return false;
++
++    auto crash = view->pending_renderer_crashes.take_first();
++    copy_c_string(out_crash->termination_status, sizeof(out_crash->termination_status), crash.termination_status);
++    out_crash->termination_status_code = crash.termination_status_code;
++    copy_c_string(out_crash->url, sizeof(out_crash->url), crash.url);
++    out_crash->can_reload = crash.can_reload;
++    return true;
++}
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_crash_current_page_for_testing(TsLadybirdView* view)
++{
++    if (!validate_view(view))
++        return false;
++
++    outln("PROBE: TermSurf Ladybird ABI crash_current_page_for_testing url={}", view->view->url().to_byte_string());
++    view->view->debug_request("crash-current-page"sv);
++    return true;
++}
++
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const* view)
+ {
+     if (!view)
+-- 
+2.54.0
+

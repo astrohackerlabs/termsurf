@@ -1,0 +1,251 @@
+From 708d9bfbf53d1909bfac3f94fb8325711461ef9b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 17:14:16 -0500
+Subject: [PATCH] Add split-pane-gap layout margin (default 2)
+
+Reserve empty space between split panes so borders stay fully visible.
+Keep the painted divider as a 1pt hairline; do not fill the gap with
+split-divider-color (avoids Exp 1 black-bar failure).
+---
+ macos/Sources/Features/Splits/SplitView.swift | 67 ++++++++++++++-----
+ .../Splits/TerminalSplitTreeView.swift        |  1 +
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 10 +++
+ .../Ghostty/Surface View/InspectorView.swift  |  7 +-
+ src/config/Config.zig                         | 14 ++++
+ 5 files changed, 80 insertions(+), 19 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/SplitView.swift b/macos/Sources/Features/Splits/SplitView.swift
+index a19fdca6a..a4f44ff42 100644
+--- a/macos/Sources/Features/Splits/SplitView.swift
++++ b/macos/Sources/Features/Splits/SplitView.swift
+@@ -3,15 +3,20 @@ import SwiftUI
+ /// A split view shows a left and right (or top and bottom) view with a divider in the middle to do resizing.
+ /// The terminlogy "left" and "right" is always used but for vertical splits "left" is "top" and "right" is "bottom".
+ ///
+-/// This view is purpose built for our use case and I imagine we'll continue to make it more configurable
+-/// as time goes on. For example, the splitter divider size and styling is all hardcoded.
++/// Inter-pane **margin** is `paneGap` (`split-pane-gap`): empty layout space so
++/// pane borders stay fully visible. Painted divider stays a 1 pt hairline
++/// (`split-divider-color`) and must not fill the gap (Exp 1 Fail lesson).
+ struct SplitView<L: View, R: View>: View {
+     /// Direction of the split
+     let direction: SplitViewDirection
+ 
+-    /// Divider color
++    /// Divider hairline color
+     let dividerColor: Color
+ 
++    /// Empty space between pane frames in points (`split-pane-gap`).
++    /// `0` keeps the historical tight hairline-only geometry.
++    let paneGap: CGFloat
++
+     /// Minimum increment (in points) that this split can be resized by, in
+     /// each direction. Both `height` and `width` should be whole numbers
+     /// greater than or equal to 1.0
+@@ -30,10 +35,27 @@ struct SplitView<L: View, R: View>: View {
+     /// The current fractional width of the split view. 0.5 means L/R are equally sized, for example.
+     @Binding var split: CGFloat
+ 
+-    /// The visible size of the splitter, in points. The invisible size is a transparent hitbox that can still
+-    /// be used for getting a resize handle. The total width/height of the splitter is the sum of both.
+-    private let splitterVisibleSize: CGFloat = 1
+-    private let splitterInvisibleSize: CGFloat = 6
++    /// Painted hairline only — never scales with `paneGap`.
++    private let splitterPaintSize: CGFloat = 1
++
++    /// Minimum drag hit thickness.
++    private let splitterHitMinimum: CGFloat = 6
++
++    /// Layout separation between pane frames.
++    /// gap == 0 → historical 1 pt paint reservation; gap > 0 → empty margin.
++    private var layoutSeparation: CGFloat {
++        paneGap > 0 ? paneGap : splitterPaintSize
++    }
++
++    private var splitterVisibleSize: CGFloat {
++        splitterPaintSize
++    }
++
++    /// Transparent hit beyond the hairline so total hit ≥ max(6, separation).
++    private var splitterInvisibleSize: CGFloat {
++        let hit = max(splitterHitMinimum, layoutSeparation)
++        return max(0, hit - splitterVisibleSize)
++    }
+ 
+     var body: some View {
+         GeometryReader { geo in
+@@ -42,6 +64,7 @@ struct SplitView<L: View, R: View>: View {
+             let splitterPoint = self.splitterPoint(for: geo.size, leftRect: leftRect)
+ 
+             ZStack(alignment: .topLeading) {
++                // Empty gap shows host/window background — do not fill with divider color.
+                 left
+                     .frame(width: leftRect.size.width, height: leftRect.size.height)
+                     .offset(x: leftRect.origin.x, y: leftRect.origin.y)
+@@ -73,6 +96,7 @@ struct SplitView<L: View, R: View>: View {
+         _ direction: SplitViewDirection,
+         _ split: Binding<CGFloat>,
+         dividerColor: Color,
++        paneGap: CGFloat = 2,
+         resizeIncrements: NSSize = .init(width: 1, height: 1),
+         @ViewBuilder left: (() -> L),
+         @ViewBuilder right: (() -> R),
+@@ -81,6 +105,7 @@ struct SplitView<L: View, R: View>: View {
+         self.direction = direction
+         self._split = split
+         self.dividerColor = dividerColor
++        self.paneGap = max(0, paneGap)
+         self.resizeIncrements = resizeIncrements
+         self.left = left()
+         self.right = right()
+@@ -106,15 +131,16 @@ struct SplitView<L: View, R: View>: View {
+     private func leftRect(for size: CGSize) -> CGRect {
+         // Initially the rect is the full size
+         var result = CGRect(x: 0, y: 0, width: size.width, height: size.height)
++        let half = layoutSeparation / 2
+         switch direction {
+         case .horizontal:
+             result.size.width *= split
+-            result.size.width -= splitterVisibleSize / 2
++            result.size.width -= half
+             result.size.width -= result.size.width.truncatingRemainder(dividingBy: self.resizeIncrements.width)
+ 
+         case .vertical:
+             result.size.height *= split
+-            result.size.height -= splitterVisibleSize / 2
++            result.size.height -= half
+             result.size.height -= result.size.height.truncatingRemainder(dividingBy: self.resizeIncrements.height)
+         }
+ 
+@@ -125,31 +151,36 @@ struct SplitView<L: View, R: View>: View {
+     private func rightRect(for size: CGSize, leftRect: CGRect) -> CGRect {
+         // Initially the rect is the full size
+         var result = CGRect(x: 0, y: 0, width: size.width, height: size.height)
++        // Full layoutSeparation between left trailing edge and right leading edge.
++        // (Historical tight path used paint/2 offsets; for gap==0 separation==paint so
++        // left+paint still leaves a 1pt hairline reservation matching prior feel.)
+         switch direction {
+         case .horizontal:
+-            // For horizontal layouts we offset the starting X by the left rect
+-            // and make the width fit the remaining space.
+-            result.origin.x += leftRect.size.width
+-            result.origin.x += splitterVisibleSize / 2
++            result.origin.x = leftRect.size.width + layoutSeparation
+             result.size.width -= result.origin.x
+ 
+         case .vertical:
+-            result.origin.y += leftRect.size.height
+-            result.origin.y += splitterVisibleSize / 2
++            result.origin.y = leftRect.size.height + layoutSeparation
+             result.size.height -= result.origin.y
+         }
+ 
+         return result
+     }
+ 
+-    /// Calculates the point at which the splitter should be rendered.
++    /// Hairline centered in the layout gap between panes.
+     private func splitterPoint(for size: CGSize, leftRect: CGRect) -> CGPoint {
+         switch direction {
+         case .horizontal:
+-            return CGPoint(x: leftRect.size.width, y: size.height / 2)
++            return CGPoint(
++                x: leftRect.size.width + layoutSeparation / 2,
++                y: size.height / 2
++            )
+ 
+         case .vertical:
+-            return CGPoint(x: size.width / 2, y: leftRect.size.height)
++            return CGPoint(
++                x: size.width / 2,
++                y: leftRect.size.height + layoutSeparation / 2
++            )
+         }
+     }
+ 
+diff --git a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+index 5fa12edeb..f8a46bc23 100644
+--- a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
++++ b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+@@ -70,6 +70,7 @@ private struct TerminalSplitSubtreeView: View {
+                     action(.resize(.init(node: node, ratio: $0)))
+                 }),
+                 dividerColor: ghostty.config.splitDividerColor,
++                paneGap: CGFloat(ghostty.config.splitPaneGap),
+                 resizeIncrements: .init(width: 1, height: 1),
+                 left: {
+                     TerminalSplitSubtreeView(node: split.left, action: action)
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 88297bfa0..7e449c7bd 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -650,6 +650,16 @@ extension Ghostty {
+             return value
+         }
+ 
++        /// Empty inter-pane margin in points (`split-pane-gap`). Default 2.
++        /// Does not thicken the painted divider hairline.
++        var splitPaneGap: Double {
++            guard let config = self.config else { return 2 }
++            var value: Double = 2
++            let key = "split-pane-gap"
++            _ = ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8)))
++            return value
++        }
++
+         /// Corner radius for multi-pane split borders.
+         ///
+         /// - `nil` = `auto` (match window `_cornerRadius` / product fallback)
+diff --git a/macos/Sources/Ghostty/Surface View/InspectorView.swift b/macos/Sources/Ghostty/Surface View/InspectorView.swift
+index e7320c782..891e445f4 100644
+--- a/macos/Sources/Ghostty/Surface View/InspectorView.swift	
++++ b/macos/Sources/Ghostty/Surface View/InspectorView.swift	
+@@ -26,7 +26,12 @@ extension Ghostty {
+                 if !surfaceView.inspectorVisible {
+                     SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
+                 } else {
+-                    SplitView(.vertical, $split, dividerColor: ghostty.config.splitDividerColor, left: {
++                    SplitView(
++                        .vertical,
++                        $split,
++                        dividerColor: ghostty.config.splitDividerColor,
++                        paneGap: CGFloat(ghostty.config.splitPaneGap),
++                        left: {
+                         SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
+                     }, right: {
+                         InspectorViewRepresentable(surfaceView: surfaceView)
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index b630b5eb3..5110c0f6c 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1094,6 +1094,17 @@ palette: Palette = .{},
+ /// Available since: 1.1.0
+ @"split-divider-color": ?Color = null,
+ 
++/// Empty layout space between adjacent split panes on macOS, in points.
++///
++/// This is **margin / air** between pane frames so full split borders remain
++/// visible. It is **not** the thickness of the painted divider hairline (that
++/// stays ~1 pt and uses `split-divider-color`). Do not confuse with
++/// `split-border-width` (in-pane stroke).
++///
++/// Defaults to **2**. Set to `0` for the historical tight hairline-only seam.
++/// Values outside `0`…`20` are clamped.
++@"split-pane-gap": f64 = 2,
++
+ /// The border color of the focused split pane. Specified as either hex
+ /// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+ ///
+@@ -4779,6 +4790,9 @@ pub fn finalize(self: *Config) !void {
+     // Clamp our split border width
+     self.@"split-border-width" = @min(10.0, @max(0, self.@"split-border-width"));
+ 
++    // Clamp inter-pane empty gap (macOS layout margin)
++    self.@"split-pane-gap" = @min(20.0, @max(0, self.@"split-pane-gap"));
++
+     // Clamp fixed split border corner radius (auto is unchanged)
+     switch (self.@"split-border-corner-radius") {
+         .auto => {},
+-- 
+2.50.1 (Apple Git-155)
+

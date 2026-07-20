@@ -1,0 +1,540 @@
+From b9b7c55cf257367d9343366d0d50514346a4d2da Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 23:58:31 -0500
+Subject: [PATCH 4/4] Route Gecko pointer streams natively
+
+A mouse once knocked on a DOM-shaped door,
+now widgets answer from the proper floor.
+Clicks, wheels, cursors, and links stay true,
+each tab keeps only what belongs to you.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 302 +++++++++---------
+ dom/interfaces/base/nsIRemoteTab.idl          |  10 +-
+ dom/ipc/BrowserHost.cpp                       |  16 +
+ dom/ipc/BrowserParent.cpp                     |  19 ++
+ dom/ipc/BrowserParent.h                       |   6 +
+ 5 files changed, 197 insertions(+), 156 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index a58f380fc948..40def14af705 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -207,6 +207,12 @@ async function runVisible(urlStr, headless, hold) {
+     features: "width=800,height=600,left=100,top=100",
+   });
+ 
++  if (Services.env.get("ASTROHACKER_GECKO_SURFACE_OWNER") === "hidden") {
++    // The product owns the visible pane geometry. Firefox's ordinary 500px
++    // browser-window minimum must not widen the hidden compositor owner.
++    win.document.documentElement.style.setProperty("--window-min-width", "1px");
++  }
++
+   // Ensure size/position
+   try {
+     win.resizeTo(800, 600);
+@@ -558,9 +564,8 @@ function startInputControlLoop(win, browser) {
+   dump(`input_control=1 path=${path}\n`);
+   dump("native_widget_or_cgevent_path=1 path=sendNativeMouseEvent\n");
+ 
+-  // Content-process DOM dispatch (reliable page effects) + chrome native path.
+-  ensureDomDispatchFrameScript(browser);
+   ensureGenericTextInputScript(browser);
++  ensureGenericPointerInputScript(browser);
+ 
+   let lastSeq = 0;
+   let focused = true;
+@@ -933,85 +938,112 @@ function ensureGenericTextInputScript(browser) {
+   }
+ }
+ 
+-function ensureDomDispatchFrameScript(browser) {
+-  if (browser._astrohackerDomInput) {
++function ensureGenericPointerInputScript(browser) {
++  if (browser._astrohackerPointerInput) {
+     return;
+   }
+-  // Compact one-line frame script (same reliability class as ah-select /
+-  // ah-workflow). Prefer content.synthesizeMouseEvent with
+-  // isDOMEventSynthesized:false for real page effects (form-selection path).
+-  const script =
+-    'addMessageListener("astrohacker-dom-input",function(msg){' +
+-    "var d=msg.data||{};" +
+-    'var result={ok:0,error:"",title:"",status:"",input_value:""};' +
+-    "try{" +
+-    "var doc=content.document;" +
+-    "var x=parseFloat(d.x)||0,y=parseFloat(d.y)||0;" +
+-    "var wu=content.windowUtils;" +
+-    "function centerOf(id){var el=doc.getElementById(id);if(!el)return null;var r=el.getBoundingClientRect();return{el:el,x:r.left+r.width/2,y:r.top+r.height/2};}" +
+-    "function synth(type,sx,sy,btn,cc,mods){" +
+-    'try{if(typeof content.synthesizeMouseEvent==="function"){' +
+-    "content.synthesizeMouseEvent(type,sx,sy,{button:btn|0,clickCount:cc|1,modifiers:mods|0},{isDOMEventSynthesized:false,isWidgetEventSynthesized:false});return 1;}" +
+-    "}catch(e){}" +
+-    "try{if(wu&&wu.sendMouseEvent){wu.sendMouseEvent(type,sx,sy,btn|0,cc|1,mods|0,false,0,0,false,false);return 1;}}catch(e2){}" +
+-    "try{var t=doc.elementFromPoint(sx,sy)||doc.body;t.dispatchEvent(new content.MouseEvent(type,{bubbles:true,cancelable:true,view:content,clientX:sx,clientY:sy,button:btn|0,detail:cc|1}));return 1;}catch(e3){return 0;}" +
+-    "}" +
+-    'if(d.op==="mouse"||d.op==="mousemove"){' +
+-    'var type=d.op==="mousemove"?"mousemove":(d.type||"mousedown");' +
+-    'if(type==="down")type="mousedown";if(type==="up")type="mouseup";' +
+-    "var btn=d.button|0,cc=d.clickCount|1,mods=d.modifiers|0;" +
+-    "var hit=null;" +
+-    'if(d.op==="mousemove"||type==="mousemove"){hit=centerOf("hover-target");}' +
+-    'else if(btn===2){hit=centerOf("click-target");}' +
+-    'else if(x>=240){hit=centerOf("drag-target");}' +
+-    'else{hit=centerOf("click-target");}' +
+-    "if(hit){x=hit.x;y=hit.y;}" +
+-    "var delivered=synth(type,x,y,btn,cc,mods);" +
+-    'if(type==="mouseup"&&cc>=1){synth("click",x,y,btn,1,mods);}' +
+-    'if(type==="mouseup"&&cc>=2){synth("dblclick",x,y,btn,2,mods);}' +
+-    'if((type==="mousedown"||type==="mouseup")&&btn===2){try{(hit&&hit.el?hit.el:doc.elementFromPoint(x,y)||doc.body).dispatchEvent(new content.MouseEvent("contextmenu",{bubbles:true,cancelable:true,button:2,clientX:x,clientY:y}));}catch(e){}}' +
+-    'result.ok=delivered?1:0;result.error="mouse_"+type+"_btn"+btn+(hit?("_hit="+hit.el.id):"_nohit");' +
+-    '}else if(d.op==="wheel"){' +
+-    'var box=doc.getElementById("scroll-box")||doc.elementFromPoint(x,y)||doc.body;' +
+-    'try{box.dispatchEvent(new content.WheelEvent("wheel",{bubbles:true,cancelable:true,view:content,clientX:x,clientY:y,deltaX:d.dx||0,deltaY:d.dy||0,deltaMode:0}));}catch(e){}' +
+-    "try{if(box&&box.scrollTop!==undefined)box.scrollTop+=Math.abs(d.dy||40)||40;}catch(e2){}" +
+-    'result.ok=1;result.error="wheel";' +
+-    '}else if(d.op==="key"){' +
+-    'var ktype=d.type||"keydown";if(ktype==="down")ktype="keydown";if(ktype==="up")ktype="keyup";if(ktype==="repeat")ktype="keydown";' +
+-    'var key=(d.utf8&&d.utf8!=="-")?d.utf8:"";' +
+-    'var inp=doc.getElementById("t");try{if(inp)inp.focus();}catch(e){}' +
+-    "var active=inp||doc.activeElement||doc.body;" +
+-    'try{active.dispatchEvent(new content.KeyboardEvent(ktype,{bubbles:true,cancelable:true,view:content,key:key||"Unidentified",code:key?("Key"+String(key).toUpperCase()):"",keyCode:d.keyCode|0,charCode:d.charCode|0,repeat:d.type==="repeat",shiftKey:!!(d.modifiers&1),ctrlKey:!!(d.modifiers&2),altKey:!!(d.modifiers&4),metaKey:!!(d.modifiers&8)}));}catch(e){}' +
+-    'if(ktype==="keydown"&&key&&inp&&!(d.modifiers&1)&&key.toLowerCase()!=="x"){try{inp.value=(inp.value||\"\")+key;inp.dispatchEvent(new content.InputEvent(\"input\",{bubbles:true,data:key,inputType:\"insertText\"}));}catch(e){try{inp.dispatchEvent(new content.Event(\"input\",{bubbles:true}));}catch(e2){}}}' +
+-    'result.ok=1;result.error="key_"+ktype;' +
+-    '}else if(d.op==="composition"){' +
+-    'var phase=d.phase||d.type||"end";var data=d.data||d.utf8||"";if(data==="-")data="";' +
+-    'var inp=doc.getElementById("t")||doc.activeElement;try{if(inp&&inp.focus)inp.focus();}catch(e){}' +
+-    'var evType=phase==="start"?"compositionstart":(phase==="update"?"compositionupdate":"compositionend");' +
+-    'try{inp.dispatchEvent(new content.CompositionEvent(evType,{bubbles:true,cancelable:true,data:data}));}catch(e){try{var ev=doc.createEvent("CompositionEvent");ev.initCompositionEvent(evType,true,true,content,data);inp.dispatchEvent(ev);}catch(e2){}}' +
+-    'try{inp.setAttribute("data-ime-phase",phase);inp.setAttribute("data-ime-data",data||"");}catch(e){}' +
+-    'if(phase==="end"){try{if(data)inp.value=(inp.value||"")+data;inp.dispatchEvent(new content.InputEvent("input",{bubbles:true,data:data||"",inputType:"insertCompositionText"}));}catch(e){}}' +
+-    'result.ok=1;result.error="composition_"+phase;' +
+-    '}else if(d.op==="click_id"){' +
+-    'var el=doc.getElementById(d.id||"");if(el){try{el.click();}catch(e){}result.ok=1;result.error="click_id";}else{result.error="no_el";}' +
+-    '}else if(d.op==="query"){result.ok=1;}' +
+-    'else if(d.op==="select"){result.ok=1;result.error="select_legacy_use_ah_select";}' +
+-    'else{result.error="unknown_op";}' +
+-    'try{result.title=doc.title||"";}catch(e){}' +
+-    'try{var st=doc.getElementById("status");if(st)result.status=(st.textContent||"").trim();}catch(e){}' +
+-    'try{var iv=doc.getElementById("edit")||doc.getElementById("t");if(iv)result.input_value=(iv.value||"").slice(0,120);}catch(e){}' +
+-    "}catch(e){result.error=String(e);result.ok=0;}" +
+-    'sendAsyncMessage("astrohacker-dom-input-result",result);' +
+-    "});";
++  const script = `
++    addMessageListener("astrohacker-pointer-input", async function(msg) {
++      var d = msg.data || {};
++      var result = { ok: 0, error: "", title: "", status: "", input_value: "" };
++      try {
++        var wu = content.windowUtils;
++        if (!wu) throw new Error("no_window_utils");
++        function finite(value, label) {
++          value = Number(value);
++          if (!Number.isFinite(value)) throw new Error("invalid_" + label);
++          return value;
++        }
++        function nativeModifiers(shared) {
++          shared = Number(shared);
++          if (!Number.isSafeInteger(shared) || shared < 0 || (shared & ~0x1cf))
++            throw new Error("invalid_modifiers");
++          var native = 0;
++          if (shared & 1) native |= wu.MODIFIER_SHIFT;
++          if (shared & 2) native |= wu.MODIFIER_CONTROL;
++          if (shared & 4) native |= wu.MODIFIER_ALT;
++          if (shared & 8) native |= wu.MODIFIER_META;
++          return native;
++        }
++        var x = finite(d.x, "x"), y = finite(d.y, "y");
++        var modifiers = nativeModifiers(d.modifiers);
++        if (d.op === "mouse" || d.op === "mousemove") {
++          var type = d.op === "mousemove" ? "mousemove" : String(d.type || "");
++          if (type === "down") type = "mousedown";
++          if (type === "up") type = "mouseup";
++          if (type !== "mousedown" && type !== "mouseup" && type !== "mousemove")
++            throw new Error("unknown_mouse_type");
++          var button = Number(d.button);
++          var clickCount = d.op === "mousemove" ? 0 : Number(d.clickCount);
++          if (!Number.isSafeInteger(button) || button < 0 || button > 2)
++            throw new Error("invalid_button");
++          if (!Number.isSafeInteger(clickCount) || clickCount < 0 ||
++              (d.op !== "mousemove" && clickCount < 1))
++            throw new Error("invalid_click_count");
++          if (typeof content.synthesizeMouseEvent !== "function")
++            throw new Error("no_widget_mouse_api");
++          var shared = Number(d.modifiers), buttons = 0;
++          if (shared & 64) buttons |= 1;
++          if (shared & 128) buttons |= 4;
++          if (shared & 256) buttons |= 2;
++          content.synthesizeMouseEvent(type, x, y, {
++            identifier: wu.DEFAULT_MOUSE_POINTER_ID,
++            button,
++            buttons,
++            clickCount,
++            modifiers,
++            inputSource: content.MouseEvent.MOZ_SOURCE_MOUSE,
++          }, {
++            isDOMEventSynthesized: false,
++            isWidgetEventSynthesized: false,
++            isAsyncEnabled: false,
++          });
++          result.ok = 1;
++          result.error = "widget_pointer_" + type + "_button=" + button +
++                         "_clicks=" + clickCount + "_shared_modifiers=" + Number(d.modifiers);
++        } else if (d.op === "wheel") {
++          var dx = finite(d.dx, "dx"), dy = finite(d.dy, "dy");
++          var phase = Number(d.scroll_phase), momentumPhase = Number(d.momentum_phase);
++          var precise = !!d.precise;
++          if (!Number.isSafeInteger(phase) || !Number.isSafeInteger(momentumPhase) ||
++              phase < 0 || momentumPhase < 0 || (phase & ~63) || (momentumPhase & ~63))
++            throw new Error("invalid_scroll_phase");
++          if (dx === 0 && dy === 0 && phase === 0 && momentumPhase === 0)
++            throw new Error("empty_scroll_event");
++          var options = 0;
++          if (precise) options |= wu.WHEEL_EVENT_CAUSED_BY_NO_LINE_OR_PAGE_DELTA_DEVICE;
++          if (momentumPhase) options |= wu.WHEEL_EVENT_CAUSED_BY_MOMENTUM;
++          var lineX = precise ? 0 : (dx > 0 ? Math.floor(dx) : Math.ceil(dx));
++          var lineY = precise ? 0 : (dy > 0 ? Math.floor(dy) : Math.ceil(dy));
++          var scale = content.devicePixelRatio || 1;
++          wu.sendWheelEvent(x, y, dx * scale, dy * scale, 0,
++                            content.WheelEvent.DOM_DELTA_PIXEL,
++                            modifiers, lineX, lineY, options);
++          result.ok = 1;
++          result.error = "widget_wheel_phase=" + phase + "_momentum_phase=" +
++                         momentumPhase + "_precise=" + (precise ? 1 : 0) +
++                         "_shared_modifiers=" + Number(d.modifiers);
++        } else {
++          throw new Error("unknown_pointer_op");
++        }
++        await new Promise(resolve =>
++          content.requestAnimationFrame(() => content.requestAnimationFrame(resolve)));
++        result.title = content.document ? content.document.title || "" : "";
++      } catch (e) {
++        result.error = String(e);
++        result.ok = 0;
++      }
++      sendAsyncMessage("astrohacker-pointer-input-result", result);
++    });`;
+   try {
+     browser.messageManager.loadFrameScript(
+       "data:," + encodeURIComponent(script),
+       true
+     );
+-    browser._astrohackerDomInput = true;
+-    dump("input_dom_frame_script=1\n");
++    browser._astrohackerPointerInput = true;
++    dump("pointer_input_widget_frame_script=1\n");
+   } catch (e) {
+-    dump(`input_dom_frame_script=0 error=${String(e)}\n`);
++    dump(`pointer_input_widget_frame_script=0 error=${String(e)}\n`);
+   }
+ }
+ 
+@@ -1090,28 +1122,6 @@ function contentToScreenDevice(win, browser, x, y) {
+   return { screenX, screenY, scale, rect };
+ }
+ 
+-function applyNativeMouse(win, browser, nativeMsg, button, x, y, modifiers) {
+-  try {
+-    let { screenX, screenY } = contentToScreenDevice(win, browser, x, y);
+-    let utils = win.windowUtils;
+-    utils.sendNativeMouseEvent(
+-      screenX,
+-      screenY,
+-      nativeMsg,
+-      button | 0,
+-      modifiers | 0,
+-      win.document.documentElement
+-    );
+-    dump(
+-      `native_mouse msg=${nativeMsg} screen=${screenX},${screenY} content=${x},${y} button=${button}\n`
+-    );
+-    return true;
+-  } catch (e) {
+-    dump(`native_mouse_error=${String(e)}\n`);
+-    return false;
+-  }
+-}
+-
+ function processInputControlOnce(path, browser, win, state) {
+   let raw = readFileSync(path);
+   if (!raw) {
+@@ -1149,10 +1159,18 @@ function processInputControlOnce(path, browser, win, state) {
+         title = browser.contentTitle || win.gBrowser?.contentTitle || "";
+       } catch (e) {}
+     }
++    let cursorType = -1;
++    let targetUrl = "";
++    try {
++      let remoteTab = browser.frameLoader?.remoteTab;
++      cursorType = remoteTab?.astrohackerCursorType ?? -1;
++      targetUrl = remoteTab?.astrohackerTargetUrl || "";
++    } catch (e) {}
+     let body =
+       `seq=${seq} ok=${result.ok ? 1 : 0} title_enc=${encodeURIComponent(title)} ` +
+       `status_enc=${encodeURIComponent(status)} input_value_enc=${encodeURIComponent(inputValue)} ` +
+       `pid=${pid} content_w=${contentW} content_h=${contentH} ` +
++      `cursor_type=${cursorType} target_url_enc=${encodeURIComponent(targetUrl)} ` +
+       `native_widget_path=1 focused=${state.focused ? 1 : 0} ` +
+       `error=${(result.error || "").replace(/\s+/g, "_")}\n`;
+     writeFileSync(statusPath, body);
+@@ -1864,7 +1882,8 @@ function processInputControlOnce(path, browser, win, state) {
+     return;
+   }
+ 
+-  if (!state.focused && op !== "query") {
++  const pointerOp = op === "mousemove" || op === "mouse" || op === "wheel";
++  if (!state.focused && op !== "query" && !pointerOp) {
+     writeStatus({
+       ok: 0,
+       title: "",
+@@ -1915,57 +1934,24 @@ function processInputControlOnce(path, browser, win, state) {
+   let end = cmd.end || "";
+   let expect = cmd.expect || "";
+   let textPath = op === "key" || op === "text_input" || op === "query";
++  let pointerPath = op === "mouse" || op === "mousemove" || op === "wheel";
++  let scrollPhase = parseInt(cmd.phase || "0", 10);
++  let momentumPhase = parseInt(cmd.momentum_phase || "0", 10);
++  let precise = cmd.precise === "1" || cmd.precise === "true";
+ 
+-  // Chrome native path (widget-level).
+-  try {
+-    if (textPath) {
+-      // Hidden-owner text/key delivery is content-relative through the
+-      // dedicated widget bridge below; never activate the chrome window.
+-    } else {
+-      let utils = win.windowUtils;
+-      if (op === "mouse") {
+-        let native =
+-          type === "mouseup" || type === "up"
+-            ? utils.NATIVE_MOUSE_MESSAGE_BUTTON_UP
+-            : utils.NATIVE_MOUSE_MESSAGE_BUTTON_DOWN;
+-        applyNativeMouse(win, browser, native, button, x, y, modifiers);
+-      } else if (op === "mousemove") {
+-        applyNativeMouse(
+-          win,
+-          browser,
+-          utils.NATIVE_MOUSE_MESSAGE_MOVE,
+-          0,
+-          x,
+-          y,
+-          modifiers
+-        );
+-      } else if (op === "wheel") {
+-        // Prefer native scroll if available; always also DOM wheel below.
+-        applyNativeMouse(
+-          win,
+-          browser,
+-          utils.NATIVE_MOUSE_MESSAGE_MOVE,
+-          0,
+-          x,
+-          y,
+-          modifiers
+-        );
+-      } else if (op === "key") {
+-        try {
+-          // sendNativeKeyEvent(layout, nativeKeyCode, modifiers, chars, unmodified)
+-          let ch = utf8 && utf8 !== "-" ? utf8 : "";
+-          utils.sendNativeKeyEvent(0, keyCode, modifiers, ch, ch);
+-        } catch (e) {
+-          dump(`native_key_error=${String(e)}\n`);
+-        }
+-      }
+-    }
+-  } catch (e) {
+-    dump(`native_path_error=${String(e)}\n`);
++  if (!textPath && !pointerPath) {
++    writeStatus({
++      ok: 0,
++      title: "",
++      status: "",
++      input_value: "",
++      error: "unknown_input_operation",
++    });
++    return;
+   }
+ 
+-  // Content DOM dispatch (synchronous status via async message + short wait
+-  // handled by writing a provisional status, then updating when reply arrives).
++  // Hidden-owner text/key/pointer delivery is content-relative through the
++  // dedicated widget bridges; never use owner-window screen coordinates.
+   let payload = {
+     op,
+     type,
+@@ -1981,6 +1967,9 @@ function processInputControlOnce(path, browser, win, state) {
+     modifiers,
+     dx,
+     dy,
++    scroll_phase: scrollPhase,
++    momentum_phase: momentumPhase,
++    precise,
+     keyCode,
+     charCode,
+     utf8,
+@@ -1996,18 +1985,21 @@ function processInputControlOnce(path, browser, win, state) {
+ 
+   let got = false;
+   let best = {
+-    ok: textPath ? 0 : 1,
++    ok: textPath || pointerPath ? 0 : 1,
+     title: "",
+     status: "",
+     input_value: "",
+     error: "",
+   };
+-  let messageName = textPath
+-    ? "astrohacker-text-input"
+-    : "astrohacker-dom-input";
+-  let resultName = textPath
+-    ? "astrohacker-text-input-result"
+-    : "astrohacker-dom-input-result";
++  let messageName = "";
++  let resultName = "";
++  if (textPath) {
++    messageName = "astrohacker-text-input";
++    resultName = "astrohacker-text-input-result";
++  } else if (pointerPath) {
++    messageName = "astrohacker-pointer-input";
++    resultName = "astrohacker-pointer-input-result";
++  }
+   let listener = msg => {
+     if (got && msg.data && msg.data.title) {
+       // Prefer richer content result if it arrives after poll write.
+@@ -2024,6 +2016,7 @@ function processInputControlOnce(path, browser, win, state) {
+ 
+   try {
+     if (textPath) ensureGenericTextInputScript(browser);
++    if (pointerPath) ensureGenericPointerInputScript(browser);
+     browser.messageManager.addMessageListener(resultName, listener);
+     browser.messageManager.sendAsyncMessage(messageName, payload);
+   } catch (e) {
+@@ -2072,15 +2065,14 @@ function processInputControlOnce(path, browser, win, state) {
+             if (textPath) {
+               browser._astrohackerTextInput = false;
+               ensureGenericTextInputScript(browser);
+-            } else {
+-              browser._astrohackerDomInput = false;
+-              ensureDomDispatchFrameScript(browser);
++            } else if (pointerPath) {
++              browser._astrohackerPointerInput = false;
++              ensureGenericPointerInputScript(browser);
+             }
+           } catch (e) {}
+         } else if (!best.error) {
+           best.error = "got_frame";
+         }
+-        if (!textPath) best.ok = 1;
+         writeStatus(best);
+       }
+     },
+diff --git a/dom/interfaces/base/nsIRemoteTab.idl b/dom/interfaces/base/nsIRemoteTab.idl
+index 457bbdb2d9a3..64cedfa47675 100644
+--- a/dom/interfaces/base/nsIRemoteTab.idl
++++ b/dom/interfaces/base/nsIRemoteTab.idl
+@@ -10,7 +10,7 @@ webidl Element;
+ webidl WindowGlobalParent;
+ webidl BrowsingContext;
+ 
+-[builtinclass, scriptable, uuid(f4e47650-62bb-4b8d-90af-4cd306a66e6b)]
++[builtinclass, scriptable, uuid(c4958575-1bfe-4d2e-8455-6d13c23156ad)]
+ interface nsIRemoteTab : nsISupports
+ {
+   /**
+@@ -55,6 +55,14 @@ interface nsIRemoteTab : nsISupports
+    */
+   void astrohackerSetInputActive(in boolean aActive);
+ 
++  /**
++   * Pointer feedback reported by this tab's real remote-content callbacks.
++   * Cursor values use the TermSurf protocol map: 0=arrow, 2=pointing hand,
++   * 3=I-beam.  Unsupported Gecko cursor shapes are reported as -1.
++   */
++  readonly attribute long astrohackerCursorType;
++  readonly attribute AString astrohackerTargetUrl;
++
+   readonly attribute uint64_t tabId;
+ 
+   readonly attribute uint64_t contentProcessId;
+diff --git a/dom/ipc/BrowserHost.cpp b/dom/ipc/BrowserHost.cpp
+index 2f59969fdeb6..db1b92a915ed 100644
+--- a/dom/ipc/BrowserHost.cpp
++++ b/dom/ipc/BrowserHost.cpp
+@@ -190,6 +190,22 @@ BrowserHost::AstrohackerSetInputActive(bool aActive) {
+   return NS_OK;
+ }
+ 
++NS_IMETHODIMP
++BrowserHost::GetAstrohackerCursorType(int32_t* aCursorType) {
++  *aCursorType = mRoot ? mRoot->AstrohackerCursorType() : -1;
++  return NS_OK;
++}
++
++NS_IMETHODIMP
++BrowserHost::GetAstrohackerTargetUrl(nsAString& aTargetUrl) {
++  if (!mRoot) {
++    aTargetUrl.Truncate();
++    return NS_OK;
++  }
++  mRoot->GetAstrohackerTargetUrl(aTargetUrl);
++  return NS_OK;
++}
++
+ /* readonly attribute uint64_t tabId; */
+ NS_IMETHODIMP
+ BrowserHost::GetTabId(uint64_t* aTabId) {
+diff --git a/dom/ipc/BrowserParent.cpp b/dom/ipc/BrowserParent.cpp
+index b278f7ba0118..c2884170886a 100644
+--- a/dom/ipc/BrowserParent.cpp
++++ b/dom/ipc/BrowserParent.cpp
+@@ -2419,8 +2419,27 @@ mozilla::ipc::IPCResult BrowserParent::RecvSetCursor(
+   return IPC_OK();
+ }
+ 
++int32_t BrowserParent::AstrohackerCursorType() const {
++  switch (mCursor.mDefaultCursor) {
++    case eCursor_standard:
++      return 0;
++    case eCursor_hyperlink:
++      return 2;
++    case eCursor_select:
++    case eCursor_vertical_text:
++      return 3;
++    default:
++      return -1;
++  }
++}
++
++void BrowserParent::GetAstrohackerTargetUrl(nsAString& aTargetUrl) const {
++  aTargetUrl = mAstrohackerTargetUrl;
++}
++
+ mozilla::ipc::IPCResult BrowserParent::RecvSetLinkStatus(
+     const nsString& aStatus) {
++  mAstrohackerTargetUrl = aStatus;
+   nsCOMPtr<nsIXULBrowserWindow> xulBrowserWindow = GetXULBrowserWindow();
+   if (!xulBrowserWindow) {
+     return IPC_OK();
+diff --git a/dom/ipc/BrowserParent.h b/dom/ipc/BrowserParent.h
+index 9f65b8537e4e..91b90445e167 100644
+--- a/dom/ipc/BrowserParent.h
++++ b/dom/ipc/BrowserParent.h
+@@ -572,6 +572,9 @@ class BrowserParent final : public PBrowserParent,
+ 
+   void SendMouseWheelEvent(WidgetWheelEvent& aEvent);
+ 
++  int32_t AstrohackerCursorType() const;
++  void GetAstrohackerTargetUrl(nsAString& aTargetUrl) const;
++
+   mozilla::ipc::IPCResult RecvSynthesizedEventResponse(
+       const uint64_t& aCallbackId);
+ 
+@@ -967,6 +970,9 @@ class BrowserParent final : public PBrowserParent,
+   // tab, it should take this appearance.
+   nsIWidget::Cursor mCursor;
+ 
++  // Cached link target from BrowserChild for the owning Astrohacker tab.
++  nsString mAstrohackerTargetUrl;
++
+   nsTArray<nsString> mVerifyDropLinks;
+ 
+ #ifdef DEBUG
+-- 
+2.54.0
+

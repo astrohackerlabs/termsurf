@@ -1,0 +1,130 @@
+From 507c0d7ea95d92a4dbf6ee67f39361bb5a141901 Mon Sep 17 00:00:00 2001
+From: Astrohacker <astrohacker@local>
+Date: Sat, 11 Jul 2026 20:29:26 -0500
+Subject: [PATCH 2/6] Bug Astrohacker 932: fix windowless probe timer and
+ markers
+
+Use nsITimer instead of setTimeout; wait for title/body; dump fixture markers.
+---
+ .../AstrohackerWindowlessProbe.sys.mjs        | 52 ++++++++++++-------
+ 1 file changed, 34 insertions(+), 18 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+index ed059a4d1837..35235577d9ed 100644
+--- a/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerWindowlessProbe.sys.mjs
+@@ -4,7 +4,6 @@
+ 
+ /**
+  * Private Astrohacker Exp4 probe: --astrohacker-windowless-probe=<url>
+- * Creates a windowless browser, loads URL, dumps markers to stdout, quits.
+  */
+ 
+ export class CommandLineHandler {
+@@ -30,12 +29,11 @@ export class CommandLineHandler {
+     dump("init_ok=1\n");
+     dump("main_thread=1\n");
+     dump("flag=--astrohacker-windowless-probe\n");
+-    dump("profile_probe_start=1\n");
+ 
+     Services.startup.enterLastWindowClosingSurvivalArea();
+     runWindowlessProbe(urlParam)
+       .catch(err => {
+-        dump(`probe_error=${err}\n`);
++        dump(`probe_error=${String(err)}\n`);
+         dump("windowless_load_ok=0\n");
+       })
+       .finally(() => {
+@@ -47,6 +45,17 @@ export class CommandLineHandler {
+   }
+ }
+ 
++function delay(ms) {
++  return new Promise(resolve => {
++    let timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++    timer.initWithCallback(
++      () => resolve(),
++      ms,
++      Ci.nsITimer.TYPE_ONE_SHOT
++    );
++  });
++}
++
+ async function runWindowlessProbe(urlStr) {
+   dump("state=create_windowless\n");
+   let wl = Services.appShell.createWindowlessBrowser(/* isChrome */ false);
+@@ -78,7 +87,7 @@ async function runWindowlessProbe(urlStr) {
+         try {
+           webProgress.removeProgressListener(listener);
+         } catch (e) {}
+-        resolve();
++        resolve("stop");
+       },
+       onLocationChange() {},
+       onProgressChange() {},
+@@ -100,17 +109,11 @@ async function runWindowlessProbe(urlStr) {
+   };
+   webNav.loadURI(uri, loadURIOptions);
+ 
+-  // Bound wait 60s
+-  let timedOut = false;
+-  let timer = new Promise(resolve => {
+-    // eslint-disable-next-line mozilla/no-arbitrary-setTimeout
+-    setTimeout(() => {
+-      timedOut = true;
+-      resolve();
+-    }, 60000);
+-  });
+-  await Promise.race([loadDone, timer]);
+-  if (timedOut) {
++  let outcome = await Promise.race([
++    loadDone,
++    delay(60000).then(() => "timeout"),
++  ]);
++  if (outcome === "timeout") {
+     dump("timeout=1\n");
+     dump("windowless_load_ok=0\n");
+     try {
+@@ -119,6 +122,9 @@ async function runWindowlessProbe(urlStr) {
+     return;
+   }
+ 
++  // Allow title to settle
++  await delay(100);
++
+   let finalUri = webNav.currentURI ? webNav.currentURI.spec : "";
+   dump(`final_uri=${finalUri}\n`);
+   let title = "";
+@@ -128,7 +134,17 @@ async function runWindowlessProbe(urlStr) {
+     title = "";
+   }
+   dump(`title=${title}\n`);
+-  if (title.includes("EXP3_FIXTURE_OK") || title === "EXP3_FIXTURE_OK") {
++  let body = "";
++  try {
++    body = wl.document?.body?.textContent || "";
++  } catch (e) {
++    body = "";
++  }
++  dump(`body_len=${body.length}\n`);
++  if (
++    title.includes("EXP3_FIXTURE_OK") ||
++    body.includes("EXP3_FIXTURE_OK")
++  ) {
+     dump("EXP3_FIXTURE_OK\n");
+     dump("fixture_marker=1\n");
+   } else {
+@@ -140,8 +156,8 @@ async function runWindowlessProbe(urlStr) {
+   } catch (e) {}
+   dump("teardown_ok=1\n");
+   if (
+-    finalUri &&
+-    (title.includes("EXP3_FIXTURE_OK") || title === "EXP3_FIXTURE_OK")
++    finalUri.includes("fixture.html") &&
++    (title.includes("EXP3_FIXTURE_OK") || body.includes("EXP3_FIXTURE_OK"))
+   ) {
+     dump("windowless_load_ok=1\n");
+   } else {
+-- 
+2.54.0
+

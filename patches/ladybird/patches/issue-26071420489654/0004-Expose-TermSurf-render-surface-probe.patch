@@ -1,0 +1,213 @@
+From 91ff1318520456ad43bda59a481f59d9e8966cae Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 1 Jul 2026 22:19:37 -0500
+Subject: [PATCH 04/18] Expose TermSurf render surface probe
+
+The headless view had pixels to spare,
+A secret surface hiding there.
+Now Girlbat asks with C-shaped grace,
+And finds the buffer's painted face.
+---
+ .../LibTermSurfLadybird/TermSurfLadybird.cpp  | 122 +++++++++++++++++-
+ 1 file changed, 115 insertions(+), 7 deletions(-)
+
+diff --git a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+index 79afa8e111..0800529292 100644
+--- a/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
++++ b/Libraries/LibTermSurfLadybird/TermSurfLadybird.cpp
+@@ -12,6 +12,7 @@
+ #include <LibCore/AnonymousBuffer.h>
+ #include <LibCore/EventLoop.h>
+ #include <LibCore/System.h>
++#include <LibGfx/SharedImageBuffer.h>
+ #include <LibGfx/SystemTheme.h>
+ #include <LibMain/Main.h>
+ #include <LibURL/Parser.h>
+@@ -44,6 +45,72 @@ private:
+     }
+ };
+ 
++struct RenderSurfaceProbe {
++    bool has_surface { false };
++    bool can_export_shared_image { false };
++    int pixel_width { 0 };
++    int pixel_height { 0 };
++    u64 generation { 0 };
++    bool ready_to_paint_seen { false };
++    bool has_usable_bitmap { false };
++};
++
++class TermSurfWebView final : public WebView::HeadlessWebView {
++public:
++    static NonnullOwnPtr<TermSurfWebView> create(Core::AnonymousBuffer theme, Web::DevicePixelSize window_size)
++    {
++        auto view = adopt_own(*new TermSurfWebView(move(theme), window_size));
++        view->initialize_client(CreateNewClient::Yes);
++        return view;
++    }
++
++    RenderSurfaceProbe render_surface_probe() const
++    {
++        Gfx::SharedImageBuffer const* shared_image_buffer = nullptr;
++        Gfx::IntSize bitmap_size;
++
++        if (m_client_state.has_usable_bitmap) {
++            shared_image_buffer = m_client_state.front_bitmap.shared_image_buffer.ptr();
++            bitmap_size = m_client_state.front_bitmap.last_painted_size.to_type<int>();
++        } else {
++            shared_image_buffer = m_backup_shared_image_buffer.ptr();
++            bitmap_size = m_backup_bitmap_size.to_type<int>();
++        }
++
++        RenderSurfaceProbe probe;
++        probe.ready_to_paint_seen = m_ready_to_paint_seen;
++        probe.has_usable_bitmap = m_client_state.has_usable_bitmap;
++        probe.generation = m_render_surface_generation;
++
++        if (!shared_image_buffer)
++            return probe;
++
++        probe.has_surface = true;
++        probe.pixel_width = bitmap_size.width();
++        probe.pixel_height = bitmap_size.height();
++
++        auto exported_image = shared_image_buffer->export_shared_image();
++        (void)exported_image;
++        probe.can_export_shared_image = true;
++        return probe;
++    }
++
++    void note_ready_to_paint()
++    {
++        m_ready_to_paint_seen = true;
++        ++m_render_surface_generation;
++    }
++
++private:
++    TermSurfWebView(Core::AnonymousBuffer theme, Web::DevicePixelSize viewport_size)
++        : HeadlessWebView(move(theme), viewport_size)
++    {
++    }
++
++    u64 m_render_surface_generation { 0 };
++    bool m_ready_to_paint_seen { false };
++};
++
+ static ErrorOr<Core::AnonymousBuffer> load_default_theme()
+ {
+     auto buffer = TRY(Core::AnonymousBuffer::create_with_size(sizeof(Gfx::SystemTheme)));
+@@ -68,7 +135,7 @@ struct TsLadybirdRuntime {
+ 
+ struct TsLadybirdView {
+     TsLadybirdRuntime* runtime { nullptr };
+-    OwnPtr<WebView::HeadlessWebView> view;
++    OwnPtr<TermSurfWebView> view;
+     ByteString last_url;
+     bool did_finish_load { false };
+     bool did_crash { false };
+@@ -86,6 +153,18 @@ extern "C" char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ extern "C" bool ts_ladybird_view_did_crash(TsLadybirdView const*);
+ 
++typedef struct TsLadybirdRenderSurfaceProbe {
++    bool has_surface;
++    bool can_export_shared_image;
++    int pixel_width;
++    int pixel_height;
++    unsigned long long generation;
++    bool ready_to_paint_seen;
++    bool has_usable_bitmap;
++} TsLadybirdRenderSurfaceProbe;
++
++extern "C" bool ts_ladybird_view_render_surface_probe(TsLadybirdView*, TsLadybirdRenderSurfaceProbe*);
++
+ namespace {
+ 
+ static TsLadybirdRuntime* s_runtime = nullptr;
+@@ -166,10 +245,10 @@ static ErrorOr<OwnPtr<TermSurfLadybirdApplication>> create_application()
+ #endif
+ }
+ 
+-static ErrorOr<OwnPtr<WebView::HeadlessWebView>> create_headless_view()
++static ErrorOr<OwnPtr<TermSurfWebView>> create_termsurf_view(int width, int height)
+ {
+     auto theme = TRY(load_default_theme());
+-    auto view = WebView::HeadlessWebView::create(move(theme), { 800, 600 });
++    auto view = TermSurfWebView::create(move(theme), { width, height });
+     return view;
+ }
+ 
+@@ -252,6 +331,7 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_load_url(TsLadybirdView*, char co
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_view_last_url(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_finish_load(TsLadybirdView const*);
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const*);
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_render_surface_probe(TsLadybirdView*, TsLadybirdRenderSurfaceProbe*);
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ {
+@@ -260,7 +340,7 @@ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_name()
+ 
+ TERMSURF_LADYBIRD_EXPORT char const* ts_ladybird_runtime_version()
+ {
+-    return "ladybird-a80d01fc-issue-0884-persistent-ladybird-abi-handles";
++    return "ladybird-a80d01fc-issue-0884-render-surface-abi-probe";
+ }
+ 
+ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_warmup()
+@@ -344,9 +424,9 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         return nullptr;
+     }
+ 
+-    auto view_or_error = create_headless_view();
++    auto view_or_error = create_termsurf_view(width, height);
+     if (view_or_error.is_error()) {
+-        set_runtime_error(runtime, ByteString::formatted("failed to create HeadlessWebView: {}", view_or_error.error()));
++        set_runtime_error(runtime, ByteString::formatted("failed to create TermSurfWebView: {}", view_or_error.error()));
+         return nullptr;
+     }
+ 
+@@ -370,8 +450,14 @@ TERMSURF_LADYBIRD_EXPORT TsLadybirdView* ts_ladybird_view_create(TsLadybirdRunti
+         wrapper->did_crash = true;
+         set_runtime_error(wrapper->runtime, "WebContent crashed");
+     };
++    wrapper->view->on_ready_to_paint = [wrapper] {
++        wrapper->view->note_ready_to_paint();
++        auto probe = wrapper->view->render_surface_probe();
++        outln("PROBE: TermSurf Ladybird ABI ready_to_paint generation={} has_surface={} size={}x{}",
++            probe.generation, probe.has_surface, probe.pixel_width, probe.pixel_height);
++    };
+ 
+-    outln("TIER2: TermSurf Ladybird ABI constructed HeadlessWebView handle={}", wrapper->view->handle());
++    outln("TIER2: TermSurf Ladybird ABI constructed TermSurfWebView handle={}", wrapper->view->handle());
+     return wrapper;
+ }
+ 
+@@ -423,3 +509,25 @@ TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_did_crash(TsLadybirdView const* v
+ {
+     return view && view->did_crash;
+ }
++
++TERMSURF_LADYBIRD_EXPORT bool ts_ladybird_view_render_surface_probe(TsLadybirdView* view, TsLadybirdRenderSurfaceProbe* out_probe)
++{
++    if (!out_probe) {
++        set_runtime_error(view ? view->runtime : nullptr, "render surface probe output is null");
++        return false;
++    }
++
++    memset(out_probe, 0, sizeof(*out_probe));
++    if (!validate_view(view))
++        return false;
++
++    auto probe = view->view->render_surface_probe();
++    out_probe->has_surface = probe.has_surface;
++    out_probe->can_export_shared_image = probe.can_export_shared_image;
++    out_probe->pixel_width = probe.pixel_width;
++    out_probe->pixel_height = probe.pixel_height;
++    out_probe->generation = probe.generation;
++    out_probe->ready_to_paint_seen = probe.ready_to_paint_seen;
++    out_probe->has_usable_bitmap = probe.has_usable_bitmap;
++    return true;
++}
+-- 
+2.54.0
+

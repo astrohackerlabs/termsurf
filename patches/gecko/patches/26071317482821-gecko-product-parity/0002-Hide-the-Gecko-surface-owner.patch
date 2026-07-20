@@ -1,0 +1,427 @@
+From 56294fc32f902eee10d758e653454aec8bd9d5c3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 13 Jul 2026 15:34:20 -0500
+Subject: [PATCH] Hide the Gecko surface owner
+
+Firefox kept a window to keep pixels in flight,
+Now alpha is zero and focus stays light.
+Resize epochs cross without AX in the hall,
+While WebRender keeps painting tiles through it all.
+---
+ .../AstrohackerVisibleWindow.sys.mjs          | 164 +++++++++++++++++-
+ gfx/layers/AstrohackerSurfaceExporterMac.mm   |   7 +-
+ widget/cocoa/nsCocoaWindow.mm                 |  95 +++++++++-
+ 3 files changed, 258 insertions(+), 8 deletions(-)
+
+diff --git a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+index 1f3282956f40..85790d10d3ef 100644
+--- a/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
++++ b/browser/components/astrohacker/AstrohackerVisibleWindow.sys.mjs
+@@ -12,6 +12,7 @@ import { BrowserWindowTracker } from "resource:///modules/BrowserWindowTracker.s
+ const progressListeners = new Set();
+ const delayTimers = new Set();
+ const inputControlTimers = new Set();
++const surfaceControlTimers = new Set();
+ 
+ export class CommandLineHandler {
+   static classID = Components.ID("{a932e007-0932-4007-8000-000000000007}");
+@@ -51,8 +52,8 @@ export class CommandLineHandler {
+     }
+     dump(`headless=${headless ? 1 : 0}\n`);
+ 
+-    // HOLD mode (Exp8): leave the normal event loop running after load so
+-    // the parent can AX-resize the window; do not force-quit.
++    // HOLD mode: leave the normal event loop running after load so the parent
++    // can resize the hidden compositor owner through the control contract.
+     let hold = Services.env.get("ASTROHACKER_GECKO_HOLD") === "1" && !headless;
+ 
+     runVisible(urlParam, headless, hold)
+@@ -209,7 +210,11 @@ async function runVisible(urlStr, headless, hold) {
+   // Ensure size/position
+   try {
+     win.resizeTo(800, 600);
+-    win.moveTo(100, 100);
++    if (
++      Services.env.get("ASTROHACKER_GECKO_SURFACE_OWNER") !== "hidden"
++    ) {
++      win.moveTo(100, 100);
++    }
+   } catch (e) {}
+ 
+   let browser = win.gBrowser?.selectedBrowser;
+@@ -343,6 +348,7 @@ async function runVisible(urlStr, headless, hold) {
+     dump("hold_mode=1\n");
+     dump("hold_ms=0\n");
+     dump("hold_retained=1\n");
++    startSurfaceControlLoop(win, browser);
+     // Exp5: optional input control file → content windowUtils (native widget path).
+     startInputControlLoop(win, browser);
+     return;
+@@ -365,6 +371,158 @@ async function runVisible(urlStr, headless, hold) {
+   }
+ }
+ 
++/**
++ * Hidden compositor-owner resize contract.
++ *
++ * Request file:
++ *   epoch=N dip_width=W dip_height=H scale=S physical_width=PW physical_height=PH
++ * Status file (request path + ".status"):
++ *   epoch=N observed_dip_width=W observed_dip_height=H scale=S
++ *   physical_width=PW physical_height=PH owner_hidden=1
++ *
++ * The parent derives the requested physical size from the scale Gecko
++ * reports here. An epoch is acknowledged only after the browser content rect
++ * reaches the requested DIP and physical dimensions.
++ *
++ * @param {Window} win The hidden compositor-owner chrome window.
++ * @param {MozBrowser} browser The browser whose content rect is resized.
++ */
++function startSurfaceControlLoop(win, browser) {
++  const path =
++    Services.env.get("ASTROHACKER_GECKO_SURFACE_CONTROL_PATH") || "";
++  if (!path) {
++    dump("surface_owner_control=0 reason=no_path\n");
++    return;
++  }
++
++  const statusPath = path + ".status";
++  let lastEpoch = 0;
++  let pending = null;
++
++  function observed(epoch) {
++    const rect = browser.getBoundingClientRect();
++    const scale = win.devicePixelRatio || 1;
++    const dipWidth = Math.round(rect.width);
++    const dipHeight = Math.round(rect.height);
++    return {
++      epoch,
++      dipWidth,
++      dipHeight,
++      scale,
++      physicalWidth: Math.round(rect.width * scale),
++      physicalHeight: Math.round(rect.height * scale),
++    };
++  }
++
++  function writeStatus(value) {
++    writeFileSync(
++      statusPath,
++      `epoch=${value.epoch} observed_dip_width=${value.dipWidth} ` +
++        `observed_dip_height=${value.dipHeight} scale=${value.scale.toFixed(6)} ` +
++        `physical_width=${value.physicalWidth} physical_height=${value.physicalHeight} ` +
++        "owner_hidden=1\n"
++    );
++  }
++
++  try {
++    writeStatus(observed(0));
++  } catch (e) {
++    dump(`surface_owner_initial_status_error=${String(e)}\n`);
++  }
++
++  const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
++  surfaceControlTimers.add(timer);
++  timer.initWithCallback(
++    () => {
++      try {
++        if (pending) {
++          const value = observed(pending.epoch);
++          const matches =
++            Math.abs(value.dipWidth - pending.dipWidth) <= 1 &&
++            Math.abs(value.dipHeight - pending.dipHeight) <= 1 &&
++            Math.abs(value.scale - pending.scale) <= 0.01 &&
++            Math.abs(value.physicalWidth - pending.physicalWidth) <= 1 &&
++            Math.abs(value.physicalHeight - pending.physicalHeight) <= 1;
++          if (matches) {
++            writeStatus(value);
++            lastEpoch = pending.epoch;
++            dump(
++              `surface_owner_resize_ack=1 epoch=${lastEpoch} ` +
++                `dip=${value.dipWidth}x${value.dipHeight} ` +
++                `scale=${value.scale.toFixed(3)} ` +
++                `physical=${value.physicalWidth}x${value.physicalHeight}\n`
++            );
++            pending = null;
++          }
++          return;
++        }
++
++        const request = parseKvLine(readFileSync(path));
++        const epoch = Number.parseInt(request.epoch || "0", 10);
++        if (!Number.isFinite(epoch) || epoch <= lastEpoch) {
++          return;
++        }
++        const dipWidth = Number.parseInt(request.dip_width || "0", 10);
++        const dipHeight = Number.parseInt(request.dip_height || "0", 10);
++        const scale = Number.parseFloat(request.scale || "0");
++        const physicalWidth = Number.parseInt(
++          request.physical_width || "0",
++          10
++        );
++        const physicalHeight = Number.parseInt(
++          request.physical_height || "0",
++          10
++        );
++        if (
++          dipWidth <= 0 ||
++          dipHeight <= 0 ||
++          scale <= 0 ||
++          physicalWidth !== Math.round(dipWidth * scale) ||
++          physicalHeight !== Math.round(dipHeight * scale)
++        ) {
++          dump(`surface_owner_resize_rejected=1 epoch=${epoch}\n`);
++          return;
++        }
++
++        const current = observed(0);
++        if (Math.abs(current.scale - scale) > 0.01) {
++          dump(
++            `surface_owner_resize_rejected=1 epoch=${epoch} reason=scale ` +
++              `requested=${scale} observed=${current.scale}\n`
++          );
++          return;
++        }
++        const outerWidth = Math.max(
++          1,
++          dipWidth + Math.round(win.outerWidth - current.dipWidth)
++        );
++        const outerHeight = Math.max(
++          1,
++          dipHeight + Math.round(win.outerHeight - current.dipHeight)
++        );
++        pending = {
++          epoch,
++          dipWidth,
++          dipHeight,
++          scale,
++          physicalWidth,
++          physicalHeight,
++        };
++        win.resizeTo(outerWidth, outerHeight);
++        dump(
++          `surface_owner_resize_apply=1 epoch=${epoch} ` +
++            `dip=${dipWidth}x${dipHeight} outer=${outerWidth}x${outerHeight}\n`
++        );
++      } catch (e) {
++        dump(`surface_owner_control_error=${String(e)}\n`);
++      }
++    },
++    20,
++    Ci.nsITimer.TYPE_REPEATING_SLACK
++  );
++  dump(`surface_owner_control=1 path=${path} poll_ms=20\n`);
++}
++
+ /**
+  * Exp5 input control protocol (parent → Firefox chrome → content windowUtils).
+  *
+diff --git a/gfx/layers/AstrohackerSurfaceExporterMac.mm b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+index 041b3ce756c5..fbd11d6e3fd1 100644
+--- a/gfx/layers/AstrohackerSurfaceExporterMac.mm
++++ b/gfx/layers/AstrohackerSurfaceExporterMac.mm
+@@ -325,7 +325,12 @@ void AstrohackerMaybeExportSurface(IOSurfaceRef aSurface,
+     FILE* cf = fopen(controlPath, "r");
+     if (cf) {
+       unsigned long epoch = 0, ew = 0, eh = 0;
+-      if (fscanf(cf, "epoch=%lu width=%lu height=%lu", &epoch, &ew, &eh) >= 1) {
++      unsigned long dipWidth = 0, dipHeight = 0;
++      double scale = 0.0;
++      if (fscanf(cf,
++                 "epoch=%lu dip_width=%lu dip_height=%lu scale=%lf "
++                 "physical_width=%lu physical_height=%lu",
++                 &epoch, &dipWidth, &dipHeight, &scale, &ew, &eh) == 6) {
+         char buf[64];
+         snprintf(buf, sizeof(buf), "%lu", epoch);
+         setenv("ASTROHACKER_GECKO_SURFACE_RESIZE_EPOCH", buf, 1);
+diff --git a/widget/cocoa/nsCocoaWindow.mm b/widget/cocoa/nsCocoaWindow.mm
+index ddb523aff0b0..b2719f94000e 100644
+--- a/widget/cocoa/nsCocoaWindow.mm
++++ b/widget/cocoa/nsCocoaWindow.mm
+@@ -118,6 +118,26 @@ static uint32_t sModalWindowCount = 0;
+ 
+ LazyLogModule sCocoaLog("nsCocoaWidgets");
+ 
++static bool IsAstrohackerSurfaceOwner() {
++  const char* value = getenv("ASTROHACKER_GECKO_SURFACE_OWNER");
++  return value && strcmp(value, "hidden") == 0;
++}
++
++static void PositionAstrohackerSurfaceOwner(NSWindow* aWindow) {
++  static bool sPositioning = false;
++  if (!aWindow || !IsAstrohackerSurfaceOwner() || sPositioning) {
++    return;
++  }
++  NSRect frame = aWindow.frame;
++  if (frame.origin.x == -100000.0 && frame.origin.y == -100000.0) {
++    return;
++  }
++  frame.origin = NSMakePoint(-100000.0, -100000.0);
++  sPositioning = true;
++  [aWindow setFrame:frame display:NO];
++  sPositioning = false;
++}
++
+ extern "C" {
+ // CGSPrivate.h
+ typedef NSInteger CGSConnection;
+@@ -5491,12 +5511,31 @@ void nsCocoaWindow::Show(bool aState) {
+ 
+   NSWindow* nativeParentWindow =
+       mParent ? (NSWindow*)mParent->GetNativeData(NS_NATIVE_WINDOW) : nil;
++  const bool astrohackerSurfaceOwner = IsAstrohackerSurfaceOwner();
+ 
+   if (aState && !mBounds.IsEmpty()) {
++    // Astrohacker's Gecko renderer needs a live native compositor owner, but
++    // it must never expose browser chrome or steal focus from the terminal.
++    // Configure this before the first order operation. Ordinary Firefox
++    // windows do not set the marker and retain the upstream behavior below.
++    if (astrohackerSurfaceOwner) {
++      NSApp.activationPolicy = NSApplicationActivationPolicyProhibited;
++      [mWindow setAlphaValue:0.0];
++      [mWindow setIgnoresMouseEvents:YES];
++      [mWindow setHasShadow:NO];
++      [mWindow setAccessibilityElement:NO];
++      PositionAstrohackerSurfaceOwner(mWindow);
++      fprintf(stderr,
++              "astrohacker_owner_configured=1 hidden=1 alpha=0 "
++              "ignores_mouse=1 shadow=0 activation_policy=%ld\n",
++              (long)NSApp.activationPolicy);
++    }
++
+     // If we had set the activationPolicy to accessory, then right now we won't
+     // have a dock icon. Make sure that we undo that and show a dock icon now
+     // that we're going to show a window.
+-    if (NSApp.activationPolicy != NSApplicationActivationPolicyRegular) {
++    if (!astrohackerSurfaceOwner &&
++        NSApp.activationPolicy != NSApplicationActivationPolicyRegular) {
+       NSApp.activationPolicy = NSApplicationActivationPolicyRegular;
+       PR_SetEnv("MOZ_APP_NO_DOCK=");
+     }
+@@ -5596,7 +5635,9 @@ void nsCocoaWindow::Show(bool aState) {
+       }
+     } else {
+       NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+-      EnsureFrameIsOnScreen();
++      if (!astrohackerSurfaceOwner) {
++        EnsureFrameIsOnScreen();
++      }
+       if (mWindowType == WindowType::TopLevel &&
+           [mWindow respondsToSelector:@selector(setAnimationBehavior:)]) {
+         NSWindowAnimationBehavior behavior;
+@@ -5621,7 +5662,18 @@ void nsCocoaWindow::Show(bool aState) {
+       // We don't want most alwaysontop / alert windows to pull focus when
+       // they're opened, as these tend to be for peripheral indicators and
+       // displays.
+-      if ((mAlwaysOnTop && mPiPType != PiPType::DocumentPiP) || mIsAlert) {
++      if (astrohackerSurfaceOwner) {
++        [mWindow orderFront:nil];
++        // AppKit can constrain a newly ordered frame back toward a display.
++        // Reassert the already configured owner policy without ever exposing
++        // it (alpha remains zero throughout the first order operation).
++        PositionAstrohackerSurfaceOwner(mWindow);
++        fprintf(stderr,
++                "astrohacker_owner_ordered=1 key=%d main=%d visible=%d\n",
++                mWindow.isKeyWindow ? 1 : 0, mWindow.isMainWindow ? 1 : 0,
++                mWindow.isVisible ? 1 : 0);
++      } else if ((mAlwaysOnTop && mPiPType != PiPType::DocumentPiP) ||
++                 mIsAlert) {
+         [mWindow orderFront:nil];
+       } else {
+         [mWindow makeKeyAndOrderFront:nil];
+@@ -7032,7 +7084,7 @@ void nsCocoaWindow::DispatchOcclusionEvent() {
+ 
+   // Our new occlusion state is true if the window is not visible.
+   bool newOcclusionState =
+-      !keyOrMainNonFullscreen &&
++      !IsAstrohackerSurfaceOwner() && !keyOrMainNonFullscreen &&
+       !(mHasStartedNativeFullscreen ||
+         ([mWindow occlusionState] & NSWindowOcclusionStateVisible));
+ 
+@@ -7672,6 +7724,9 @@ LayoutDeviceIntPoint nsCocoaWindow::GetNativeLockedPoint() {
+ }
+ 
+ - (void)windowDidResize:(NSNotification*)aNotification {
++  if (IsAstrohackerSurfaceOwner()) {
++    PositionAstrohackerSurfaceOwner(aNotification.object);
++  }
+   if (!mGeckoWindow) return;
+ 
+   mGeckoWindow->CocoaWindowDidResize();
+@@ -7800,6 +7855,10 @@ LayoutDeviceIntPoint nsCocoaWindow::GetNativeLockedPoint() {
+ - (void)windowDidBecomeMain:(NSNotification*)aNotification {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+ 
++  if (IsAstrohackerSurfaceOwner()) {
++    fprintf(stderr, "astrohacker_owner_violation=main\n");
++  }
++
+   RollUpPopups();
+   ChildViewMouseTracker::ReEvaluateMouseEnterState();
+ 
+@@ -7852,6 +7911,10 @@ LayoutDeviceIntPoint nsCocoaWindow::GetNativeLockedPoint() {
+ - (void)windowDidBecomeKey:(NSNotification*)aNotification {
+   NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+ 
++  if (IsAstrohackerSurfaceOwner()) {
++    fprintf(stderr, "astrohacker_owner_violation=key\n");
++  }
++
+   RollUpPopups();
+   ChildViewMouseTracker::ReEvaluateMouseEnterState();
+ 
+@@ -7883,6 +7946,9 @@ LayoutDeviceIntPoint nsCocoaWindow::GetNativeLockedPoint() {
+ }
+ 
+ - (void)windowDidMove:(NSNotification*)aNotification {
++  if (IsAstrohackerSurfaceOwner()) {
++    PositionAstrohackerSurfaceOwner(aNotification.object);
++  }
+   if (mGeckoWindow) mGeckoWindow->ReportMoveEvent();
+ }
+ 
+@@ -8045,6 +8111,20 @@ static NSMutableSet* gSwizzledFrameViewClasses = nil;
+ 
+ @implementation BaseWindow
+ 
++- (BOOL)canBecomeKeyWindow {
++  if (IsAstrohackerSurfaceOwner()) {
++    return NO;
++  }
++  return [super canBecomeKeyWindow];
++}
++
++- (BOOL)canBecomeMainWindow {
++  if (IsAstrohackerSurfaceOwner()) {
++    return NO;
++  }
++  return [super canBecomeMainWindow];
++}
++
+ // The frame of a window is implemented using undocumented NSView subclasses.
+ // We offset the window buttons by overriding the method _closeButtonOrigin on
+ // these frame view classes. The class which is
+@@ -9117,6 +9197,9 @@ static const NSUInteger kWindowShadowOptionsTooltip = 4;
+ @implementation BorderlessWindow
+ 
+ - (BOOL)canBecomeKeyWindow {
++  if (IsAstrohackerSurfaceOwner()) {
++    return NO;
++  }
+   return YES;
+ }
+ 
+@@ -9135,6 +9218,10 @@ static const NSUInteger kWindowShadowOptionsTooltip = 4;
+ - (BOOL)canBecomeMainWindow {
+   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
+ 
++  if (IsAstrohackerSurfaceOwner()) {
++    return NO;
++  }
++
+   return self.isVisible;
+ 
+   NS_OBJC_END_TRY_BLOCK_RETURN(NO);
+-- 
+2.54.0
+

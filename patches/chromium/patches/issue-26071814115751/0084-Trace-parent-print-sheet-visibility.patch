@@ -1,0 +1,170 @@
+From 434da0d38f597a9f26fda0830d7e1a2a423c3806 Mon Sep 17 00:00:00 2001
+From: Max Commits <maxcommits@ryanxcharles.com>
+Date: Mon, 22 Jun 2026 16:41:47 -0500
+Subject: [PATCH 084/122] Trace parent print sheet visibility
+
+The print sheet waved from AppKit's door,
+A visible panel, ignored once more.
+Weak eyes watched without a grip,
+And named the place where watchers slip.
+---
+ printing/printing_context_mac.mm | 112 +++++++++++++++++++++++++++++++
+ 1 file changed, 112 insertions(+)
+
+diff --git a/printing/printing_context_mac.mm b/printing/printing_context_mac.mm
+index 422e86b5dd..e7fd75a022 100644
+--- a/printing/printing_context_mac.mm
++++ b/printing/printing_context_mac.mm
+@@ -6,9 +6,11 @@
+ 
+ #import <AppKit/AppKit.h>
+ #include <CoreFoundation/CoreFoundation.h>
++#include <dispatch/dispatch.h>
+ #import <QuartzCore/QuartzCore.h>
+ #include <cups/cups.h>
+ 
++#include <cstdint>
+ #import <iomanip>
+ #import <numeric>
+ #include <optional>
+@@ -126,6 +128,15 @@ void TraceTermSurfPdfNativePrint(std::string_view event) {
+        " source=printing_context_mac.mm event=", event});
+ }
+ 
++std::string PointerTrace(const void* object) {
++  return object ? base::NumberToString(reinterpret_cast<uintptr_t>(object))
++                : "nil";
++}
++
++std::string ObjCPointerTrace(id object) {
++  return PointerTrace((__bridge const void*)object);
++}
++
+ std::string ActivationPolicyTraceName(NSApplicationActivationPolicy policy) {
+   switch (policy) {
+     case NSApplicationActivationPolicyRegular:
+@@ -137,6 +148,85 @@ void TraceTermSurfPdfNativePrint(std::string_view event) {
+   }
+ }
+ 
++void TraceMacWindowState(std::string_view prefix,
++                         std::string_view label,
++                         NSWindow* window,
++                         NSWindow* parent_window,
++                         NSWindow* attached_sheet,
++                         NSWindow* panel_window) {
++  NSString* title = window.title ?: @"";
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-", label, " ptr=", ObjCPointerTrace(window),
++       " class=", base::SysNSStringToUTF8(NSStringFromClass(window.class)),
++       " number=", base::NumberToString(static_cast<int>(window.windowNumber)),
++       " visible=", window.visible ? "true" : "false",
++       " key=", window.keyWindow ? "true" : "false",
++       " main=", window.mainWindow ? "true" : "false",
++       " sheet=", window.sheet ? "true" : "false",
++       " matches_parent=", window == parent_window ? "true" : "false",
++       " matches_attached_sheet=", window == attached_sheet ? "true" : "false",
++       " matches_panel_window=", window == panel_window ? "true" : "false",
++       " title=", base::SysNSStringToUTF8(title)}));
++}
++
++void TraceMacPrintSheetVisibility(std::string_view prefix,
++                                  NSPrintPanel* panel,
++                                  NSWindow* parent_window) {
++  if (!panel) {
++    TraceTermSurfPdfNativePrint(base::StrCat({prefix, "-panel-gone"}));
++  } else {
++    TraceTermSurfPdfNativePrint(base::StrCat(
++        {prefix, "-panel ptr=", ObjCPointerTrace(panel),
++         " class=", base::SysNSStringToUTF8(NSStringFromClass(panel.class))}));
++  }
++
++  NSWindow* panel_window = nil;
++  if (panel && [panel respondsToSelector:@selector(window)]) {
++    panel_window = [(id)panel window];
++    TraceTermSurfPdfNativePrint(base::StrCat(
++        {prefix, "-panel-window-selector present=true ptr=",
++         ObjCPointerTrace(panel_window)}));
++  } else {
++    TraceTermSurfPdfNativePrint(
++        base::StrCat({prefix, "-panel-window-selector present=false"}));
++  }
++
++  if (!parent_window) {
++    TraceTermSurfPdfNativePrint(
++        base::StrCat({prefix, "-parent-window-gone"}));
++    return;
++  }
++
++  NSWindow* attached_sheet = parent_window.attachedSheet;
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-attached-sheet present=", attached_sheet ? "true" : "false",
++       " ptr=", ObjCPointerTrace(attached_sheet)}));
++  TraceMacWindowState(prefix, "parent-window", parent_window, parent_window,
++                      attached_sheet, panel_window);
++  if (attached_sheet) {
++    TraceMacWindowState(prefix, "attached-sheet", attached_sheet, parent_window,
++                        attached_sheet, panel_window);
++  }
++  if (panel_window) {
++    TraceMacWindowState(prefix, "panel-window", panel_window, parent_window,
++                        attached_sheet, panel_window);
++  }
++
++  NSArray<NSWindow*>* ordered_windows = NSApp.orderedWindows;
++  TraceTermSurfPdfNativePrint(base::StrCat(
++      {prefix, "-ordered-windows count=",
++       base::NumberToString(static_cast<uint64_t>(ordered_windows.count))}));
++  NSUInteger index = 0;
++  for (NSWindow* window in ordered_windows) {
++    TraceMacWindowState(
++        prefix,
++        base::StrCat({"ordered-window-",
++                      base::NumberToString(static_cast<uint64_t>(index))}),
++        window, parent_window, attached_sheet, panel_window);
++    ++index;
++  }
++}
++
+ void TraceMacPrintPresentationState(std::string_view prefix,
+                                     NSPrintPanel* panel,
+                                     NSWindow* parent_window) {
+@@ -620,6 +710,9 @@ bool IsIppColorModelColorful(mojom::ColorModel color_model) {
+         }
+         TraceTermSurfPdfNativePrint(
+             "mac-ask-user-begin-parent-window-sheet-enter");
++        TraceMacPrintSheetVisibility(
++            "mac-ask-user-parent-window-sheet-before-begin", panel,
++            parent_window);
+         TermSurfPrintPanelDelegate* sheet_delegate =
+             [[TermSurfPrintPanelDelegate alloc] initWithCompletion:^(
+                                                     NSInteger selection) {
+@@ -674,6 +767,25 @@ bool IsIppColorModelColorful(mojom::ColorModel color_model) {
+ #pragma clang diagnostic pop
+         TraceTermSurfPdfNativePrint(
+             "mac-ask-user-begin-parent-window-sheet-exit");
++        TraceMacPrintSheetVisibility(
++            "mac-ask-user-parent-window-sheet-after-begin", panel,
++            parent_window);
++        __weak NSPrintPanel* weak_panel = panel;
++        __weak NSWindow* weak_parent_window = parent_window;
++        dispatch_async(dispatch_get_main_queue(), ^{
++          NSPrintPanel* delayed_panel = weak_panel;
++          NSWindow* delayed_parent_window = weak_parent_window;
++          TraceMacPrintSheetVisibility(
++              "mac-ask-user-parent-window-sheet-delayed-1", delayed_panel,
++              delayed_parent_window);
++          dispatch_async(dispatch_get_main_queue(), ^{
++            NSPrintPanel* later_panel = weak_panel;
++            NSWindow* later_parent_window = weak_parent_window;
++            TraceMacPrintSheetVisibility(
++                "mac-ask-user-parent-window-sheet-delayed-2", later_panel,
++                later_parent_window);
++          });
++        });
+         return;
+       }
+       TraceTermSurfPdfNativePrint("mac-ask-user-run-modal-enter");
+-- 
+2.50.1 (Apple Git-155)
+

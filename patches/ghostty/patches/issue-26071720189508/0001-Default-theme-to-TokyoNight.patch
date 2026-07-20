@@ -1,0 +1,34 @@
+From 2aa4373bd65e685ea29d800a28af809cc30a3848 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 17 Jul 2026 15:19:07 -0500
+Subject: [PATCH] Default theme to TokyoNight
+
+Astrohacker Terminal ships with TokyoNight as the product default
+so stock configs match the operator palette without a theme key.
+---
+ src/config/Config.zig | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 8d4645b32..bc5d4206f 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -589,7 +589,14 @@ language: ?[:0]const u8 = null,
+ /// be fixed in a future update:
+ ///
+ ///   - macOS: titlebar tabs style is not updated when switching themes.
+-theme: ?Theme = null,
++///
++/// Astrohacker Terminal defaults to the built-in **TokyoNight** theme (exact
++/// resource name; case-sensitive on case-sensitive filesystems). Set `theme`
++/// explicitly to use a different theme or light/dark pair.
++theme: ?Theme = .{
++    .light = "TokyoNight",
++    .dark = "TokyoNight",
++},
+ 
+ /// Background color for the window.
+ /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,66 @@
+[package]
+name = "ahsh"
+version = "0.1.54"
+edition = "2024"
+description = "Astrohacker Shell: Nushell default with zsh environment and alt mode"
+license = "MIT"
+repository = "https://github.com/astrohackerlabs/astrohacker"
+readme = "README.md"
+keywords = ["shell", "nushell", "zsh", "terminal", "poly-shell"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ahsh"
+path = "src/main.rs"
+
+[dependencies]
+reedline = { version = "0.49.0", path = "../../forks/reedline", features = ["sqlite", "bashisms"] }
+
+nu-cli = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cli", package = "shannon-nu-cli", default-features = false, features = ["plugin"] }
+nu-cmd-base = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cmd-base" }
+nu-cmd-extra = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cmd-extra" }
+nu-cmd-lang = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cmd-lang" }
+nu-config = { version = "0.114.2", path = "../../forks/nushell/crates/nu-config" }
+nu-command = { version = "0.114.2", path = "../../forks/nushell/crates/nu-command", default-features = false, features = ["os"] }
+nu-engine = { version = "0.114.2", path = "../../forks/nushell/crates/nu-engine", features = ["os"] }
+nu-explore = { version = "0.114.2", path = "../../forks/nushell/crates/nu-explore" }
+nu-experimental = { version = "0.114.2", path = "../../forks/nushell/crates/nu-experimental" }
+nu-lsp = { version = "0.114.2", path = "../../forks/nushell/crates/nu-lsp", package = "shannon-nu-lsp" }
+nu-parser = { version = "0.114.2", path = "../../forks/nushell/crates/nu-parser" }
+nu-path = { version = "0.114.2", path = "../../forks/nushell/crates/nu-path" }
+nu-protocol = { version = "0.114.2", path = "../../forks/nushell/crates/nu-protocol", features = ["os"] }
+nu-std = { version = "0.114.2", path = "../../forks/nushell/crates/nu-std" }
+nu-system = { version = "0.114.2", path = "../../forks/nushell/crates/nu-system" }
+nu-utils = { version = "0.114.2", path = "../../forks/nushell/crates/nu-utils" }
+
+nu-cmd-plugin = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cmd-plugin", optional = true }
+nu-plugin-engine = { version = "0.114.2", path = "../../forks/nushell/crates/nu-plugin-engine", optional = true }
+nu-mcp = { version = "0.114.2", path = "../../forks/nushell/crates/nu-mcp", optional = true }
+
+crossterm = "0.29.0"
+ctrlc = "3.5"
+chrono = "0.4"
+dirs = "6"
+lexopt = "0.3"
+libc = "0.2"
+log = "0.4"
+miette = { version = "7.6", features = ["fancy-no-backtrace", "fancy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
+simplelog = "0.12"
+tempfile = "3"
+time = "0.3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
+same-file = "1.0"
+
+[target.'cfg(target_family = "unix")'.dependencies]
+nix = { version = "0.30", default-features = false, features = ["signal", "process", "fs", "term"] }
+
+[features]
+default = ["plugin", "sqlite", "trash-support"]
+plugin = ["nu-cmd-plugin", "nu-plugin-engine"]
+sqlite = ["nu-cli/sqlite", "nu-command/sqlite", "nu-std/sqlite", "nu-protocol/sqlite", "reedline/sqlite"]
+trash-support = ["nu-command/trash-support"]
+mcp = ["nu-mcp"]
+network = ["nu-command/network"]
+rustls-tls = []

@@ -1,0 +1,90 @@
+From f27d36a03a8f1cda4146fdef031e9146a58e7286 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 11 Jul 2026 15:49:11 -0500
+Subject: [PATCH 111/119] issue-924: update PDF help bubble factory mojom and
+ SecurityPrincipal includes
+
+CreateHelpBubbleHandler gained TrackedElementHandler; include
+security_principal.h where GetDeprecatedSiteURL is used.
+---
+ .../extensions/ts_extensions_browser_client.cc      |  1 +
+ .../libtermsurf_chromium/ts_browser_main_parts.cc   |  1 +
+ .../libtermsurf_chromium/ts_mime_handler_binders.cc |  1 +
+ .../ts_pdf_help_bubble_handler_factory.cc           | 13 +++++++++++--
+ 4 files changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index aa4f75d745..5a7f2e5161 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -24,6 +24,7 @@
+ #include "content/public/browser/media_stream_request.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_user_data.h"
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index e2cf78928c..048817c14d 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -37,6 +37,7 @@
+ #include "content/public/browser/origin_trials_controller_delegate.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index e31ba47f53..81f53344c1 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -13,6 +13,7 @@
+ #include "extensions/browser/mime_handler/mime_handler_stream_manager.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
++#include "content/public/browser/security_principal.h"
+ #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
+ #include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/api/mime_handler.mojom.h"
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+index ad21db6c37..3ed8acb439 100644
+--- a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+@@ -10,9 +10,11 @@
+ 
+ #include "base/logging.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
+ #include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
+ #include "url/gurl.h"
+ 
+ namespace pdf {
+@@ -39,10 +41,17 @@ class TsPdfHelpBubbleHandlerFactory
+   // help_bubble::mojom::PdfHelpBubbleHandlerFactory:
+   void CreateHelpBubbleHandler(
+       mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
+-      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler)
+-      override {
++      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler>
++          help_bubble_handler,
++      mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
++          tracked_element_handler) override {
++    // TermSurf does not host ink-signature help bubbles; accept the pipes so
++    // the PDF extension does not hang on an unbound factory method.
+     LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-create-handler frame_url="
+               << frame_url_ << " site_url=" << site_url_;
++    std::ignore = client;
++    std::ignore = help_bubble_handler;
++    std::ignore = tracked_element_handler;
+   }
+ 
+  private:
+-- 
+2.54.0
+

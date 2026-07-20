@@ -1,0 +1,64 @@
+From 931b461e9b6f64cffb8eeaa80197cb918a7734ce Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 17:19:23 -0500
+Subject: [PATCH] Default split-pane-gap to 4 points
+
+Product default margin is 4pt empty inter-pane air after operator Pass on
+the gap layout model.
+---
+ macos/Sources/Features/Splits/SplitView.swift | 2 +-
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 6 +++---
+ src/config/Config.zig                         | 4 ++--
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/SplitView.swift b/macos/Sources/Features/Splits/SplitView.swift
+index a4f44ff42..c29042200 100644
+--- a/macos/Sources/Features/Splits/SplitView.swift
++++ b/macos/Sources/Features/Splits/SplitView.swift
+@@ -96,7 +96,7 @@ struct SplitView<L: View, R: View>: View {
+         _ direction: SplitViewDirection,
+         _ split: Binding<CGFloat>,
+         dividerColor: Color,
+-        paneGap: CGFloat = 2,
++        paneGap: CGFloat = 4,
+         resizeIncrements: NSSize = .init(width: 1, height: 1),
+         @ViewBuilder left: (() -> L),
+         @ViewBuilder right: (() -> R),
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 7e449c7bd..7bfa4236e 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -650,11 +650,11 @@ extension Ghostty {
+             return value
+         }
+ 
+-        /// Empty inter-pane margin in points (`split-pane-gap`). Default 2.
++        /// Empty inter-pane margin in points (`split-pane-gap`). Default 4.
+         /// Does not thicken the painted divider hairline.
+         var splitPaneGap: Double {
+-            guard let config = self.config else { return 2 }
+-            var value: Double = 2
++            guard let config = self.config else { return 4 }
++            var value: Double = 4
+             let key = "split-pane-gap"
+             _ = ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8)))
+             return value
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 5110c0f6c..90acfc560 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1101,9 +1101,9 @@ palette: Palette = .{},
+ /// stays ~1 pt and uses `split-divider-color`). Do not confuse with
+ /// `split-border-width` (in-pane stroke).
+ ///
+-/// Defaults to **2**. Set to `0` for the historical tight hairline-only seam.
++/// Defaults to **4**. Set to `0` for the historical tight hairline-only seam.
+ /// Values outside `0`…`20` are clamped.
+-@"split-pane-gap": f64 = 2,
++@"split-pane-gap": f64 = 4,
+ 
+ /// The border color of the focused split pane. Specified as either hex
+ /// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+-- 
+2.50.1 (Apple Git-155)
+
