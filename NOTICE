@@ -21,15 +21,11 @@ wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
 wrapper|ah-webkitd|webkit|FOUNDER-ASSUMPTION
-wrapper|ah-ladybirdd|ladybird|BSD-2-Clause
 payload|ahcalc|first-party|MIT
 payload|ah-chromiumd|chromium|BSD-3-Clause
 payload|ah-webkitd|webkit|FOUNDER-ASSUMPTION
-payload|ah-ladybirdd|ladybird|BSD-2-Clause
 pointer|third_party/chromium/LICENSE
 pointer|third_party/chromium/about_credits.html
-pointer|third_party/ladybird/LICENSE
-pointer|third_party/ladybird/vcpkg-copyright
 pointer|third_party/nushell/LICENSE
 pointer|third_party/reedline/LICENSE
 -->
@@ -132,47 +128,7 @@ assumption, not a completed independent legal determination. If a later audit
 disproves the assumption, open a follow-up issue.
 
 ================================================================================
-## ladybird — ah-ladybirdd
 
-Ladybird (forks/ladybird)
-https://github.com/LadybirdBrowser/ladybird
-
-BSD 2-Clause License
-
-Copyright (c) 2018-present, the Ladybird developers.
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
-
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-Ladybird's top-level LICENSE does not by itself license or attribute its
-vcpkg-packaged dependencies. This package ships:
-
-  legal/third_party/ladybird/LICENSE
-  legal/third_party/ladybird/vcpkg-copyright/<package>/copyright
-
-(one copyright file per vcpkg package from the Ladybird release install tree).
-
-
-================================================================================
 ## nushell-reedline — ahsh
 
 ### Nushell

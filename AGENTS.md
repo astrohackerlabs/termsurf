@@ -35,7 +35,6 @@ Relevant public patch docs:
 
 - `patches/chromium/README.md`
 - `patches/webkit/README.md`
-- `patches/ladybird/README.md`
 - `patches/ghostty/README.md`
 - `patches/gecko/README.md`
 

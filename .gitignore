@@ -11,4 +11,3 @@ target
 .DS_Store
 
 /rust/ah-webkitd/libtermsurf_webkit/build/
-/rust/ah-ladybirdd/libtermsurf_ladybird/build/

@@ -10,7 +10,6 @@ CHROMIUM_OUT="$CHROMIUM_SRC/out/Default"
 CHROMIUM_PROTOC="$CHROMIUM_OUT/protoc"
 WEBKIT_SRC="$COMPANY_DIR/forks/webkit/src"
 WEBKIT_LIB_DIR="$RUST_DIR/rust/ah-webkitd/libtermsurf_webkit"
-LADYBIRD_LIB_DIR="$RUST_DIR/rust/ah-ladybirdd/libtermsurf_ladybird"
 GHOSTTY_DIR="$COMPANY_DIR/forks/ghostty"
 
 RELEASE=false
@@ -21,8 +20,8 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ahterm, ahsh, ahweb, ahcalc, chromium-fork, ah-chromiumd, webkit-fork, webkit-lib, ah-webkitd, ladybird-lib, ah-ladybirdd, all"
-  echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd, webkit→ah-webkitd, ladybird→ah-ladybirdd"
+  echo "Components: ahterm, ahsh, ahweb, ahcalc, chromium-fork, ah-chromiumd, webkit-fork, webkit-lib, ah-webkitd, all"
+  echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd, webkit→ah-webkitd"
 }
 
 configuration() {
@@ -250,42 +249,7 @@ build_webkitd() {
   fi
 }
 
-build_ladybirdd() {
-  build_ladybird_lib
 
-  cd "$RUST_DIR"
-  if $CLEAN; then
-    echo "==> Cleaning Ladybird..."
-    cargo clean -p ah-ladybirdd
-  fi
-  if $RELEASE; then
-    echo "==> Building Ladybird (release)..."
-    cargo build --release -p ah-ladybirdd
-    echo "  Ladybird: $RUST_DIR/target/release/ah-ladybirdd"
-  else
-    echo "==> Building Ladybird (debug)..."
-    cargo build -p ah-ladybirdd
-    echo "  Ladybird: $RUST_DIR/target/debug/ah-ladybirdd"
-  fi
-}
-
-build_ladybird_lib() {
-  local CONFIGURATION
-  CONFIGURATION="$(configuration)"
-
-  echo "==> Building libtermsurf_ladybird ($CONFIGURATION)..."
-  cd "$COMPANY_DIR"
-  local args=("--configuration" "$CONFIGURATION")
-  if $CLEAN; then
-    args+=("--clean")
-  fi
-  if $RELEASE && [ -z "${TERMSURF_LADYBIRD_BACKEND:-}" ]; then
-    TERMSURF_LADYBIRD_BACKEND=real "$LADYBIRD_LIB_DIR/build.sh" "${args[@]}"
-  else
-    "$LADYBIRD_LIB_DIR/build.sh" "${args[@]}"
-  fi
-  echo "  libtermsurf_ladybird: $LADYBIRD_LIB_DIR/build/libtermsurf_ladybird.dylib"
-}
 
 build_ahterm() {
   local CONFIGURATION="Debug"
@@ -365,8 +329,6 @@ case "$COMPONENT" in
   webkit-fork) build_webkit_fork ;;
   webkit-lib) build_webkit_lib ;;
   ah-webkitd|webkit)     build_webkitd ;;
-  ladybird-lib) build_ladybird_lib ;;
-  ah-ladybirdd|ladybird)   build_ladybirdd ;;
   ahterm|aht) build_ahterm ;;
   all)
     build_chromium_fork
@@ -376,7 +338,6 @@ case "$COMPONENT" in
     build_chromiumd
     build_webkit_fork
     build_webkitd
-    build_ladybirdd
     build_ahterm
     echo ""
     echo "Done (all)."

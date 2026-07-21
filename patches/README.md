@@ -27,8 +27,7 @@ Historical per-fork pointers (the release manifest is authoritative):
   archive `issue-26071814115751` (122 patches; release-manifest pin).
 - `webkit/` — **Issue 26071814115751:** main tip `e0ee95bc…` / archive
   `issue-26071814115751` (2 patches; release-manifest pin).
-- `ladybird/` — **Issue 26071814115751:** master tip `5baf8116…` / archive
-  `issue-26071814115751` (22 patches; release-manifest pin).
+- `ladybird/` — **tombstone:** not a shipped engine (Issue 26072117006454); historical archives under `patches/ladybird/patches/` only.
 - `ghostty/` — **Issue 26071814115751:** main tip `f3c9a2b7…` / archive
   `issue-26071814115751` (17 patches; release-manifest pin).
 - `gecko/` — optional; no product patch set required for 924.
@@ -43,5 +42,5 @@ Historical per-fork pointers (the release manifest is authoritative):
 1. Identify targets (Electron stable Chromium; main/master tips for others).
 2. Per fork: branch → apply/regenerate patches → build → smoke → update
    per-fork README + issue-scoped archive under `patches/<fork>/patches/`.
-3. Integrated: `TERMSURF_LADYBIRD_BACKEND=real scripts/build.sh all --release`.
+3. Integrated: `scripts/build.sh all --release` (Chromium + WebKit engines).
 4. Do not publish Homebrew from upgrade issues (use Issue 26071112000925+).

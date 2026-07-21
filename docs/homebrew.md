@@ -22,7 +22,6 @@ ahsh
 ahcalc
 ah-chromiumd
 ah-webkitd
-ah-ladybirdd
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
@@ -32,7 +31,6 @@ paths in the release tarball besides bare CLI binaries):
 ahcalc
 ah-chromiumd
 ah-webkitd
-ah-ladybirdd
 <!-- /released-payload-roots -->
 
 | Command | Role |
@@ -48,12 +46,12 @@ There is **no** `ah` / `astrohacker` meta CLI dispatcher today.
 
 Engine helpers (implementation; on PATH for packaging/debug):
 
-- `ah-chromiumd`, `ah-webkitd`, `ah-ladybirdd`
+- `ah-chromiumd`, `ah-webkitd`
 
 **Not released:** `ah-geckod` / gecko.
 
-Engine **selectors** for `ahweb` remain family names: `chromium`, `webkit`,
-`ladybird` (future `gecko`).
+Engine **selectors** for `ahweb` remain family names: `chromium`, `webkit`
+(future `gecko` reserved, not shipped).
 
 `TermSurf` remains the **protocol** name (`termsurf.proto`, `libtermsurf_*`,
 `TERMSURF_*` env). It is not the product brand and is not the PATH CLI name
@@ -105,12 +103,11 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
 - PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, engine helpers
-- Chromium / WebKit / Ladybird trees →
-  `/opt/homebrew/opt/astrohacker-terminal-ah-{chromiumd,webkitd,ladybirdd}/`
+- Chromium / WebKit trees →
+  `/opt/homebrew/opt/astrohacker-terminal-ah-{chromiumd,webkitdd}/`
 - ahcalc package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
   or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
-
 
 ## Release tarball contract
 
@@ -121,11 +118,11 @@ Top-level contents:
 - `Astrohacker TermSurf.app/` (with `Contents/MacOS/ahterm` and
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
-- `legal/third_party/` (Chromium credits/LICENSE, Ladybird LICENSE + vcpkg
+- `legal/third_party/` (Chromium credits/LICENSE
   copyrights, Nushell/Reedline LICENSE copies)
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `dist/browser/`, `public/`)
-- `ah-chromiumd/`, `ah-webkitd/`, `ah-ladybirdd/`
+- `ah-chromiumd/`, `ah-webkitd/`
 
 Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -187,7 +184,6 @@ Preserve valid outputs and caches for every shipped project, especially:
 
 - Chromium `forks/chromium/src/out/Default`;
 - WebKit `forks/webkit/src/WebKitBuild`;
-- Ladybird `forks/ladybird/Build`;
 - Ghostty Zig and Xcode outputs under `forks/ghostty`;
 - Rust/Cargo target directories; and
 
@@ -207,14 +203,14 @@ and credential discovery. After the operator types the exact confirmation, it:
 
 1. sets first-party product Cargo package versions to the selected release
    version (`ahsh`, `ahweb`, `ah-chromiumd`, `ah-webkitd`,
-   `ah-ladybirdd` only), refreshes their `Cargo.lock` files, commits that bump
+ only), refreshes their `Cargo.lock` files, commits that bump
    on private `main` when needed, and pushes it so the monorepo stays aligned
    with `origin/main`. This step never rewrites anything under `forks/`
    (fork trees are out of scope; `ahterm` still gets the
    release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
 2. proves or reconstructs all released fork inputs from the tracked cumulative
    patch manifest (Ghostty, Nushell, Reedline, Chromium, WebKit, and
-   Ladybird; Gecko is excluded; editor fork excluded);
+   Gecko is excluded; editor fork excluded);
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
 4. packages one archive and freezes its SHA-256;
@@ -245,7 +241,6 @@ Flags for `scripts/release.sh <version>`:
   `ASTROHACKER_TERMINAL_RELEASE_EXPECTED_SHA256=<sha256>`
 - The canonical command sets
   `ASTROHACKER_TERMINAL_RELEASE_SKIP_PRODUCT_QUALIFICATION=1`; lower-level
-  packaging then omits executable version/help checks and Ladybird
   resource-root smokes while retaining artifact-presence, dependency,
   topology, and legal-integrity assertions needed to construct the archive.
 
@@ -308,7 +303,6 @@ normal operator interface.
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
      | `ah-webkitd --version` | `Astrohacker WebKit Engine <version>` |
-     | `ah-ladybirdd --version` | `Astrohacker Ladybird Engine <version>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be
      shown only as secondary detail after the product release line.
@@ -388,12 +382,9 @@ After install, from inside Astrohacker TermSurf:
 
 - `ahweb --browser chromium https://example.com`
 - `ahweb --browser webkit https://example.com`
-- `ahweb --browser ladybird http://127.0.0.1:<fixture>/`
 
 Helpers resolve under `/opt/homebrew/opt/astrohacker-terminal-ah-*` without
 browser path env overrides.
-
-Ladybird is a prototype packaging surface, not production browser parity.
 
 ## Engine path environment variables
 
@@ -401,13 +392,11 @@ Primary product overrides (preferred):
 
 - `ASTROHACKER_CHROMIUM_PATH`
 - `ASTROHACKER_WEBKIT_PATH`
-- `ASTROHACKER_LADYBIRD_PATH`
 
 Legacy dual-read aliases (deprecated; still accepted):
 
 - `TERMSURF_ROAMIUM_PATH` / `TERMSURF_INSTALLED_ROAMIUM_PATH`
 - `TERMSURF_SURFARI_PATH` / `TERMSURF_INSTALLED_SURFARI_PATH`
-- `TERMSURF_GIRLBAT_PATH` / `TERMSURF_INSTALLED_GIRLBAT_PATH`
 
 Values must be nonempty absolute paths. Protocol vars such as `TERMSURF_SOCKET`
 and `TERMSURF_PANE_ID` are unchanged.

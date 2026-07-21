@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072114283091-exp1-universal-render-service",
-      "expected_head": "67b1727d4aed97602ab3e94da7a861e77f07841c",
-      "expected_tree": "ad1b948f4e6ec0f22a54b6bdf89b8b6f6c9ad12a",
+      "branch": "issue-26072117006454-exp1-remove-ladybird",
+      "expected_head": "dccf7bd96251d08d78cf30682829fa2f4bb361e0",
+      "expected_tree": "f2f2207f0ec73c23e1a2e57a3ffa58f8846c752e",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -22,10 +22,11 @@
         "patches/ghostty/patches/issue-26072016457563",
         "patches/ghostty/patches/issue-26072110403572",
         "patches/ghostty/patches/issue-26072112084519",
-        "patches/ghostty/patches/issue-26072114283091"
+        "patches/ghostty/patches/issue-26072114283091",
+        "patches/ghostty/patches/issue-26072117006454"
       ],
-      "patch_count": 39,
-      "archive_sha256": "6ea04eac029f6c988ece2ef307c32be0a008e3418b13e910ff799489f7f65896",
+      "patch_count": 40,
+      "archive_sha256": "eca7829aa5fc7cdeccfeb8ff5eafddab45f3c59293278607e4adb8dd1e713d9a",
       "allowed_untracked": []
     },
     {
@@ -103,20 +104,6 @@
       ],
       "patch_count": 3,
       "archive_sha256": "644ecfe100feb5c5449f9ef4a3a205e83422b4dbbdbea810bf79fb1bcf299596",
-      "allowed_untracked": []
-    },
-    {
-      "name": "ladybird",
-      "checkout": "forks/ladybird",
-      "base": "5baf8116efdeafc74f883e5c2bf9f12d9d80c608",
-      "branch": "5baf8116-issue-26071814115751",
-      "expected_head": "63ced9b469a213c161b6b1b9c74d9e9d024b7552",
-      "expected_tree": "4470e021f2df4eace2dce992c99f4913ae23e7f5",
-      "patch_directories": [
-        "patches/ladybird/patches/issue-26071814115751"
-      ],
-      "patch_count": 22,
-      "archive_sha256": "c981e048efbec1140a515369a399100e792d2c45227b2cb8d53f843e8b8ad9e2",
       "allowed_untracked": []
     }
   ]

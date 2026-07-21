@@ -4,7 +4,7 @@ Read this before any work under `patches/` or ignored `forks/`.
 
 ## Fork change contract (MUST)
 
-These rules apply to **every** product fork (Chromium, WebKit, Ladybird,
+These rules apply to **every** product fork (Chromium, WebKit,
 Ghostty, Gecko, Nushell, and Reedline when source is edited). There is no
 "local-only" fork edit. Per-fork `AGENTS.md` files restate this contract and
 add local paths and branch prefixes only.
@@ -74,7 +74,6 @@ add local paths and branch prefixes only.
 | --- | --- |
 | `chromium/` | Engine; large cumulative archives |
 | `webkit/` | Engine |
-| `ladybird/` | Engine |
 | `ghostty/` | Host terminal (`ahterm`) |
 | `gecko/` | Optional engine; not in Homebrew ship set |
 | `nushell/` | Shell product fork |

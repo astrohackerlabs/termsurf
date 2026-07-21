@@ -1,5 +1,15 @@
 # Ghostty Patches
 
+## Active Add-on (Issue 26072117006454 Exp 1)
+
+- Product branch: `issue-26072117006454-exp1-remove-ladybird`
+- Product HEAD: `dccf7bd96251d08d78cf30682829fa2f4bb361e0`
+- Product tree: `f2f2207f0ec73c23e1a2e57a3ffa58f8846c752e`
+- Issue archive: `patches/ghostty/patches/issue-26072117006454/`
+- Scope: drop Ladybird/Girlbat named engine path resolution; Chromium+WebKit only.
+- Historical Ladybird patch archives elsewhere are unchanged.
+
+
 ## Active Add-on (Issue 26072114283091 Exp 1)
 
 - Parent product commit: `3c9ffede08df58661668d4c5dd8c7f5d0f5965d5`

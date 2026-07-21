@@ -3,7 +3,6 @@ members = [
     "rust/ahweb",
     "rust/ah-chromiumd",
     "rust/ah-webkitd",
-    "rust/ah-ladybirdd",
     "rust/ah-geckod",
 ]
 exclude = [

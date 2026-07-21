@@ -10,7 +10,7 @@ script locals. Agents and humans should add new names only under this scheme.
 | `TERMSURF_*` | TermSurf **protocol** and pane/session IPC; protocol-adjacent embedding traces |
 | `ASTROHACKER_TERMINAL_*` | Desktop host product packaging, release, smoke, install knobs |
 | `ASTROHACKER_SHELL_*` | Shell component (reserved if needed later) |
-| `ASTROHACKER_{CHROMIUM,WEBKIT,LADYBIRD}_*` | Engine helper product overrides |
+| `ASTROHACKER_{CHROMIUM,WEBKIT}_*` | Engine helper product overrides |
 
 **Do not** introduce process environment variables named `AHT_*`, `AHE_*`,
 `AHW_*`, or retired codenames (`ROAMIUM`, `SURFARI`, `GIRLBAT`, `GHOSTBOARD`).
@@ -82,7 +82,6 @@ Resolution order for each engine family:
 | --- | --- |
 | `ASTROHACKER_CHROMIUM_PATH` | `TERMSURF_ROAMIUM_PATH`, `TERMSURF_INSTALLED_ROAMIUM_PATH` |
 | `ASTROHACKER_WEBKIT_PATH` | `TERMSURF_SURFARI_PATH`, `TERMSURF_INSTALLED_SURFARI_PATH` |
-| `ASTROHACKER_LADYBIRD_PATH` | `TERMSURF_GIRLBAT_PATH`, `TERMSURF_INSTALLED_GIRLBAT_PATH` |
 | `ASTROHACKER_GECKO_PATH` | (none; no legacy alias) |
 
 ## Rename map (product knobs)
@@ -91,7 +90,6 @@ Resolution order for each engine family:
 | --- | --- |
 | `TERMSURF_ROAMIUM_PATH` / `TERMSURF_INSTALLED_ROAMIUM_PATH` | `ASTROHACKER_CHROMIUM_PATH` |
 | `TERMSURF_SURFARI_PATH` / `TERMSURF_INSTALLED_SURFARI_PATH` | `ASTROHACKER_WEBKIT_PATH` |
-| `TERMSURF_GIRLBAT_PATH` / `TERMSURF_INSTALLED_GIRLBAT_PATH` | `ASTROHACKER_LADYBIRD_PATH` |
 | `TERMSURF_GHOSTBOARD_APP` / `TERMSURF_RELEASE_GHOSTBOARD_APP` | `ASTROHACKER_TERMINAL_APP` (when harnesses migrate) |
 | `TERMSURF_WEB` / `TERMSURF_RELEASE_WEB` | `ASTROHACKER_WEB_PATH` (when harnesses migrate) |
 | `TERMSURF_SMOKE_VERSION` | `ASTROHACKER_TERMINAL_SMOKE_VERSION` |

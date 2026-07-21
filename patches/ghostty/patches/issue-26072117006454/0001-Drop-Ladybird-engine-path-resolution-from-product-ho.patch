@@ -1,0 +1,395 @@
+From dccf7bd96251d08d78cf30682829fa2f4bb361e0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 12:12:10 -0500
+Subject: [PATCH] Drop Ladybird engine path resolution from product host
+
+---
+ src/apprt/termsurf.zig | 109 ++++++++++-------------------------------
+ 1 file changed, 27 insertions(+), 82 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 5a21620dc..9da33e5c1 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -43,27 +43,20 @@ const default_devtools_reservation_timeout_ms: i64 = 15_000;
+ // Product primary engine path overrides (preferred).
+ const chromium_path_env = "ASTROHACKER_CHROMIUM_PATH";
+ const webkit_path_env = "ASTROHACKER_WEBKIT_PATH";
+-const ladybird_path_env = "ASTROHACKER_LADYBIRD_PATH";
+ // Legacy dual-read aliases (deprecated codenames; still accepted one cycle).
+ const chromium_path_env_legacy = "TERMSURF_ROAMIUM_PATH";
+ const webkit_path_env_legacy = "TERMSURF_SURFARI_PATH";
+-const ladybird_path_env_legacy = "TERMSURF_GIRLBAT_PATH";
+ const chromium_path_env_legacy_installed = "TERMSURF_INSTALLED_ROAMIUM_PATH";
+ const webkit_path_env_legacy_installed = "TERMSURF_INSTALLED_SURFARI_PATH";
+-const ladybird_path_env_legacy_installed = "TERMSURF_INSTALLED_GIRLBAT_PATH";
+ const installed_chromium_path = "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd";
+ const installed_webkit_path = "/opt/homebrew/opt/astrohacker-terminal-ah-webkitd/ah-webkitd";
+-const installed_ladybird_path = "/opt/homebrew/opt/astrohacker-terminal-ah-ladybirdd/bin/ah-ladybirdd";
+ // Compat names used by older test helpers (same values as installed_*).
+ const installed_roamium_path = installed_chromium_path;
+ const installed_surfari_path = installed_webkit_path;
+-const installed_girlbat_path = installed_ladybird_path;
+ const roamium_path_env = chromium_path_env_legacy;
+ const surfari_path_env = webkit_path_env_legacy;
+-const girlbat_path_env = ladybird_path_env_legacy;
+ const installed_roamium_path_env = chromium_path_env_legacy_installed;
+ const installed_surfari_path_env = webkit_path_env_legacy_installed;
+-const installed_girlbat_path_env = ladybird_path_env_legacy_installed;
+ 
+ const render_side_channel_receive_timeout_ms: u32 = 30_000;
+ 
+@@ -1990,16 +1983,6 @@ fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]cons
+         );
+     }
+ 
+-    if (std.mem.eql(u8, browser, "ladybird")) {
+-        return resolveEnginePathFromEnv(
+-            browser,
+-            is_debug,
+-            ladybird_path_env,
+-            ladybird_path_env_legacy,
+-            ladybird_path_env_legacy_installed,
+-            installed_ladybird_path,
+-        );
+-    }
+ 
+     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
+     return null;
+@@ -5198,14 +5181,14 @@ test "browser log state uses astrohacker terminal xdg state home" {
+     }.run);
+ }
+ 
+-test "termsurf render surface stores Ladybird metadata only" {
++test "termsurf render surface stores render-surface metadata only" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const girlbat: [:0]const u8 = "ladybird";
++    const girlbat: [:0]const u8 = "surface-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5213,7 +5196,7 @@ test "termsurf render surface stores Ladybird metadata only" {
+     defer testCloseSocketPair(&tui);
+ 
+     try testSetPendingServer(0, profile, girlbat);
+-    try testSetPane(0, "pane-ladybird", profile, girlbat, "https://example.test/ladybird", tui[0]);
++    try testSetPane(0, "pane-surface", profile, girlbat, "https://example.test/surface", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+@@ -5224,7 +5207,7 @@ test "termsurf render surface stores Ladybird metadata only" {
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 77;
+-    ready.pane_id = @constCast("pane-ladybird");
++    ready.pane_id = @constCast("pane-surface");
+     handleTabReady(&ready);
+ 
+     var surface: c.Termsurf__RenderSurface = undefined;
+@@ -5247,14 +5230,14 @@ test "termsurf render surface stores Ladybird metadata only" {
+     try testing.expectEqual(@as(u64, 0), panes[0].ca_context_id);
+ }
+ 
+-test "termsurf render surface stores matched Ladybird attachment metadata" {
++test "termsurf render surface stores matched render-surface attachment metadata" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const girlbat: [:0]const u8 = "ladybird";
++    const girlbat: [:0]const u8 = "surface-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5262,7 +5245,7 @@ test "termsurf render surface stores matched Ladybird attachment metadata" {
+     defer testCloseSocketPair(&tui);
+ 
+     try testSetPendingServer(0, profile, girlbat);
+-    try testSetPane(0, "pane-ladybird", profile, girlbat, "https://example.test/ladybird", tui[0]);
++    try testSetPane(0, "pane-surface", profile, girlbat, "https://example.test/surface", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+@@ -5273,7 +5256,7 @@ test "termsurf render surface stores matched Ladybird attachment metadata" {
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 77;
+-    ready.pane_id = @constCast("pane-ladybird");
++    ready.pane_id = @constCast("pane-surface");
+     handleTabReady(&ready);
+ 
+     servers[0].render_side_channel.in_use = true;
+@@ -5316,10 +5299,10 @@ test "termsurf render surface stores matched Ladybird attachment metadata" {
+ 
+     var resized_overlay: c.Termsurf__SetOverlay = undefined;
+     c.termsurf__set_overlay__init(&resized_overlay);
+-    resized_overlay.pane_id = @constCast("pane-ladybird");
++    resized_overlay.pane_id = @constCast("pane-surface");
+     resized_overlay.profile = @constCast(profile.ptr);
+     resized_overlay.browser = @constCast(girlbat.ptr);
+-    resized_overlay.url = @constCast("https://example.test/ladybird");
++    resized_overlay.url = @constCast("https://example.test/surface");
+     resized_overlay.col = 1;
+     resized_overlay.row = 5;
+     resized_overlay.width = 71;
+@@ -5336,14 +5319,14 @@ test "termsurf render surface stores matched Ladybird attachment metadata" {
+     try testing.expectEqual(@as(usize, 2), test_iosurface_bridge_release_count);
+ }
+ 
+-test "termsurf render surface defers Ladybird attachment until side-channel handshake" {
++test "termsurf render surface defers render-surface attachment until side-channel handshake" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const girlbat: [:0]const u8 = "ladybird";
++    const girlbat: [:0]const u8 = "surface-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5351,7 +5334,7 @@ test "termsurf render surface defers Ladybird attachment until side-channel hand
+     defer testCloseSocketPair(&tui);
+ 
+     try testSetPendingServer(0, profile, girlbat);
+-    try testSetPane(0, "pane-ladybird", profile, girlbat, "https://example.test/ladybird", tui[0]);
++    try testSetPane(0, "pane-surface", profile, girlbat, "https://example.test/surface", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+@@ -5362,7 +5345,7 @@ test "termsurf render surface defers Ladybird attachment until side-channel hand
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 77;
+-    ready.pane_id = @constCast("pane-ladybird");
++    ready.pane_id = @constCast("pane-surface");
+     handleTabReady(&ready);
+ 
+     servers[0].render_side_channel.in_use = true;
+@@ -5406,14 +5389,14 @@ test "termsurf render surface defers Ladybird attachment until side-channel hand
+     try testing.expectEqual(@as(usize, 1), test_iosurface_bridge_release_count);
+ }
+ 
+-test "termsurf render surface rejects unmatched Ladybird attachment metadata" {
++test "termsurf render surface rejects unmatched render-surface attachment metadata" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const girlbat: [:0]const u8 = "ladybird";
++    const girlbat: [:0]const u8 = "surface-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5421,7 +5404,7 @@ test "termsurf render surface rejects unmatched Ladybird attachment metadata" {
+     defer testCloseSocketPair(&tui);
+ 
+     try testSetPendingServer(0, profile, girlbat);
+-    try testSetPane(0, "pane-ladybird", profile, girlbat, "https://example.test/ladybird", tui[0]);
++    try testSetPane(0, "pane-surface", profile, girlbat, "https://example.test/surface", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+@@ -5432,7 +5415,7 @@ test "termsurf render surface rejects unmatched Ladybird attachment metadata" {
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 77;
+-    ready.pane_id = @constCast("pane-ladybird");
++    ready.pane_id = @constCast("pane-surface");
+     handleTabReady(&ready);
+ 
+     var surface: c.Termsurf__RenderSurface = undefined;
+@@ -5479,7 +5462,7 @@ test "termsurf render surface rejects malformed or stale metadata" {
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const girlbat: [:0]const u8 = "ladybird";
++    const girlbat: [:0]const u8 = "surface-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5487,7 +5470,7 @@ test "termsurf render surface rejects malformed or stale metadata" {
+     defer testCloseSocketPair(&tui);
+ 
+     try testSetPendingServer(0, profile, girlbat);
+-    try testSetPane(0, "pane-ladybird", profile, girlbat, "https://example.test/ladybird", tui[0]);
++    try testSetPane(0, "pane-surface", profile, girlbat, "https://example.test/surface", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+@@ -5498,7 +5481,7 @@ test "termsurf render surface rejects malformed or stale metadata" {
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 77;
+-    ready.pane_id = @constCast("pane-ladybird");
++    ready.pane_id = @constCast("pane-surface");
+     handleTabReady(&ready);
+ 
+     handleRenderSurface(browser[0], null);
+@@ -5532,7 +5515,7 @@ test "termsurf render surface accepts opaque absolute browser selector" {
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const direct_browser: [:0]const u8 = "/tmp/build/arbitrarily-renamed-ladybird";
++    const direct_browser: [:0]const u8 = "/tmp/build/arbitrarily-renamed-engine";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+@@ -5578,11 +5561,7 @@ fn testBrowserResolutionRestoreChromiumPrimary() !void {
+ }
+ 
+ fn testBrowserResolutionRestoreWebkitPrimary() !void {
+-    try testWithRestoredEnv(webkit_path_env, testBrowserResolutionRestoreLadybirdPrimary);
+-}
+-
+-fn testBrowserResolutionRestoreLadybirdPrimary() !void {
+-    try testWithRestoredEnv(ladybird_path_env, testBrowserResolutionRestoreRoamiumLegacy);
++    try testWithRestoredEnv(webkit_path_env, testBrowserResolutionRestoreRoamiumLegacy);
+ }
+ 
+ fn testBrowserResolutionRestoreRoamiumLegacy() !void {
+@@ -5590,11 +5569,7 @@ fn testBrowserResolutionRestoreRoamiumLegacy() !void {
+ }
+ 
+ fn testBrowserResolutionRestoreSurfari() !void {
+-    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreGirlbat);
+-}
+-
+-fn testBrowserResolutionRestoreGirlbat() !void {
+-    try testWithRestoredEnv(girlbat_path_env, testBrowserResolutionRestoreInstalledRoamium);
++    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreInstalledRoamium);
+ }
+ 
+ fn testBrowserResolutionRestoreInstalledRoamium() !void {
+@@ -5602,104 +5577,76 @@ fn testBrowserResolutionRestoreInstalledRoamium() !void {
+ }
+ 
+ fn testBrowserResolutionRestoreInstalledSurfari() !void {
+-    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolutionRestoreInstalledGirlbat);
+-}
+-
+-fn testBrowserResolutionRestoreInstalledGirlbat() !void {
+-    try testWithRestoredEnv(installed_girlbat_path_env, testBrowserResolution);
++    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolution);
+ }
+ 
+ fn testBrowserResolution() !void {
+     const testing = std.testing;
+     const surfari: [:0]const u8 = "webkit";
+     const roamium: [:0]const u8 = "chromium";
+-    const girlbat: [:0]const u8 = "ladybird";
+     const fake_primary_chromium: [:0]const u8 = "/tmp/astrohacker-primary-chromium";
+     const fake_primary_webkit: [:0]const u8 = "/tmp/astrohacker-primary-webkit";
+-    const fake_primary_ladybird: [:0]const u8 = "/tmp/astrohacker-primary-ladybird";
+     const fake_surfari_path: [:0]const u8 = "/tmp/termsurf-test-webkit";
+     const fake_roamium_path: [:0]const u8 = "/tmp/termsurf-test-chromium";
+-    const fake_girlbat_path: [:0]const u8 = "/tmp/termsurf-test-ladybird";
+     const installed_surfari_override: [:0]const u8 = "/tmp/termsurf-installed-webkit";
+     const installed_roamium_override: [:0]const u8 = "/tmp/termsurf-installed-chromium";
+-    const installed_girlbat_override: [:0]const u8 = "/tmp/termsurf-installed-ladybird";
+     const invalid_override: [:0]const u8 = "relative-browser";
+ 
+     _ = c.unsetenv(chromium_path_env);
+     _ = c.unsetenv(webkit_path_env);
+-    _ = c.unsetenv(ladybird_path_env);
+     _ = c.unsetenv(roamium_path_env);
+     _ = c.unsetenv(surfari_path_env);
+-    _ = c.unsetenv(girlbat_path_env);
+     _ = c.unsetenv(installed_roamium_path_env);
+     _ = c.unsetenv(installed_surfari_path_env);
+-    _ = c.unsetenv(installed_girlbat_path_env);
+ 
+     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+-    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+-    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
+     try testing.expect(resolveBrowserExecutableForBuild("unknown-browser", true) == null);
++    try testing.expect(resolveBrowserExecutableForBuild("ladybird", true) == null);
++    try testing.expect(resolveBrowserExecutableForBuild("ladybird", false) == null);
+     try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutableForBuild("/tmp/absolute-browser", true).?);
+ 
+     try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+-    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
+ 
+     // Primary product env wins.
+     if (c.setenv(chromium_path_env, fake_primary_chromium, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(webkit_path_env, fake_primary_webkit, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(ladybird_path_env, fake_primary_ladybird, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(roamium_path_env, fake_roamium_path, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(surfari_path_env, fake_surfari_path, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(girlbat_path_env, fake_girlbat_path, 1) != 0) return error.SetenvFailed;
+     try testing.expectEqualStrings(fake_primary_webkit, resolveBrowserExecutableForBuild(surfari, true).?);
+     try testing.expectEqualStrings(fake_primary_chromium, resolveBrowserExecutableForBuild(roamium, true).?);
+-    try testing.expectEqualStrings(fake_primary_ladybird, resolveBrowserExecutableForBuild(girlbat, true).?);
+     try testing.expectEqualStrings(fake_primary_webkit, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(fake_primary_chromium, resolveBrowserExecutableForBuild(roamium, false).?);
+-    try testing.expectEqualStrings(fake_primary_ladybird, resolveBrowserExecutableForBuild(girlbat, false).?);
+ 
+     // Invalid primary falls through to valid legacy.
+     if (c.setenv(chromium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(webkit_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(ladybird_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+     try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
+-    try testing.expectEqualStrings(fake_girlbat_path, resolveBrowserExecutableForBuild(girlbat, true).?);
+ 
+     // Legacy-only still works.
+     _ = c.unsetenv(chromium_path_env);
+     _ = c.unsetenv(webkit_path_env);
+-    _ = c.unsetenv(ladybird_path_env);
+     try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
+     try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+-    try testing.expectEqualStrings(fake_girlbat_path, resolveBrowserExecutableForBuild(girlbat, true).?);
+-    try testing.expectEqualStrings(fake_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
+ 
+     // Invalid legacy falls through to installed default (non-debug).
+     if (c.setenv(surfari_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(roamium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(girlbat_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+-    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+-    try testing.expectEqualStrings(installed_girlbat_path, resolveBrowserExecutableForBuild(girlbat, false).?);
+     try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+ 
+     _ = c.unsetenv(surfari_path_env);
+     _ = c.unsetenv(roamium_path_env);
+-    _ = c.unsetenv(girlbat_path_env);
+     if (c.setenv(installed_surfari_path_env, installed_surfari_override, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(installed_roamium_path_env, installed_roamium_override, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(installed_girlbat_path_env, installed_girlbat_override, 1) != 0) return error.SetenvFailed;
+     try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+-    try testing.expect(resolveBrowserExecutableForBuild(girlbat, true) == null);
+-    try testing.expectEqualStrings(installed_girlbat_override, resolveBrowserExecutableForBuild(girlbat, false).?);
+     try testing.expectEqualStrings(installed_surfari_override, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
+ }
+@@ -5726,10 +5673,8 @@ test "browser spawn argv carries one render surface service for every selector"
+     }{
+         .{ .executable = "/tmp/ah-chromiumd", .selector = "chromium", .listen_socket = "/tmp/termsurf-chromium.sock" },
+         .{ .executable = "/tmp/ah-webkitd", .selector = "webkit", .listen_socket = "/tmp/termsurf-webkit.sock" },
+-        .{ .executable = "/tmp/ah-ladybirdd", .selector = "ladybird", .listen_socket = "/tmp/termsurf-ladybird.sock" },
+         .{ .executable = "/tmp/build/renamed-chromium", .selector = "/tmp/build/renamed-chromium", .listen_socket = "/tmp/termsurf-direct-chromium.sock" },
+         .{ .executable = "/tmp/build/arbitrary-webkit-engine", .selector = "/tmp/build/arbitrary-webkit-engine", .listen_socket = "/tmp/termsurf-direct-webkit.sock" },
+-        .{ .executable = "/tmp/build/ladybird-from-this-build", .selector = "/tmp/build/ladybird-from-this-build", .listen_socket = "/tmp/termsurf-direct-ladybird.sock" },
+     };
+ 
+     for (cases) |case| {
+-- 
+2.50.1 (Apple Git-155)
+

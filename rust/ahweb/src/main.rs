@@ -1136,7 +1136,7 @@ struct Cli {
     #[arg(long, global = true)]
     incognito: bool,
 
-    /// Browser engine to use ("chromium", "webkit", "ladybird", "gecko") or absolute path
+    /// Browser engine to use ("chromium", "webkit", "gecko") or absolute path
     #[arg(short, long, global = true)]
     browser: Option<String>,
 
@@ -2875,7 +2875,6 @@ fn browser_display_label(browser: &str) -> &str {
     match basename {
         "chromium" | "ah-chromiumd" => "chromium",
         "webkit" | "ah-webkitd" => "webkit",
-        "ladybird" | "ah-ladybirdd" => "ladybird",
         "gecko" | "ah-geckod" => "gecko",
         _ => basename,
     }
@@ -3999,7 +3998,7 @@ mod tests {
 
     #[test]
     fn loading_screen_uses_browser_label_and_immediate_warning() {
-        for browser_label in ["webkit", "chromium", "ladybird"] {
+        for browser_label in ["webkit", "chromium"] {
             let rendered = render_loading_probe(browser_label);
             assert!(
                 rendered
@@ -4028,15 +4027,12 @@ mod tests {
         for (input, expected) in [
             ("chromium", "chromium"),
             ("webkit", "webkit"),
-            ("ladybird", "ladybird"),
             ("gecko", "gecko"),
             ("ah-chromiumd", "chromium"),
             ("ah-webkitd", "webkit"),
-            ("ah-ladybirdd", "ladybird"),
             ("ah-geckod", "gecko"),
             ("/opt/homebrew/bin/ah-chromiumd", "chromium"),
             ("/opt/homebrew/bin/ah-webkitd", "webkit"),
-            ("/opt/homebrew/bin/ah-ladybirdd", "ladybird"),
             ("/tmp/custom-engine", "custom-engine"),
         ] {
             assert_eq!(browser_display_label(input), expected, "{input}");

@@ -11,10 +11,8 @@ private Astrohacker monorepo for source releases. It includes:
   `termsurf-14-*.png`).
 - `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install helpers and smoke scripts.
-- `rust/` — Rust workspace crates for `ahweb`, Chromium, WebKit, Ladybird,
   and protocol/native support code.
 - `patches/` — fork patch archives and reconstruction notes for Chromium,
-  WebKit, Ladybird, Ghostty, and Gecko.
 
 Large upstream fork checkouts and build outputs are not committed here. Use the
 patch records under `patches/` to reconstruct local engine workspaces when
@@ -41,7 +39,6 @@ brew upgrade --cask astrohacker
 ## Build
 
 Development builds require Xcode, Zig, Rust, Bun, Chromium's `depot_tools`, and
-the WebKit/Ladybird build tooling described in the patch documentation.
 
 ```bash
 brew install zig
