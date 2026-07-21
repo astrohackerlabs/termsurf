@@ -5,7 +5,7 @@ environment naming, legal package sources, and public-source templates.
 
 **User-facing product docs** live on the website
 ([astrohacker.com/docs](https://astrohacker.com/docs) via
-`bun/website-rr/app/routes/docs/`). Craft rules:
+`bun/website/app/ui/docs/`). Craft rules:
 [`docs/marketing/docs-writing.md`](./marketing/docs-writing.md).
 
 | Path | Role |

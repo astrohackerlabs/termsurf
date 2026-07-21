@@ -305,7 +305,7 @@ normal operator interface.
      | --- | --- |
      | `ahweb --version` | `Astrohacker Web <version>` |
      | `ahsh --version` | `Astrohacker Shell <version>` |
-     | `ahcalc --version` | `Astrohacker Calc <version>` |
+     | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
      | `ah-webkitd --version` | `Astrohacker WebKit Engine <version>` |
      | `ah-ladybirdd --version` | `Astrohacker Ladybird Engine <version>` |
