@@ -90,21 +90,6 @@
           "expected_tree": "9c413a95028c747cfbcc75b976c75a9a00b3efc8"
         }
       ]
-    },
-    {
-      "name": "webkit",
-      "checkout": "forks/webkit/src",
-      "base": "e0ee95bcafc0c470dfce6db7cfd8ce708c6e9e5e",
-      "branch": "issue-26072112084519-exp1-live-compositor-presentation",
-      "expected_head": "bed48373fbdf1400bfbf4f8ecc2c96fb581455cc",
-      "expected_tree": "547986ebaf3970020f4dc86325c20dc2fe5fa756",
-      "patch_directories": [
-        "patches/webkit/patches/issue-26071814115751",
-        "patches/webkit/patches/issue-26072112084519"
-      ],
-      "patch_count": 3,
-      "archive_sha256": "644ecfe100feb5c5449f9ef4a3a205e83422b4dbbdbea810bf79fb1bcf299596",
-      "allowed_untracked": []
     }
   ]
 }

@@ -35,6 +35,16 @@ struct State {
     int target_url_checked;
     int target_url_events;
     char target_url_sequence[2][256];
+    int hover_checked;
+    int hover_link_x;
+    int hover_link_y;
+    int hover_neutral_x;
+    int hover_neutral_y;
+    uint64_t hover_move_count_before;
+    uint64_t authoritative_mouse_moves;
+    int authoritative_selector_checked;
+    int drag_checked;
+    uint64_t drag_move_count_before;
     int cursor_checked;
     int cursor_events;
     int cursor_sequence[3];
@@ -72,13 +82,21 @@ static void check_logical_focus(void *user_data);
 static void run_pointer_key_sequence(void *user_data);
 static void run_target_url_sequence(void *user_data);
 static void target_url_move_to_link(const char *result, void *user_data);
-static void target_url_clear_hover(void *user_data);
+static void query_hover_on_state(void *user_data);
+static void check_hover_on_state(const char *result, void *user_data);
+static void query_hover_off_state(void *user_data);
+static void check_hover_off_state(const char *result, void *user_data);
+static void run_drag_sequence(void *user_data);
+static void drag_to_region(const char *result, void *user_data);
+static void query_drag_state(void *user_data);
+static void check_drag_state(const char *result, void *user_data);
 static void check_target_url_sequence(void *user_data);
 static void run_cursor_sequence(void *user_data);
 static void capture_cursor_sequence(void *user_data);
 static void cursor_move_to_element_center(const char *result, void *user_data);
 static void cursor_after_pointer(void *user_data);
 static void cursor_after_hand(void *user_data);
+static void cursor_query_pointer(void *user_data);
 static void cursor_query_hand(void *user_data);
 static void cursor_query_ibeam(void *user_data);
 static void check_cursor_sequence(void *user_data);
@@ -254,6 +272,10 @@ static void finish(void *user_data)
         fail("input check missing");
     if (!state->target_url_checked)
         fail("target URL check missing");
+    if (!state->hover_checked)
+        fail("hover check missing");
+    if (!state->drag_checked)
+        fail("drag check missing");
     if (!state->cursor_checked)
         fail("cursor check missing");
     if (!state->console_checked)
@@ -279,7 +301,7 @@ static void finish(void *user_data)
     ts_destroy_browser_context(state->persistent_context);
     ts_destroy_browser_context(state->incognito_context);
     stop_auth_server(state);
-    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d stable_context_id=%u live_visibility=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d cursor=%d console=%d js_dialogs=%d http_auth=%d renderer_crash=%d\n",
+    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d stable_context_id=%u live_visibility=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d hover=%d authoritative_moves=%llu selector=%d target_url=%d cursor=%d drag=%d console=%d js_dialogs=%d http_auth=%d renderer_crash=%d\n",
         state->initialized,
         state->tab_ready,
         state->context_id_count,
@@ -293,8 +315,12 @@ static void finish(void *user_data)
         state->resized,
         state->focus_checked,
         state->input_checked,
+        state->hover_checked,
+        (unsigned long long)state->authoritative_mouse_moves,
+        state->authoritative_selector_checked,
         state->target_url_checked,
         state->cursor_checked,
+        state->drag_checked,
         state->console_checked,
         state->javascript_dialog_checked,
         state->http_auth_accept_checked && state->http_auth_reject_checked,
@@ -399,11 +425,8 @@ static void check_input_result(const char *result, void *user_data)
         fail("input state result missing");
     /* Pane focus is a TermSurf routing state. The accessory host is never a
      * key window, so DOM focus/blur is not an oracle for it. */
-    /* Accessory host often does not synthesize DOM mousemove from synthetic
-     * NSEventTypeMouseMoved; click proves pointer delivery on the same path. */
-    if (!strstr(result, "\"move\":\"120,130\"") && !strstr(result, "\"move\":\"110,120\"") &&
-        !strstr(result, "\"click\":\"140,150,0\""))
-        fail("pointer input was not observed (mousemove/click)");
+    if (!strstr(result, "\"move\":\"120,130\""))
+        fail("authoritative mousemove was not observed");
     if (!strstr(result, "\"click\":\"140,150,0\""))
         fail("click was not observed");
     if (strstr(result, "\"scroll\":0"))
@@ -413,7 +436,7 @@ static void check_input_result(const char *result, void *user_data)
     if (!strstr(result, "\"colorScheme\":\"dark\""))
         fail("dark color scheme was not observed");
     state->input_checked = 1;
-    ts_post_task(run_target_url_sequence, state);
+    ts_post_task(run_console_sequence, state);
 }
 
 static void check_target_url_sequence(void *user_data)
@@ -426,7 +449,65 @@ static void check_target_url_sequence(void *user_data)
     if (strcmp(state->target_url_sequence[1], "") != 0)
         fail("target URL clear callback mismatch");
     state->target_url_checked = 1;
-    ts_post_task(run_console_sequence, state);
+    ts_post_task(run_drag_sequence, state);
+}
+
+static void check_drag_state(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    printf("CALLBACK drag_state %s\n", result ? result : "");
+    if (!result)
+        fail("drag state missing");
+    if (!strstr(result, "\"down\":1") || !strstr(result, "\"up\":1"))
+        fail("drag down/up events missing");
+    if (!strstr(result, "Authoritative WebKit drag selection"))
+        fail("native text selection missing after drag");
+    if (ts_webkit_test_authoritative_mouse_move_count(state->web_contents) - state->drag_move_count_before != 1)
+        fail("active drag incorrectly used the ordinary authoritative-move path");
+    state->drag_checked = 1;
+    ts_post_task(run_pointer_key_sequence, state);
+}
+
+static void query_drag_state(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "JSON.stringify({drag:window.__webkitDrag,selection:String(getSelection())})",
+        check_drag_state,
+        state);
+}
+
+static void drag_to_region(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    if (!result)
+        fail("drag coordinates missing");
+    const char *x1p = strstr(result, "\"x1\":");
+    const char *x2p = strstr(result, "\"x2\":");
+    const char *yp = strstr(result, "\"y\":");
+    if (!x1p || !x2p || !yp)
+        fail("drag coordinates parse failed");
+    int x1 = (int)(atof(x1p + 5) + 0.5);
+    int x2 = (int)(atof(x2p + 5) + 0.5);
+    int y = (int)(atof(yp + 4) + 0.5);
+    printf("CALLBACK drag_coords x1=%d x2=%d y=%d\n", x1, x2, y);
+    state->drag_move_count_before = ts_webkit_test_authoritative_mouse_move_count(state->web_contents);
+    ts_forward_mouse_move(state->web_contents, x1, y, 0);
+    ts_forward_mouse_event(state->web_contents, 0, 0, x1, y, 1, 0);
+    ts_forward_mouse_move(state->web_contents, x2, y, 0);
+    ts_forward_mouse_event(state->web_contents, 1, 0, x2, y, 1, 0);
+    ts_webkit_test_post_delayed_task(0.8, query_drag_state, state);
+}
+
+static void run_drag_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "(() => { const el=document.getElementById('drag-region'); el.scrollIntoView({block:'center'}); const r=el.getBoundingClientRect(); return JSON.stringify({x1:r.left+8,x2:r.right-8,y:r.top+r.height/2}); })()",
+        drag_to_region,
+        state);
 }
 
 static void check_cursor_sequence(void *user_data)
@@ -434,45 +515,111 @@ static void check_cursor_sequence(void *user_data)
     struct State *state = (struct State *)user_data;
     if (state->cursor_events != 3)
         fail("cursor callback count mismatch");
-    if (state->cursor_sequence[0] != 0)
-        fail("pointer cursor callback mismatch");
-    if (state->cursor_sequence[1] != 2)
+    if (state->cursor_sequence[0] != 2)
         fail("hand cursor callback mismatch");
+    if (state->cursor_sequence[1] != 0)
+        fail("pointer cursor callback mismatch");
     if (state->cursor_sequence[2] != 3)
         fail("i-beam cursor callback mismatch");
     state->cursor_checked = 1;
     ts_set_on_cursor_changed(NULL, NULL);
-    ts_post_task(run_pointer_key_sequence, state);
+    ts_post_task(run_target_url_sequence, state);
 }
 
-static void target_url_clear_hover(void *user_data)
+static void check_hover_off_state(const char *result, void *user_data)
 {
     struct State *state = (struct State *)user_data;
-    ts_forward_mouse_move(state->web_contents, 20, 20, 0);
-    ts_forward_mouse_move(state->web_contents, 25, 25, 0);
-    ts_webkit_test_post_delayed_task(1.0, check_target_url_sequence, state);
+    printf("CALLBACK hover_state phase=off %s\n", result ? result : "");
+    if (!result)
+        fail("hover-off state missing");
+    if (!strstr(result, "\"hover\":false"))
+        fail("CSS hover did not clear");
+    if (!strstr(result, "\"background\":\"rgb(47, 129, 247)\""))
+        fail("hover background did not restore");
+    if (!strstr(result, "mouseout:target-link") || !strstr(result, "mouseleave:target-link"))
+        fail("hover exit events missing");
+    state->authoritative_mouse_moves = ts_webkit_test_authoritative_mouse_move_count(state->web_contents);
+    if (state->authoritative_mouse_moves - state->hover_move_count_before != 2)
+        fail("hover sequence did not inject exactly one authoritative move per coordinate");
+    state->hover_checked = 1;
+    check_target_url_sequence(state);
+}
+
+static void query_hover_off_state(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "(() => { const el=document.getElementById('target-link'); const s=getComputedStyle(el); return JSON.stringify({hover:el.matches(':hover'),background:s.backgroundColor,color:s.color,events:window.__webkitHoverEvents}); })()",
+        check_hover_off_state,
+        state);
+}
+
+static void check_hover_on_state(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    printf("CALLBACK hover_state phase=on %s\n", result ? result : "");
+    if (!result)
+        fail("hover-on state missing");
+    if (!strstr(result, "\"hover\":true"))
+        fail("CSS hover did not activate");
+    if (!strstr(result, "\"background\":\"rgb(249, 115, 22)\""))
+        fail("hover background did not change");
+    const char *over = strstr(result, "mouseover:target-link");
+    const char *enter = strstr(result, "mouseenter:target-link");
+    const char *move = strstr(result, "mousemove:target-link");
+    if (!over || !enter || !move)
+        fail("hover entry events missing");
+    if (!(over < enter && enter < move))
+        fail("hover entry events out of order");
+    ts_forward_mouse_move(state->web_contents, state->hover_neutral_x, state->hover_neutral_y, 0);
+    ts_webkit_test_post_delayed_task(0.8, query_hover_off_state, state);
+}
+
+static void query_hover_on_state(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "(() => { const el=document.getElementById('target-link'); const s=getComputedStyle(el); return JSON.stringify({hover:el.matches(':hover'),background:s.backgroundColor,color:s.color,events:window.__webkitHoverEvents}); })()",
+        check_hover_on_state,
+        state);
 }
 
 static void target_url_move_to_link(const char *result, void *user_data)
 {
     struct State *state = (struct State *)user_data;
-    double x = 0, y = 0;
+    double x = 0, y = 0, neutral_x = 0, neutral_y = 0;
     if (!result)
         fail("target-link coords missing");
     if (strstr(result, "\"ok\":false") || strstr(result, "elementsFromPoint-miss"))
         fail("target-link not in elementsFromPoint hit stack");
     const char *xp = strstr(result, "\"x\":");
     const char *yp = strstr(result, "\"y\":");
-    if (!xp || !yp)
+    const char *nxp = strstr(result, "\"neutralX\":");
+    const char *nyp = strstr(result, "\"neutralY\":");
+    if (!xp || !yp || !nxp || !nyp)
         fail("target-link coords parse failed");
     x = atof(xp + 4);
     y = atof(yp + 4);
-    int ix = (int)(x + 0.5);
-    int iy = (int)(y + 0.5);
-    printf("CALLBACK target_link_coords x=%d y=%d\n", ix, iy);
-    ts_forward_mouse_move(state->web_contents, ix - 1, iy - 1, 0);
-    ts_forward_mouse_move(state->web_contents, ix, iy, 0);
-    ts_webkit_test_post_delayed_task(0.8, target_url_clear_hover, state);
+    neutral_x = atof(nxp + 11);
+    neutral_y = atof(nyp + 11);
+    state->hover_link_x = (int)(x + 0.5);
+    state->hover_link_y = (int)(y + 0.5);
+    state->hover_neutral_x = (int)(neutral_x + 0.5);
+    state->hover_neutral_y = (int)(neutral_y + 0.5);
+    state->authoritative_selector_checked = ts_webkit_test_has_authoritative_mouse_move_selector(state->web_contents);
+    if (!state->authoritative_selector_checked)
+        fail("WKWebView _simulateMouseMove: selector unavailable");
+    state->hover_move_count_before = ts_webkit_test_authoritative_mouse_move_count(state->web_contents);
+    printf("CALLBACK hover_coords link_x=%d link_y=%d neutral_x=%d neutral_y=%d count_before=%llu\n",
+        state->hover_link_x,
+        state->hover_link_y,
+        state->hover_neutral_x,
+        state->hover_neutral_y,
+        (unsigned long long)state->hover_move_count_before);
+    ts_forward_mouse_move(state->web_contents, state->hover_link_x, state->hover_link_y, 0);
+    ts_webkit_test_post_delayed_task(0.8, query_hover_on_state, state);
 }
 
 static void run_target_url_sequence(void *user_data)
@@ -480,7 +627,7 @@ static void run_target_url_sequence(void *user_data)
     struct State *state = (struct State *)user_data;
     ts_webkit_test_evaluate_javascript(
         state->web_contents,
-        "(() => { const el = document.getElementById('target-link'); if (!el) return null; el.scrollIntoView({block:'nearest'}); const r = el.getBoundingClientRect(); const pts=[[r.left+r.width/2,r.top+r.height/2],[r.left+4,r.top+4],[r.right-4,r.bottom-4]]; for (const p of pts) { const x=p[0],y=p[1]; const list=document.elementsFromPoint?document.elementsFromPoint(x,y):[]; const top=list[0]||document.elementFromPoint(x,y); if (!top) continue; let n=top,hit=false; while(n){if(n===el){hit=true;break;}n=n.parentElement;} if(!hit&&!(el.contains&&el.contains(top))) continue; return JSON.stringify({x:x,y:y,ok:true,href:el.href}); } return JSON.stringify({ok:false,reason:'elementsFromPoint-miss'}); })()",
+        "(() => { const el=document.getElementById('target-link'), neutral=document.getElementById('pointer-region'); if(!el||!neutral)return null; el.scrollIntoView({block:'nearest'}); const r=el.getBoundingClientRect(), nr=neutral.getBoundingClientRect(); const x=r.left+r.width/2,y=r.top+r.height/2,neutralX=nr.left+nr.width/2,neutralY=nr.top+nr.height/2; const top=document.elementFromPoint(x,y),neutralTop=document.elementFromPoint(neutralX,neutralY); return JSON.stringify({x,y,neutralX,neutralY,ok:!!top&&el.contains(top)||top===el,neutralOk:!!neutralTop&&neutral.contains(neutralTop)||neutralTop===neutral,href:el.href}); })()",
         target_url_move_to_link,
         state);
 }
@@ -530,6 +677,12 @@ static void capture_cursor_sequence(void *user_data)
 {
     struct State *state = (struct State *)user_data;
     ts_set_on_cursor_changed(on_cursor_changed, state);
+    ts_post_task(cursor_query_hand, state);
+}
+
+static void cursor_query_pointer(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
     state->cursor_expected_type = 0;
     /* pointer-region */
     ts_webkit_test_evaluate_javascript(
@@ -544,7 +697,7 @@ static void cursor_after_pointer(void *user_data)
     struct State *state = (struct State *)user_data;
     if (state->cursor_events < 1)
         fail("pointer cursor callback missing before hand stage");
-    ts_post_task(cursor_query_hand, state);
+    ts_post_task(cursor_query_ibeam, state);
 }
 
 static void cursor_query_hand(void *user_data)
@@ -561,8 +714,8 @@ static void cursor_query_hand(void *user_data)
 static void cursor_after_hand(void *user_data)
 {
     struct State *state = (struct State *)user_data;
-    if (state->cursor_events < 2)
-        fail("hand cursor callback missing before ibeam stage");
+    if (state->cursor_events < 1)
+        fail("hand cursor callback missing before pointer stage");
     if (state->cursor_sequence[state->cursor_events - 1] != 2 && state->cursor_sequence[1] != 2) {
         /* allow any position in sequence so far to contain type 2 */
         int found = 0;
@@ -572,7 +725,7 @@ static void cursor_after_hand(void *user_data)
         if (!found)
             fail("hand cursor type 2 not observed");
     }
-    ts_post_task(cursor_query_ibeam, state);
+    ts_post_task(cursor_query_pointer, state);
 }
 
 static void cursor_query_ibeam(void *user_data)

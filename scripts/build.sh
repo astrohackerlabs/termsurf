@@ -331,13 +331,13 @@ case "$COMPONENT" in
   ah-webkitd|webkit)     build_webkitd ;;
   ahterm|aht) build_ahterm ;;
   all)
+    # Shipped desktop engines: Chromium only (WebKit archived; optional
+    # webkit-fork / ah-webkitd targets remain for local reconstruction).
     build_chromium_fork
     build_ahweb
     build_ahsh
     build_ahcalc
     build_chromiumd
-    build_webkit_fork
-    build_webkitd
     build_ahterm
     echo ""
     echo "Done (all)."

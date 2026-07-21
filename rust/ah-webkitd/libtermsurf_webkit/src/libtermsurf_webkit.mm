@@ -52,7 +52,16 @@ static bool pdfResponderProbeModeIs(NSString *mode)
     return [pdfResponderProbeModeRaw() isEqualToString:mode];
 }
 
+@interface TSHostWindow ()
+@property(nonatomic) BOOL termsurfLogicallyActive;
+@end
+
 @implementation TSHostWindow
+- (BOOL)isKeyWindow
+{
+    return self.termsurfLogicallyActive || [super isKeyWindow];
+}
+
 - (BOOL)canBecomeKeyWindow
 {
     if (g_pdf_copy_bridge_allows_key_main)
@@ -250,7 +259,7 @@ struct WebContents {
     NSString *last_target_url;
     id cursor_observer;
     int last_cursor_type;
-    uint64_t cursor_probe_generation;
+    uint64_t authoritative_mouse_move_count;
     bool suppress_cursor_notifications;
     bool renderer_crash_reported;
     bool renderer_crashed;
@@ -5179,6 +5188,30 @@ static void deliverMouseEvent(WebContents *contents, NSEvent *event, NSString *p
     restoreMouseEventSwizzles();
 }
 
+static void deliverAuthoritativeMouseMove(WebContents *contents, NSEvent *event)
+{
+    [NSApp _setCurrentEvent:event];
+    [contents->window sendEvent:event];
+    [contents->web_view _simulateMouseMove:event];
+    [NSApp _setCurrentEvent:nil];
+
+    contents->authoritative_mouse_move_count++;
+    if (webkitCursorTraceEnabled()) {
+        NSPoint viewLocation = [contents->web_view convertPoint:event.locationInWindow fromView:nil];
+        fprintf(stderr,
+            "[libtermsurf_webkit] webkit-pointer phase=simulate-move tab=%d count=%llu location=%s view_location=%s bounds=%s visible_rect=%s first_responder=%d ignores_non_wheel=%d ignores_move=%d\n",
+            contents->tab_id,
+            (unsigned long long)contents->authoritative_mouse_move_count,
+            NSStringFromPoint(event.locationInWindow).UTF8String ?: "",
+            NSStringFromPoint(viewLocation).UTF8String ?: "",
+            NSStringFromRect(contents->web_view.bounds).UTF8String ?: "",
+            NSStringFromRect(contents->web_view.visibleRect).UTF8String ?: "",
+            contents->window.firstResponder == contents->web_view ? 1 : 0,
+            contents->web_view._ignoresNonWheelEvents ? 1 : 0,
+            contents->web_view._ignoresMouseMoveEvents ? 1 : 0);
+    }
+}
+
 static void withCString(NSString *value, void (^block)(const char *))
 {
     block(value ? [value UTF8String] : "");
@@ -5650,40 +5683,6 @@ static void fireTargetUrl(WebContents *contents, NSString *url)
         g_callbacks.on_target_url_changed(contents, c_url, g_callbacks.on_target_url_changed_data);
     });
 }
-static void updateTargetUrlFromDocumentPoint(WebContents *contents, int x, int y)
-{
-    if (!contents || !contents->web_view || !g_callbacks.on_target_url_changed)
-        return;
-    // Real hit-test stack (not smallest-rect scan): elementsFromPoint + ancestor href.
-    NSString *script = [NSString stringWithFormat:
-        @"(() => {"
-         "const x = %d, y = %d;"
-         "const list = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];"
-         "const top = list.length ? list[0] : document.elementFromPoint(x, y);"
-         "if (!top) return '';"
-         "let node = top;"
-         "while (node) {"
-         "  if (node instanceof HTMLAnchorElement && node.href) return node.href;"
-         "  if (node.closest) {"
-         "    const a = node.closest('a[href]');"
-         "    if (a && a.href) return a.href;"
-         "  }"
-         "  node = node.parentElement;"
-         "}"
-         "return '';"
-         "})()",
-        x, y];
-    [contents->web_view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
-        if (!isRegisteredContents(contents) || error)
-            return;
-        NSString *href = [result isKindOfClass:NSString.class] ? (NSString *)result : @"";
-        fireTargetUrl(contents, href);
-    }];
-}
-
-
-
-
 static int chromiumCursorTypeForWebCoreCursorType(NSInteger cursor_type)
 {
     switch (cursor_type) {
@@ -5711,60 +5710,6 @@ static void fireCursorChanged(WebContents *contents, int cursor_type)
     traceWebKitCursor(contents, @"fire", -1, cursor_type);
     g_callbacks.on_cursor_changed(contents, cursor_type, g_callbacks.on_cursor_changed_data);
 }
-
-static void updateCursorFromDocumentPoint(WebContents *contents, int x, int y)
-{
-    if (!contents || !contents->web_view || !g_callbacks.on_cursor_changed)
-        return;
-
-    uint64_t generation = ++contents->cursor_probe_generation;
-    // Real hit-test stack: elementsFromPoint (top-first) + ancestor walk.
-    // Do not invent hits via querySelectorAll/smallest-rect geometry.
-    NSString *script = [NSString stringWithFormat:
-        @"(() => {"
-         "const x = %d, y = %d;"
-         "const list = document.elementsFromPoint ? document.elementsFromPoint(x, y) : [];"
-         "const top = list.length ? list[0] : document.elementFromPoint(x, y);"
-         "if (!top) return JSON.stringify({t:0, tag:'none', n:0, via:'empty'});"
-         "let node = top;"
-         "while (node) {"
-         "  if (node instanceof HTMLAnchorElement && node.href) return JSON.stringify({t:2, tag:node.tagName||'', id:node.id||'', via:'a'});"
-         "  const tag = node.tagName ? node.tagName.toLowerCase() : '';"
-         "  if (tag === 'input' || tag === 'textarea' || node.isContentEditable) return JSON.stringify({t:3, tag:tag, id:node.id||'', via:'input'});"
-         "  const cursor = getComputedStyle(node).cursor;"
-         "  if (cursor === 'pointer') return JSON.stringify({t:2, tag:tag, cursor:cursor, id:node.id||'', via:'pointer'});"
-         "  if (cursor === 'text' || cursor === 'vertical-text') return JSON.stringify({t:3, tag:tag, cursor:cursor, id:node.id||'', via:'text'});"
-         "  node = node.parentElement;"
-         "}"
-         "return JSON.stringify({t:0, tag:top.tagName||'', id:top.id||'', cursor:getComputedStyle(top).cursor, n:list.length, via:'top'});"
-         "})()",
-        x,
-        y];
-
-    [contents->web_view evaluateJavaScript:script completionHandler:^(id result, NSError *error) {
-        if (!isRegisteredContents(contents))
-            return;
-        if (contents->cursor_probe_generation != generation)
-            return;
-        if (error)
-            return;
-        int cursor_type = 0;
-        if ([result isKindOfClass:NSString.class]) {
-            NSString *s = (NSString *)result;
-            NSRange r = [s rangeOfString:@"\"t\":"];
-            if (r.location != NSNotFound)
-                cursor_type = [[s substringFromIndex:r.location + 4] intValue];
-            fprintf(stderr, "[libtermsurf_webkit] webkit-cursor dom-json %s\n", s.UTF8String ?: "");
-        } else if ([result respondsToSelector:@selector(intValue)]) {
-            cursor_type = [result intValue];
-        } else {
-            return;
-        }
-        traceWebKitCursor(contents, @"dom", -1, cursor_type);
-        fireCursorChanged(contents, cursor_type);
-    }];
-}
-
 
 static NSString *consoleBridgeScriptSource(void)
 {
@@ -6354,7 +6299,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->focused = false;
     contents->dark = dark;
     contents->last_cursor_type = -999;
-    contents->cursor_probe_generation = 0;
+    contents->authoritative_mouse_move_count = 0;
     contents->suppress_cursor_notifications = false;
     contents->renderer_crash_reported = false;
     contents->renderer_crashed = false;
@@ -6367,6 +6312,7 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     NSSize pointSize = hostWindowPointSizeForContents(contents);
     NSRect frame = NSMakeRect(80, 80, pointSize.width, pointSize.height);
     contents->window = [[TSHostWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    ((TSHostWindow *)contents->window).termsurfLogicallyActive = YES;
     contents->window.releasedWhenClosed = NO;
     contents->window.title = @"libtermsurf_webkit";
     contents->window.acceptsMouseMovedEvents = YES;
@@ -6469,7 +6415,7 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->focused = false;
     contents->dark = dark;
     contents->last_cursor_type = -999;
-    contents->cursor_probe_generation = 0;
+    contents->authoritative_mouse_move_count = 0;
     contents->suppress_cursor_notifications = false;
     contents->renderer_crash_reported = false;
     contents->renderer_crashed = false;
@@ -6482,6 +6428,7 @@ ts_web_contents_t ts_create_devtools_web_contents(
     NSSize pointSize = hostWindowPointSizeForContents(contents);
     NSRect frame = NSMakeRect(120, 120, pointSize.width, pointSize.height);
     contents->window = [[TSHostWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    ((TSHostWindow *)contents->window).termsurfLogicallyActive = YES;
     contents->window.releasedWhenClosed = NO;
     contents->window.title = @"libtermsurf_webkit_devtools";
     contents->window.acceptsMouseMovedEvents = YES;
@@ -6731,7 +6678,7 @@ void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
         timestamp:[[NSDate date] timeIntervalSince1970]
         windowNumber:contents->window.windowNumber
         context:[NSGraphicsContext currentContext]
-        eventNumber:++contents->mouse_event_number
+        eventNumber:is_drag ? ++contents->mouse_event_number : 0
         clickCount:is_drag ? contents->mouse_click_count : 0
         pressure:0.0];
     if (pdfMouseDispatchProbeMode() && is_drag) {
@@ -6751,9 +6698,7 @@ void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
             contents->suppress_cursor_notifications = false;
             [NSApp _setCurrentEvent:nil];
         } else {
-            deliverMouseEvent(contents, event, @"mouse-move");
-            updateCursorFromDocumentPoint(contents, x, y);
-            updateTargetUrlFromDocumentPoint(contents, x, y);
+            deliverAuthoritativeMouseMove(contents, event);
         }
     }
     if (is_drag && pdfCopyTraceEnabled()) {
@@ -7238,6 +7183,11 @@ void ts_set_gui_active(ts_web_contents_t wc, bool active, const char *reason)
         return;
 
     contents->gui_active = active;
+    TSHostWindow *window = (TSHostWindow *)contents->window;
+    window.termsurfLogicallyActive = active;
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:active ? NSWindowDidBecomeKeyNotification : NSWindowDidResignKeyNotification
+                      object:window];
     if (!active) {
         [contents->window makeFirstResponder:nil];
         [contents->window resignKeyWindow];
@@ -7474,4 +7424,18 @@ extern "C" int ts_webkit_test_host_ignores_mouse_events(ts_web_contents_t wc)
     if (!contents || !contents->window)
         return -1;
     return contents->window.ignoresMouseEvents ? 1 : 0;
+}
+
+extern "C" uint64_t ts_webkit_test_authoritative_mouse_move_count(ts_web_contents_t wc)
+{
+    WebContents *contents = static_cast<WebContents *>(wc);
+    return contents ? contents->authoritative_mouse_move_count : 0;
+}
+
+extern "C" int ts_webkit_test_has_authoritative_mouse_move_selector(ts_web_contents_t wc)
+{
+    WebContents *contents = static_cast<WebContents *>(wc);
+    if (!contents || !contents->web_view)
+        return 0;
+    return [contents->web_view respondsToSelector:@selector(_simulateMouseMove:)] ? 1 : 0;
 }

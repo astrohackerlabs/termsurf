@@ -24,6 +24,9 @@ int ts_webkit_test_renderer_crash_delegate_count(void);
 /* 1 if host window ignoresMouseEvents, 0 if not, -1 if unavailable */
 int ts_webkit_test_host_ignores_mouse_events(ts_web_contents_t wc);
 
+uint64_t ts_webkit_test_authoritative_mouse_move_count(ts_web_contents_t wc);
+int ts_webkit_test_has_authoritative_mouse_move_selector(ts_web_contents_t wc);
+
 #ifdef __cplusplus
 }
 #endif

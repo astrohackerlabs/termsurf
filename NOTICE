@@ -20,10 +20,8 @@ wrapper|ahweb|first-party|MIT
 wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
-wrapper|ah-webkitd|webkit|FOUNDER-ASSUMPTION
 payload|ahcalc|first-party|MIT
 payload|ah-chromiumd|chromium|BSD-3-Clause
-payload|ah-webkitd|webkit|FOUNDER-ASSUMPTION
 pointer|third_party/chromium/LICENSE
 pointer|third_party/chromium/about_credits.html
 pointer|third_party/nushell/LICENSE
@@ -114,18 +112,6 @@ bundle (not a full dump of every third_party source tree):
 
   legal/third_party/chromium/LICENSE
   legal/third_party/chromium/about_credits.html
-
-================================================================================
-## webkit — ah-webkitd
-
-WebKit / ah-webkitd (forks/webkit lineage)
-
-Founder-directed assumption for this shipping shape (Issue 26071412530200):
-WebKit redistribution is treated as satisfiable by product NOTICE attribution
-under a best-case reading, including the assumption that no separate LGPL
-source-extraction obligation applies to our current ship shape. This is an
-assumption, not a completed independent legal determination. If a later audit
-disproves the assumption, open a follow-up issue.
 
 ================================================================================
 

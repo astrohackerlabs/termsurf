@@ -141,6 +141,7 @@ fn startup_trace(event: &str) {
 // --- main ---
 
 fn main() {
+    configure_source_webkit_xpc_environment();
     let process_args: Vec<String> = std::env::args().collect();
     if handle_identity_arg(process_args.iter().skip(1)) {
         return;
@@ -220,6 +221,23 @@ fn main() {
     let ret = unsafe { ffi::ts_content_main(argv.len() as i32, argv.as_ptr()) };
     startup_trace("ts_content_main_exit");
     std::process::exit(ret);
+}
+
+fn configure_source_webkit_xpc_environment() {
+    let Some(path) = option_env!("ASTROHACKER_SOURCE_WEBKIT_BUILD") else {
+        return;
+    };
+
+    for key in [
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_LIBRARY_PATH",
+        "__XPC_DYLD_FRAMEWORK_PATH",
+        "__XPC_DYLD_LIBRARY_PATH",
+    ] {
+        if std::env::var_os(key).is_none() {
+            std::env::set_var(key, path);
+        }
+    }
 }
 
 fn handle_identity_arg<I, S>(args: I) -> bool

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 fn main() {
     emit_astrohacker_cli_version();
-    emit_installed_webkit_framework_path();
+    emit_webkit_framework_path();
     println!("cargo:rerun-if-changed=../proto/termsurf.proto");
 
     // WebKit C ABI build output directory (relative to this crate).
@@ -35,11 +35,27 @@ fn main() {
         .unwrap();
 }
 
-fn emit_installed_webkit_framework_path() {
-    if env::var("PROFILE").as_deref() == Ok("release") {
-        println!(
+fn emit_webkit_framework_path() {
+    match env::var("PROFILE").as_deref() {
+        Ok("release") => println!(
             "cargo:rustc-link-arg=-Wl,-dyld_env,DYLD_FRAMEWORK_PATH=/opt/homebrew/opt/astrohacker-terminal-ah-webkitd"
-        );
+        ),
+        Ok("debug") => {
+            let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+            let webkit_build = manifest_dir
+                .join("../../forks/webkit/src/WebKitBuild/Debug")
+                .canonicalize()
+                .expect("source-built Debug WebKit must exist before building ah-webkitd");
+            println!(
+                "cargo:rustc-link-arg=-Wl,-dyld_env,DYLD_FRAMEWORK_PATH={}",
+                webkit_build.display()
+            );
+            println!(
+                "cargo:rustc-env=ASTROHACKER_SOURCE_WEBKIT_BUILD={}",
+                webkit_build.display()
+            );
+        }
+        _ => {}
     }
 }
 

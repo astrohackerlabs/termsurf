@@ -44,6 +44,12 @@
         pointer-events: auto;
       }
 
+      #target-link:hover {
+        background: #f97316;
+        color: #111827;
+        outline: 4px solid #facc15;
+      }
+
       #pointer-region {
         cursor: default;
         padding: 24px;
@@ -65,6 +71,15 @@
         color: #0d1117;
         pointer-events: auto;
       }
+
+      #drag-region {
+        width: 420px;
+        margin: 16px 0;
+        padding: 12px;
+        background: #243447;
+        color: #ffffff;
+        user-select: text;
+      }
     </style>
   </head>
   <body>
@@ -79,6 +94,7 @@
         title="WebKit target link"
         >WebKit target URL</a
       >
+      <div id="drag-region">Authoritative WebKit drag selection remains native.</div>
       <div id="scroll-target">Scroll target</div>
       <p>This page proves navigation through the C ABI.</p>
     </main>
@@ -95,6 +111,33 @@
           ? "dark"
           : "light",
       };
+      window.__webkitHoverEvents = [];
+      window.__webkitDrag = { down: 0, move: 0, up: 0, buttons: 0 };
+      const hoverTarget = document.getElementById("target-link");
+      for (const type of [
+        "mouseenter",
+        "mouseover",
+        "mousemove",
+        "mouseout",
+        "mouseleave",
+      ]) {
+        hoverTarget.addEventListener(type, (event) => {
+          window.__webkitHoverEvents.push(`${event.type}:${event.target.id}`);
+        });
+      }
+      const dragTarget = document.getElementById("drag-region");
+      dragTarget.addEventListener("mousedown", () => {
+        window.__webkitDrag.down += 1;
+      });
+      window.addEventListener("mousemove", (event) => {
+        if (event.buttons) {
+          window.__webkitDrag.move += 1;
+          window.__webkitDrag.buttons = event.buttons;
+        }
+      });
+      window.addEventListener("mouseup", () => {
+        window.__webkitDrag.up += 1;
+      });
       window.__termsurfRafCount = 0;
       const countAnimationFrames = () => {
         window.__termsurfRafCount += 1;
