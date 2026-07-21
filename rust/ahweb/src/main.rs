@@ -2870,12 +2870,27 @@ fn viewport_identity_label(
     }
 }
 
+/// Product chrome display label for a browser selector or helper path.
+///
+/// Public helper naming convention (display-only; does not select engines):
+/// 1. Take the path **basename** (last `/` segment).
+/// 2. If the basename is `{prefix}-{stem}d` (last hyphen, non-empty stem, trailing
+///    `d`), display `{stem}` — e.g. `ah-chromiumd` → `chromium`,
+///    `my-cool-webkitd` → `webkit`, `vendor-foobard` → `foobar`.
+/// 3. Otherwise display the basename unchanged (`chromium`, `custom-engine`).
 fn browser_display_label(browser: &str) -> &str {
     let basename = browser.rsplit('/').next().unwrap_or(browser);
-    match basename {
-        "chromium" | "ah-chromiumd" => "chromium",
-        _ => basename,
+    if let Some(hyphen) = basename.rfind('-') {
+        let after = &basename[hyphen + 1..];
+        // Non-empty stem + trailing 'd' (stem is everything before the final d).
+        if after.len() >= 2 && after.as_bytes().last() == Some(&b'd') {
+            let stem = &after[..after.len() - 1];
+            if !stem.is_empty() {
+                return stem;
+            }
+        }
     }
+    basename
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3996,36 +4011,55 @@ mod tests {
 
     #[test]
     fn loading_screen_uses_browser_label_and_immediate_warning() {
-        let rendered = render_loading_probe("chromium");
+        // Same path as product: raw selector → browser_display_label → ui.
+        let chromium = render_loading_probe(browser_display_label("ah-chromiumd"));
         assert!(
-            rendered.capture.contains("Waiting for chromium"),
-            "loading screen should name chromium\n{}",
-            rendered.capture
+            chromium.capture.contains("Waiting for chromium"),
+            "loading should show stem for ah-chromiumd\n{}",
+            chromium.capture
+        );
+        // Non-chromium convention name so a hard-coded chromium-only map fails.
+        let third_party = render_loading_probe(browser_display_label("vendor-foobard"));
+        assert!(
+            third_party.capture.contains("Waiting for foobar"),
+            "loading should show convention stem for vendor-foobard\n{}",
+            third_party.capture
+        );
+        assert!(
+            !third_party.capture.contains("Waiting for vendor-foobard"),
+            "loading must not show raw helper basename when convention applies\n{}",
+            third_party.capture
         );
         // Engine-neutral warning must not hardcode a different engine family.
         assert!(
-            rendered
+            chromium
                 .capture
                 .contains("The first time you load a web browser"),
             "loading screen should show immediate engine-neutral warning\n{}",
-            rendered.capture
+            chromium.capture
         );
     }
 
     #[test]
-    fn browser_display_label_maps_known_engines_and_helpers() {
+    fn browser_display_label_follows_stem_d_convention() {
         for (input, expected) in [
-            ("chromium", "chromium"),
+            // Product + path
             ("ah-chromiumd", "chromium"),
             ("/opt/homebrew/bin/ah-chromiumd", "chromium"),
-            // Historical helper basenames are not logical product families.
-            ("ah-webkitd", "ah-webkitd"),
+            // Third-party / multi-hyphen (last -…d wins)
+            ("asdf-webkitd", "webkit"),
+            ("my-cool-webkitd", "webkit"),
+            ("vendor-foobard", "foobar"),
+            ("ah-ladybirdd", "ladybird"),
+            ("ah-geckod", "gecko"),
+            // Bare names (no convention match)
+            ("chromium", "chromium"),
             ("webkit", "webkit"),
-            ("/opt/homebrew/bin/ah-webkitd", "ah-webkitd"),
-            ("ah-geckod", "ah-geckod"),
-            ("gecko", "gecko"),
-            ("/opt/homebrew/bin/ah-geckod", "ah-geckod"),
+            ("custom-engine", "custom-engine"),
             ("/tmp/custom-engine", "custom-engine"),
+            // Non-matches
+            ("somethingd", "somethingd"), // no hyphen
+            ("ah-d", "ah-d"),             // empty stem after strip
         ] {
             assert_eq!(browser_display_label(input), expected, "{input}");
         }
