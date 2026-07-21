@@ -28,6 +28,10 @@ pub fn handle_message(msg: &TermSurfMessage) {
         Msg::ScrollEvent(m) => scroll_event(m),
         Msg::KeyEvent(m) => key_event(m),
         Msg::FocusChanged(m) => focus_changed(m),
+        Msg::SetPresentationVisible(_) => ignored_not_engine(
+            "SetPresentationVisible",
+            "WebKit-only external compositor presentation",
+        ),
         Msg::SetColorScheme(m) => set_color_scheme(m),
         Msg::SetGuiActive(m) => set_gui_active(m),
         Msg::JavascriptDialogReply(m) => javascript_dialog_reply(m),

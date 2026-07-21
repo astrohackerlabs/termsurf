@@ -1,0 +1,232 @@
+From bed48373fbdf1400bfbf4f8ecc2c96fb581455cc Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 08:53:53 -0500
+Subject: [PATCH] Export live WebKit compositor presentation
+
+---
+ .../UIProcess/API/Cocoa/WKWebViewPrivate.h    |  5 ++
+ .../WebKit/UIProcess/API/mac/WKWebViewMac.mm  | 10 ++++
+ .../WebKit/UIProcess/mac/PageClientImplMac.mm |  9 +++
+ Source/WebKit/UIProcess/mac/WebViewImpl.h     |  9 +++
+ Source/WebKit/UIProcess/mac/WebViewImpl.mm    | 60 ++++++++++++++++++-
+ 5 files changed, 90 insertions(+), 3 deletions(-)
+
+diff --git a/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h b/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
+index 18345b203c..79b0a8a2ee 100644
+--- a/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
++++ b/Source/WebKit/UIProcess/API/Cocoa/WKWebViewPrivate.h
+@@ -875,6 +875,11 @@ typedef NS_OPTIONS(NSUInteger, _WKWebViewDataType) {
+ 
+ @property (nonatomic, setter=_setWindowOcclusionDetectionEnabled:) BOOL _windowOcclusionDetectionEnabled;
+ 
++// Astrohacker Terminal: exports the live WebKit compositor root through a
++// stable LayerHostingContext. Presentation visibility is independent of focus.
++- (uint32_t)_enableTermSurfExternalPresentation;
++- (void)_setTermSurfExternalPresentationVisible:(BOOL)visible;
++
+ @property (nonatomic, readonly) NSInteger _spellCheckerDocumentTag WK_API_AVAILABLE(macos(10.14));
+ 
+ // When using _minimumLayoutWidth, the web content will lay out to the intrinsic height
+diff --git a/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm b/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
+index be9b1cb226..bdb20fc49b 100644
+--- a/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
++++ b/Source/WebKit/UIProcess/API/mac/WKWebViewMac.mm
+@@ -1907,6 +1907,16 @@ ALLOW_DEPRECATED_DECLARATIONS_END
+     _impl->setWindowOcclusionDetectionEnabled(enabled);
+ }
+ 
++- (uint32_t)_enableTermSurfExternalPresentation
++{
++    return _impl->enableTermSurfExternalPresentation();
++}
++
++- (void)_setTermSurfExternalPresentationVisible:(BOOL)visible
++{
++    _impl->setTermSurfExternalPresentationVisible(visible);
++}
++
+ - (NSInteger)_spellCheckerDocumentTag
+ {
+     return _impl->spellCheckerDocumentTag();
+diff --git a/Source/WebKit/UIProcess/mac/PageClientImplMac.mm b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
+index 57afcd9fbb..35d13badf1 100644
+--- a/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
++++ b/Source/WebKit/UIProcess/mac/PageClientImplMac.mm
+@@ -208,6 +208,9 @@ void PageClientImpl::makeFirstResponder()
+     
+ bool PageClientImpl::isViewVisible(NSView *view, NSWindow *viewWindow) const
+ {
++    if (m_impl && m_impl->termSurfExternalPresentationEnabled())
++        return m_impl->termSurfExternalPresentationVisible();
++
+     auto windowIsOccluded = [&]()->bool {
+         return m_impl && m_impl->windowOcclusionDetectionEnabled() && (viewWindow.occlusionState & NSWindowOcclusionStateVisible) != NSWindowOcclusionStateVisible;
+     };
+@@ -249,16 +252,22 @@ bool PageClientImpl::isMainViewVisible()
+ 
+ bool PageClientImpl::isViewVisibleOrOccluded()
+ {
++    if (m_impl && m_impl->termSurfExternalPresentationEnabled())
++        return m_impl->termSurfExternalPresentationVisible();
+     return RetainPtr { activeWindow() }.get().isVisible;
+ }
+ 
+ bool PageClientImpl::isViewInWindow()
+ {
++    if (m_impl && m_impl->termSurfExternalPresentationEnabled())
++        return m_impl->termSurfExternalPresentationVisible();
+     return activeWindow();
+ }
+ 
+ bool PageClientImpl::isVisuallyIdle()
+ {
++    if (m_impl && m_impl->termSurfExternalPresentationEnabled())
++        return !m_impl->termSurfExternalPresentationVisible();
+     return WindowServerConnection::singleton().applicationWindowModificationsHaveStopped() || !isActiveViewVisible();
+ }
+ 
+diff --git a/Source/WebKit/UIProcess/mac/WebViewImpl.h b/Source/WebKit/UIProcess/mac/WebViewImpl.h
+index 510b41441c..d234365fee 100644
+--- a/Source/WebKit/UIProcess/mac/WebViewImpl.h
++++ b/Source/WebKit/UIProcess/mac/WebViewImpl.h
+@@ -230,6 +230,7 @@ namespace WebKit {
+ class PageClient;
+ class PageClientImpl;
+ class DrawingAreaProxy;
++class LayerHostingContext;
+ class MediaSessionCoordinatorProxyPrivate;
+ class BrowsingWarning;
+ class ViewGestureController;
+@@ -429,6 +430,11 @@ public:
+     void setWindowOcclusionDetectionEnabled(bool enabled) { m_windowOcclusionDetectionEnabled = enabled; }
+     bool windowOcclusionDetectionEnabled() const { return m_windowOcclusionDetectionEnabled; }
+ 
++    uint32_t enableTermSurfExternalPresentation();
++    void setTermSurfExternalPresentationVisible(bool);
++    bool termSurfExternalPresentationEnabled() const { return !!m_termSurfExternalPresentationContext; }
++    bool termSurfExternalPresentationVisible() const { return m_termSurfExternalPresentationVisible; }
++
+     void prepareForMoveToWindow(NSWindow *targetWindow, WTF::Function<void()>&& completionHandler);
+     NSWindow *targetWindowForMovePreparation() const { return m_targetWindowForMovePreparation.get(); }
+ 
+@@ -1108,6 +1114,9 @@ private:
+ 
+     RetainPtr<CALayer> m_rootLayer;
+     RetainPtr<NSView> m_layerHostingView;
++    std::unique_ptr<LayerHostingContext> m_termSurfExternalPresentationContext;
++    RetainPtr<CALayer> m_termSurfExternalPresentationRootLayer;
++    bool m_termSurfExternalPresentationVisible { false };
+ 
+     RetainPtr<CALayer> m_headerBannerLayer;
+     RetainPtr<CALayer> m_footerBannerLayer;
+diff --git a/Source/WebKit/UIProcess/mac/WebViewImpl.mm b/Source/WebKit/UIProcess/mac/WebViewImpl.mm
+index 1da595e5d3..2ccac9a98b 100644
+--- a/Source/WebKit/UIProcess/mac/WebViewImpl.mm
++++ b/Source/WebKit/UIProcess/mac/WebViewImpl.mm
+@@ -42,6 +42,7 @@
+ #import "FrameProcess.h"
+ #import "FullscreenClient.h"
+ #import "InsertTextOptions.h"
++#import "LayerHostingContext.h"
+ #import "Logging.h"
+ #import "NativeWebGestureEvent.h"
+ #import "NativeWebKeyboardEvent.h"
+@@ -1446,6 +1447,13 @@ WebViewImpl::WebViewImpl(WKWebView *view, WebProcessPool& processPool, Ref<API::
+ 
+ WebViewImpl::~WebViewImpl()
+ {
++    if (m_termSurfExternalPresentationContext) {
++        m_termSurfExternalPresentationContext->setRootLayer(nil);
++        m_termSurfExternalPresentationContext->invalidate();
++        m_termSurfExternalPresentationContext = nullptr;
++        m_termSurfExternalPresentationRootLayer = nil;
++    }
++
+     if (m_remoteObjectRegistry) {
+         [m_remoteObjectRegistry _invalidate];
+         m_remoteObjectRegistry = nil;
+@@ -1866,8 +1874,15 @@ void WebViewImpl::renewGState()
+     updateContentInsetsIfAutomatic();
+ }
+ 
+-void WebViewImpl::setFrameSize(CGSize)
++void WebViewImpl::setFrameSize(CGSize size)
+ {
++    if (m_termSurfExternalPresentationRootLayer) {
++        [CATransaction begin];
++        [CATransaction setDisableActions:YES];
++        m_termSurfExternalPresentationRootLayer.get().frame = CGRectMake(0, 0, size.width, size.height);
++        [CATransaction commit];
++    }
++
+     [m_layoutStrategy didChangeFrameSize];
+     [m_warningView setFrame:[m_view.get() bounds]];
+ 
+@@ -4347,7 +4362,8 @@ void WebViewImpl::enterAcceleratedCompositingWithRootLayer(CALayer *rootLayer)
+         [CATransaction setDisableActions:YES];
+ 
+         rootLayer.hidden = YES;
+-        [retainPtr([m_layerHostingView layer]) insertSublayer:rootLayer atIndex:0];
++        CALayer *presentationLayer = m_termSurfExternalPresentationRootLayer ? m_termSurfExternalPresentationRootLayer.get() : [m_layerHostingView layer];
++        [retainPtr(presentationLayer) insertSublayer:rootLayer atIndex:0];
+ 
+         [CATransaction commit];
+         return;
+@@ -4369,15 +4385,53 @@ void WebViewImpl::setAcceleratedCompositingRootLayer(CALayer *rootLayer)
+     [CATransaction begin];
+     [CATransaction setDisableActions:YES];
+ 
+-    [m_layerHostingView layer].sublayers = rootLayer ? @[ rootLayer ] : nil;
++    CALayer *presentationLayer = m_termSurfExternalPresentationRootLayer ? m_termSurfExternalPresentationRootLayer.get() : [m_layerHostingView layer];
++    presentationLayer.sublayers = rootLayer ? @[ rootLayer ] : nil;
++
++    if (m_termSurfExternalPresentationRootLayer)
++        [m_layerHostingView layer].sublayers = nil;
+ 
+     [CATransaction commit];
+ 
++    if (m_termSurfExternalPresentationContext)
++        NSLog(@"[TermSurf] live compositor root context_id=%u root=%p", m_termSurfExternalPresentationContext->contextID(), rootLayer);
++
+ #if ENABLE(CONTENT_INSET_BACKGROUND_FILL)
+     updateScrollPocket();
+ #endif
+ }
+ 
++uint32_t WebViewImpl::enableTermSurfExternalPresentation()
++{
++    if (m_termSurfExternalPresentationContext)
++        return m_termSurfExternalPresentationContext->contextID();
++
++    m_termSurfExternalPresentationContext = LayerHostingContext::create();
++    m_termSurfExternalPresentationRootLayer = adoptNS([[CALayer alloc] init]);
++    [m_termSurfExternalPresentationRootLayer web_disableAllActions];
++    m_termSurfExternalPresentationRootLayer.get().name = @"TermSurf WebKit live export root";
++    m_termSurfExternalPresentationRootLayer.get().anchorPoint = CGPointZero;
++    m_termSurfExternalPresentationRootLayer.get().frame = [m_layerHostingView layer].bounds;
++    m_termSurfExternalPresentationRootLayer.get().geometryFlipped = [m_layerHostingView layer].geometryFlipped;
++    m_termSurfExternalPresentationContext->setRootLayer(m_termSurfExternalPresentationRootLayer.get());
++
++    setAcceleratedCompositingRootLayer(m_rootLayer.get());
++    return m_termSurfExternalPresentationContext->contextID();
++}
++
++void WebViewImpl::setTermSurfExternalPresentationVisible(bool visible)
++{
++    if (!m_termSurfExternalPresentationContext || std::exchange(m_termSurfExternalPresentationVisible, visible) == visible)
++        return;
++
++    m_page->activityStateDidChange({
++        WebCore::ActivityState::IsVisible,
++        WebCore::ActivityState::IsVisibleOrOccluded,
++        WebCore::ActivityState::IsInWindow,
++        WebCore::ActivityState::IsVisuallyIdle,
++    }, WebPageProxy::ActivityStateChangeDispatchMode::Immediate);
++}
++
+ void WebViewImpl::setHeaderBannerLayer(CALayer *headerBannerLayer)
+ {
+     if (m_headerBannerLayer)
+-- 
+2.50.1 (Apple Git-155)
+

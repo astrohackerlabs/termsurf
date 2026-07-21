@@ -1,6 +1,56 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072016457563 Exp 1)
+## Active Add-on (Issue 26072112084519 Exp 1)
+
+- Parent product commit: `f713728dc20e3c382cd8ad14b11eccf60a96fe21`
+  (prior tip on `issue-26072110403572-exp2-helper-space-colocation`)
+- Product branch: `issue-26072112084519-exp1-live-compositor-presentation`
+- Product HEAD: `3c9ffede08df58661668d4c5dd8c7f5d0f5965d5`
+- Product tree: `1c92cf2162a6afff251629a95e18044518510158`
+- Issue archive: `patches/ghostty/patches/issue-26072112084519/`
+- Patch SHA-256:
+  `63dbbf946ef9e50b2fb6a9fe0ba55c41f8f930d55da1a32236d9e72e6dc412c9`
+- Aggregate series: 38 patches; archive SHA-256
+  `6588a63c2dfe7db7441d2e12acda4cde182f375bf813ed3c6a2f7f0efc9f3181`
+- Scope: derive actual hosted-pane presentation visibility in AppKit and route
+  edge-triggered `SetPresentationVisible` state through the TermSurf protocol,
+  including state remembered before `TabReady`.
+- Verification: focused Zig routing test, incremental Debug `ahterm` build,
+  and source-built Release product manual live-animation acceptance.
+
+## Active Add-on (Issue 26072110403572 Exp 2)
+
+- Parent product commit: `2b78cbf340afbb53a5717e9c981c27216b9bd708`
+  (prior tip on `issue-26072110403572-exp1-disable-occlusion`)
+- Product branch: `issue-26072110403572-exp2-helper-space-colocation`
+- Product HEAD: `f713728dc20e3c382cd8ad14b11eccf60a96fe21`
+- Product tree: `f2df63b34bc0ce2d36995808d3cfd1629e4eb7e3`
+- Issue archive: `patches/ghostty/patches/issue-26072110403572/`
+- Patches: `0001` Exp 1 occlusion flag probe; `0002` Exp 2 remove flag
+- Patch SHA-256:
+  - 0001: `1404b34f817d9965a72b8395b67074a3ae49826d659dedca931119c72638fa3b`
+  - 0002: `319f6afa0f286111955cee1b57e3e27b51ea428beaaf37c39ad8b98152867f5a`
+- Scope: **remove** chromium
+  `--disable-backgrounding-occluded-windows` from spawn (Space co-location is
+  the product fix in Chromium/WebKit shells). Argv tests assert flag absence.
+- Verification: **source + 37-patch series pin**;
+  `zig build test -Dtest-filter="Girlbat spawn argv"`.
+
+## Prior Add-on (Issue 26072110403572 Exp 1)
+
+- Parent product commit: `2bbe90f5997860ef182e57d809fce4e099c0cd1a`
+  (prior tip on `issue-26072016457563-exp1-replace-ghost-title`)
+- Product branch: `issue-26072110403572-exp1-disable-occlusion`
+- Product HEAD: `2b78cbf340afbb53a5717e9c981c27216b9bd708`
+- Product tree: `6b6e61e93be57280774cb1d8158c0be1eda5f042`
+- Issue archive: `patches/ghostty/patches/issue-26072110403572/`
+- Patches: `0001` Chromium `--disable-backgrounding-occluded-windows` spawn argv
+- Patch SHA-256:
+  - 0001: `1404b34f817d9965a72b8395b67074a3ae49826d659dedca931119c72638fa3b`
+- Scope: diagnostic spawn flag (superseded as product policy by Exp 2).
+- Verification: **source + 36-patch series pin**.
+
+## Prior Add-on (Issue 26072016457563 Exp 1)
 
 - Parent product commit: `a6b9b7b83235039df287ce1d0e056e8eaf2f25d8`
   (prior tip on `issue-26072016122202-exp1-secondary-axis-before-mru`)

@@ -689,6 +689,20 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 ));
             }
         }
+        Msg::SetPresentationVisible(m) => {
+            if let Some(t) = find_by_tab_id(m.tab_id) {
+                trace_pdf_input(format!(
+                    "set-presentation-visible tab={} pane={} visible={} ffi=ts_set_presentation_visible",
+                    m.tab_id, t.pane_id, m.visible
+                ));
+                unsafe { ffi::ts_set_presentation_visible(t.handle, m.visible) };
+            } else {
+                trace_pdf_input(format!(
+                    "set-presentation-visible tab={} visible={} result=no-tab",
+                    m.tab_id, m.visible
+                ));
+            }
+        }
         Msg::SetGuiActive(m) => {
             let reason =
                 CString::new(m.reason.as_str()).unwrap_or_else(|_| CString::new("").unwrap());

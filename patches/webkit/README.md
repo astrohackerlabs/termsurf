@@ -6,20 +6,26 @@ archives and branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26071814115751):** main tip
+- **Active add-on (Issue 26072112084519 Exp 1):** live compositor presentation
+- **Upstream pin:** main tip
   `e0ee95bcafc0c470dfce6db7cfd8ce708c6e9e5e`
-- **Current branch:** `webkit-e0ee95bc-issue-26071814115751`
-- **Current HEAD:** `6d219d5057124a5c432e9cd331c6b1fcd4ff5a78`
-- **Current tree:** `b3957cdcb5dda6a99e3547e19608a10419d19a62`
-- **Archive:** `patches/webkit/patches/issue-26071814115751/` (2 patches)
+- **Current branch:** `issue-26072112084519-exp1-live-compositor-presentation`
+- **Current HEAD:** `bed48373fbdf1400bfbf4f8ecc2c96fb581455cc`
+- **Current tree:** `547986ebaf3970020f4dc86325c20dc2fe5fa756`
+- **Archives:** `patches/webkit/patches/issue-26071814115751/` (2 patches) plus
+  `patches/webkit/patches/issue-26072112084519/` (1 patch)
+- **Issue patch SHA-256:**
+  `e078724575900dbdf93aa834f30459876b2a715230eb023bf0d6772c2e60afc6`
 - **Archive aggregate SHA-256:**
-  `87edc26d71c61fd5595c2fbe56a6850a2d4906516f2d125c68cdc0817c89b8c4`
-- **Verification:** **TREE_MATCH Pass**; release-mode
-  `webkit-fork` + `ah-webkitd` builds green (Exp 3 implementer)
+  `644ecfe100feb5c5449f9ef4a3a205e83422b4dbbdbea810bf79fb1bcf299596`
+- **Verification:** Debug `webkit-fork`, `libtermsurf_webkit`, and
+  `ah-webkitd` builds; native live-context/visibility smoke; source-built
+  Release product manually displays animated glyph rain on `astrohacker.com`.
 - Working tree: `forks/webkit/src`
 - Release authority: `patches/release-manifest.json` webkit entry
 
-Product series on tip: cursor-change notify + unified-build serializer rule.
+Product series on tip: cursor-change notify + unified-build serializer rule +
+stable external `LayerHostingContext` live compositor presentation.
 The prior sandbox EagerLinking exclusion rename is already on upstream main
 (`Work around 109484516`) and was not re-exported as a product commit.
 

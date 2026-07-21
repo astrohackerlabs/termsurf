@@ -95,6 +95,12 @@
           ? "dark"
           : "light",
       };
+      window.__termsurfRafCount = 0;
+      const countAnimationFrames = () => {
+        window.__termsurfRafCount += 1;
+        requestAnimationFrame(countAnimationFrames);
+      };
+      requestAnimationFrame(countAnimationFrames);
 
       window.addEventListener("focus", () => {
         window.__webkitState.focus = true;

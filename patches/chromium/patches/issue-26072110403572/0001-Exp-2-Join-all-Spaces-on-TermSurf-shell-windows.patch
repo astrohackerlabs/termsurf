@@ -1,0 +1,46 @@
+From 14c6fe06a4e4a6d885ed004ffbee319ea7653215 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 06:25:38 -0500
+Subject: [PATCH] Exp 2: Join all Spaces on TermSurf shell windows
+
+canJoinAllSpaces + fullScreenAuxiliary so helper source windows
+are not stranded when the host moves Space (FS / desktop).
+---
+ .../libtermsurf_chromium/ts_shell_window_mac.mm    | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 15a23cbdad..2e6d62de72 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -49,6 +49,16 @@ void ConfigureShellWindowForTermSurf(Shell* shell) {
+     return;
+   }
+ 
++  // Space co-location for non-user-visible export windows: do not leave the
++  // helper stranded on the Space where it was created when the TermSurf host
++  // moves (native fullscreen or Mission Control desktop change). Without this,
++  // WindowServer occludes the source window and Chromium backgrounds the page.
++  // (Issue 26072110403572 Exp 2 — primary path; no process-wide backgrounding
++  // override.)
++  window.collectionBehavior =
++      window.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces |
++      NSWindowCollectionBehaviorFullScreenAuxiliary;
++
+   [window setIgnoresMouseEvents:YES];
+ }
+ 
+@@ -114,6 +124,10 @@ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+   if (!window) {
+     return;
+   }
++  // Re-apply Space join on geometry updates in case AppKit cleared behavior.
++  window.collectionBehavior =
++      window.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces |
++      NSWindowCollectionBehaviorFullScreenAuxiliary;
+   [window setIgnoresMouseEvents:YES];
+ 
+   NSRect primary_frame = PrimaryScreenFrame();
+-- 
+2.50.1 (Apple Git-155)
+

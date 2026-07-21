@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TermSurf Live Compositor B</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #18081f;
+        color: white;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        overflow: hidden;
+        background: #18081f;
+      }
+
+      header {
+        height: 72px;
+        padding: 16px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: #2e1065;
+        border-bottom: 4px solid #c084fc;
+      }
+
+      #control {
+        width: 180px;
+        height: 36px;
+        display: grid;
+        place-items: center;
+        color: #2e1065;
+        background: #f3e8ff;
+      }
+
+      #counter {
+        min-width: 190px;
+        text-align: right;
+        color: #f0abfc;
+        font-size: 24px;
+      }
+
+      #stage {
+        position: relative;
+        height: calc(100vh - 72px);
+        overflow: hidden;
+      }
+
+      #runner {
+        position: absolute;
+        left: 48px;
+        top: 72px;
+        width: 128px;
+        height: 128px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: #f97316;
+        color: #431407;
+        font-size: 58px;
+        font-weight: 900;
+        box-shadow: 0 0 42px #fb923c;
+        animation: orbit 1.35s ease-in-out infinite alternate;
+      }
+
+      @keyframes orbit {
+        from {
+          transform: translate(0, 0) scale(0.8);
+        }
+        to {
+          transform: translate(min(55vw, 500px), min(28vh, 210px)) scale(1.2);
+        }
+      }
+
+      a {
+        position: absolute;
+        left: 48px;
+        bottom: 48px;
+        padding: 22px 28px;
+        background: #0891b2;
+        color: white;
+        font-size: 20px;
+      }
+
+      #pdf {
+        left: auto;
+        right: 48px;
+        background: #dc2626;
+      }
+    </style>
+  </head>
+  <body data-page="b" data-visibility="visible">
+    <header>
+      <div id="control">STATIC CONTROL B</div>
+      <output id="counter">rAF 000000</output>
+    </header>
+    <main id="stage">
+      <div id="runner" aria-label="animated runner">B</div>
+      <a href="/live-animation.html">RETURN TO PAGE A</a>
+      <a id="pdf" href="/bitcoin.pdf">OPEN PDF FIXTURE</a>
+    </main>
+    <script>
+      const counter = document.querySelector("#counter");
+      let frames = 0;
+      const tick = () => {
+        frames += 1;
+        window.__termsurfRafCount = frames;
+        counter.value = `rAF ${String(frames).padStart(6, "0")}`;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+
+      const reportVisibility = () => {
+        document.body.dataset.visibility = document.visibilityState;
+        console.log(`termsurf-visibility:${document.visibilityState}:${frames}`);
+        fetch(`/visibility?state=${document.visibilityState}&page=b&frames=${frames}`, {
+          cache: "no-store",
+        }).catch(() => {});
+      };
+      document.addEventListener("visibilitychange", reportVisibility);
+      reportVisibility();
+    </script>
+  </body>
+</html>

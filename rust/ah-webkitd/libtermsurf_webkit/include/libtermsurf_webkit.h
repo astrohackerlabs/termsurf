@@ -123,6 +123,8 @@ void ts_forward_key_event(ts_web_contents_t wc, int type, int keycode, const cha
 void ts_set_focus(ts_web_contents_t wc, bool focused);
 /* Logical pane focus (accessory host; not document.hasFocus / key-window). */
 bool ts_web_contents_is_focused(ts_web_contents_t wc);
+/* Actual compositor presentation; independent of focus and app activation. */
+void ts_set_presentation_visible(ts_web_contents_t wc, bool visible);
 void ts_set_gui_active(ts_web_contents_t wc, bool active, const char *reason);
 void ts_set_color_scheme(ts_web_contents_t wc, bool dark);
 void ts_set_view_size(

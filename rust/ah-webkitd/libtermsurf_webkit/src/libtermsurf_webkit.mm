@@ -26,13 +26,6 @@
 #include <objc/runtime.h>
 #include <unistd.h>
 
-@interface CAContext : NSObject
-+ (instancetype)remoteContextWithOptions:(NSDictionary *)options;
-@property(nonatomic, readonly) uint32_t contextId;
-@property(nonatomic, retain) CALayer *layer;
-- (void)invalidate;
-@end
-
 @interface NSEvent (TermSurfPrivate)
 - (NSEvent *)_eventRelativeToWindow:(NSWindow *)window;
 @end
@@ -262,11 +255,8 @@ struct WebContents {
     bool renderer_crash_reported;
     bool renderer_crashed;
     bool has_committed_document;
-    CAContext *remote_context;
-    CALayer *snapshot_layer;
-    bool snapshot_refresh_pending;
-    bool snapshot_refresh_again;
-    bool snapshot_refresh_again_scroll;
+    uint32_t live_context_id;
+    bool presentation_visible;
     NSString *last_render_probe_pass_url;
     NSString *pdf_load_watchdog_url;
     int width;
@@ -308,7 +298,6 @@ struct WebContents {
     NSString *pdf_editable_document_reason;
 };
 
-static void scheduleSnapshotLayerRefresh(WebContents *contents, NSString *reason);
 static void tracePdfViewGeometry(WebContents *contents, NSString *label, int x, int y, NSPoint windowPoint);
 static NSString *routeTraceStringSample(NSString *value);
 static NSString *describeScrollViews(NSView *view);
@@ -344,23 +333,6 @@ static bool webkitScrollTraceEnabled()
 {
     return NSProcessInfo.processInfo.environment[@"ASTROHACKER_WEBKIT_SCROLL_TRACE"].length > 0
         || NSProcessInfo.processInfo.environment[@"ASTROHACKER_WEBKIT_SCROLL_TRACE_FILE"].length > 0;
-}
-
-static double webkitScrollSnapshotDelaySeconds()
-{
-    NSString *value = NSProcessInfo.processInfo.environment[@"ASTROHACKER_WEBKIT_SCROLL_SNAPSHOT_DELAY_MS"];
-    if (value.length) {
-        double milliseconds = value.doubleValue;
-        if (milliseconds >= 0.0)
-            return milliseconds / 1000.0;
-    }
-    return 0.016;
-}
-
-static bool webkitScrollSettleRefreshEnabled()
-{
-    NSString *value = NSProcessInfo.processInfo.environment[@"ASTROHACKER_WEBKIT_SCROLL_SETTLE_REFRESH"];
-    return !value.length || ![value isEqualToString:@"0"];
 }
 
 static NSString *webkitScrollDispatchMode()
@@ -1376,7 +1348,6 @@ static void dispatchPdfPasswordReturnKeyUp(WebContents *contents)
         tracePdfPasswordOracle(captured, @"return-keyup-dispatch");
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             tracePdfPasswordOracle(captured, @"return-keyup-dispatch-delayed");
-            scheduleSnapshotLayerRefresh(captured, @"pdf-password-return-keyup");
         });
     }];
 }
@@ -2053,8 +2024,6 @@ static NSMutableSet<TSPdfPrintModalProbeDelegate *> *pdfPrintModalProbeDelegates
                                                    contextInfo]);
     tracePrintPresentation(contents, @"completion", @"delegate-callback");
     [pdfPrintModalProbeDelegates() removeObject:self];
-    if (contents)
-        scheduleSnapshotLayerRefresh(contents, @"pdf-print-modal-completion");
 }
 @end
 
@@ -3267,7 +3236,7 @@ static void tracePdfNavigationDiagnostics(WebContents *contents, NSString *phase
             describeObject(contents->window),
             describeObject(contents->window.firstResponder),
             responderChain(contents->window.firstResponder),
-            contents->remote_context ? contents->remote_context.contextId : 0,
+            contents->live_context_id,
             currentUrlLooksPdf(contents) ? 1 : 0]);
     }
     tracePdfSelectionSurface(contents, phase);
@@ -3789,7 +3758,6 @@ static bool invokePdfZoomSelector(WebContents *contents, NSString *action, NSVie
                                                                         pdfDirectCommandIdentitySummary(after, hud, selectorCopy)]);
                 tracePdfDirectCommand(after, @"state-after", actionCopy, pdfDirectCommandIdentitySummary(after, hud, selectorCopy));
                 capturePdfProductionZoomSnapshot(after, actionCopy, @"snapshot-after", ^{
-                    scheduleSnapshotLayerRefresh(after, [NSString stringWithFormat:@"pdf-production-zoom-%@", actionCopy]);
                 });
             });
         });
@@ -3803,7 +3771,6 @@ static bool invokePdfZoomSelector(WebContents *contents, NSString *action, NSVie
                                                           modifiers,
                                                           pdfDirectCommandIdentitySummary(contents, hud, selectorName)]);
     tracePdfDirectCommand(contents, @"state-after", action, pdfDirectCommandIdentitySummary(contents, hud, selectorName));
-    scheduleSnapshotLayerRefresh(contents, [NSString stringWithFormat:@"pdf-production-zoom-%@", action]);
     return true;
 }
 
@@ -3850,7 +3817,6 @@ static bool performPdfDirectCommandDiagnostic(WebContents *contents, NSString *a
                 tracePdfAction(after, @"state-after", actionCopy, pdfActionStateSummary(after, hud));
                 tracePdfStateOracle(after, @"state-after", actionCopy, pdfStateOracleSurfaceSummary(after, hud));
                 capturePdfVisualOracleSnapshot(after, actionCopy, @"snapshot-after", ^{
-                    scheduleSnapshotLayerRefresh(after, [NSString stringWithFormat:@"pdf-direct-command-%@", actionCopy]);
                 });
             });
         });
@@ -4027,7 +3993,6 @@ static bool performPdfPrintDialogDiagnostic(WebContents *contents, int keycode, 
 
     NSString *result = success ? @"submitted-or-success" : @"canceled";
     tracePdfPrintDialog(contents, @"after-run", [NSString stringWithFormat:@"%@ completion_callback=true completion_success=%d completion_result=%@ %@", [items componentsJoinedByString:@" "], success ? 1 : 0, result, baseDetail]);
-    scheduleSnapshotLayerRefresh(contents, @"pdf-print-dialog-diagnostic");
     return true;
 }
 
@@ -4242,7 +4207,6 @@ static bool performPdfActionDiagnostic(WebContents *contents, NSString *action)
                 tracePdfAction(after, @"state-after", action, pdfActionStateSummary(after, hud));
                 tracePdfStateOracle(after, @"state-after", action, pdfStateOracleSurfaceSummary(after, hud));
                 capturePdfVisualOracleSnapshot(after, action, @"snapshot-after", ^{
-                    scheduleSnapshotLayerRefresh(after, [NSString stringWithFormat:@"pdf-action-diagnostic-%@", action]);
                 });
             });
         });
@@ -4261,7 +4225,6 @@ static bool performPdfActionDiagnostic(WebContents *contents, NSString *action)
     tracePdfAction(contents, attempted ? @"private-hook-result" : @"private-hook-noop", action, [NSString stringWithFormat:@"attempted=%d controls=%@", attempted ? 1 : 0, [controls componentsJoinedByString:@","]]);
     tracePdfAction(contents, @"state-after", action, pdfActionStateSummary(contents, hud));
     tracePdfStateOracle(contents, @"state-after", action, pdfStateOracleSurfaceSummary(contents, hud));
-    scheduleSnapshotLayerRefresh(contents, [NSString stringWithFormat:@"pdf-action-diagnostic-%@", action]);
     return attempted;
 }
 
@@ -4593,73 +4556,6 @@ static void runPdfCopyBridgePreKeyRoutes(WebContents *contents, NSString *mode, 
         appendPdfCopyTrace([NSString stringWithFormat:@"webkit-pdf-copy-bridge-route tab=%d mode=%@ route=webViewPerformKeyEquivalent ok=%d clipboard={%@}", contents->tab_id, mode, ok_webview ? 1 : 0, clipboardSample()]);
         traceCopyState(contents, @"copy-bridge-after-key-equivalent");
     }
-}
-
-static NSString *caContextLayerMode()
-{
-    NSString *mode = NSProcessInfo.processInfo.environment[@"ASTROHACKER_WEBKIT_CACONTEXT_LAYER"];
-    return mode.length ? mode : @"snapshot";
-}
-
-static bool useSnapshotLayer()
-{
-    return [caContextLayerMode() isEqualToString:@"snapshot"];
-}
-
-static CALayer *snapshotLayerForContents(WebContents *contents)
-{
-    if (!contents->snapshot_layer) {
-        contents->snapshot_layer = [CALayer layer];
-        contents->snapshot_layer.name = @"TermSurfWebKitSnapshotLayer";
-        contents->snapshot_layer.contentsGravity = kCAGravityResize;
-        contents->snapshot_layer.backgroundColor = NSColor.blackColor.CGColor;
-    }
-    NSSize pointSize = hostWindowPointSizeForContents(contents);
-    contents->snapshot_layer.frame = CGRectMake(0, 0, pointSize.width, pointSize.height);
-    contents->snapshot_layer.contentsScale = hostBackingScaleForContents(contents);
-    return contents->snapshot_layer;
-}
-
-static CALayer *remoteContextLayerForContents(WebContents *contents)
-{
-    NSString *mode = caContextLayerMode();
-    if ([mode isEqualToString:@"snapshot"])
-        return snapshotLayerForContents(contents);
-    if ([mode isEqualToString:@"diagnostic-color"]) {
-        CALayer *root = [CALayer layer];
-        NSSize pointSize = hostWindowPointSizeForContents(contents);
-        root.frame = CGRectMake(0, 0, pointSize.width, pointSize.height);
-        root.backgroundColor = NSColor.blackColor.CGColor;
-        root.contentsScale = hostBackingScaleForContents(contents);
-
-        BOOL pdf = [contents->web_view.URL.pathExtension.lowercaseString isEqualToString:@"pdf"];
-        if (pdf) {
-            CALayer *green = [CALayer layer];
-            green.frame = root.bounds;
-            green.backgroundColor = [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:0.25 alpha:1.0].CGColor;
-            [root addSublayer:green];
-        } else {
-            CGFloat halfWidth = root.bounds.size.width / 2.0;
-            CALayer *cyan = [CALayer layer];
-            cyan.frame = CGRectMake(0, 0, halfWidth, root.bounds.size.height);
-            cyan.backgroundColor = NSColor.cyanColor.CGColor;
-            [root addSublayer:cyan];
-
-            CALayer *yellow = [CALayer layer];
-            yellow.frame = CGRectMake(halfWidth, 0, root.bounds.size.width - halfWidth, root.bounds.size.height);
-            yellow.backgroundColor = NSColor.yellowColor.CGColor;
-            [root addSublayer:yellow];
-        }
-
-        return root;
-    }
-    if ([mode isEqualToString:@"content-view"]) {
-        NSView *content_view = contents->window.contentView;
-        content_view.wantsLayer = YES;
-        [content_view layoutSubtreeIfNeeded];
-        return content_view.layer ?: contents->web_view.layer;
-    }
-    return contents->web_view.layer;
 }
 
 static std::vector<WebContents *> g_web_contents;
@@ -5633,104 +5529,6 @@ static void capturePdfVisualOracleSnapshot(WebContents *contents, NSString *acti
     }];
 }
 
-static void refreshSnapshotLayerNow(WebContents *contents, NSString *reason)
-{
-    if (!contents || !contents->web_view || !useSnapshotLayer())
-        return;
-
-    [contents->web_view layoutSubtreeIfNeeded];
-    int tab_id = contents->tab_id;
-    WKWebView *web_view = contents->web_view;
-    NSString *refresh_reason = [reason copy] ?: @"unknown";
-    WKSnapshotConfiguration *configuration = [[WKSnapshotConfiguration alloc] init];
-    configuration.rect = web_view.bounds;
-    [web_view takeSnapshotWithConfiguration:configuration completionHandler:^(NSImage *snapshotImage, NSError *error) {
-        WebContents *current = findContentsByTabId(tab_id);
-        if (!current || current->web_view != web_view)
-            return;
-        if (error || !snapshotImage) {
-            fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh failed: %s\n", error.localizedDescription.UTF8String ?: "missing-image");
-            current->snapshot_refresh_pending = false;
-            return;
-        }
-        CGImageRef cg_image = [snapshotImage CGImageForProposedRect:nil context:nil hints:nil];
-        if (!cg_image) {
-            fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh failed: missing-cgimage\n");
-            current->snapshot_refresh_pending = false;
-            return;
-        }
-        CALayer *snapshot_layer = snapshotLayerForContents(current);
-        NSSize pointSize = hostWindowPointSizeForContents(current);
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        snapshot_layer.contents = (__bridge id)cg_image;
-        snapshot_layer.frame = CGRectMake(0, 0, pointSize.width, pointSize.height);
-        [CATransaction commit];
-        fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh reason=%s width=%d height=%d\n", refresh_reason.UTF8String, current->width, current->height);
-        current->snapshot_refresh_pending = false;
-        if (current->snapshot_refresh_again) {
-            NSString *next_reason = current->snapshot_refresh_again_scroll ? @"scroll" : @"coalesced";
-            current->snapshot_refresh_again = false;
-            current->snapshot_refresh_again_scroll = false;
-            scheduleSnapshotLayerRefresh(current, next_reason);
-        }
-    }];
-}
-
-static void scheduleSnapshotLayerRefresh(WebContents *contents, NSString *reason)
-{
-    if (!contents || !contents->web_view || !useSnapshotLayer())
-        return;
-    bool is_scroll_refresh = [reason isEqualToString:@"scroll"];
-    if (contents->snapshot_refresh_pending) {
-        contents->snapshot_refresh_again = true;
-        contents->snapshot_refresh_again_scroll = contents->snapshot_refresh_again_scroll || is_scroll_refresh;
-        return;
-    }
-    contents->snapshot_refresh_pending = true;
-    int tab_id = contents->tab_id;
-    NSString *refresh_reason = [reason copy] ?: @"unknown";
-    double delay_seconds = is_scroll_refresh ? webkitScrollSnapshotDelaySeconds() : 0.05;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay_seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        WebContents *current = findContentsByTabId(tab_id);
-        if (!current)
-            return;
-        refreshSnapshotLayerNow(current, refresh_reason);
-    });
-}
-
-static bool scrollPhaseEndedOrCancelled(int phase)
-{
-    return (phase & 8) || (phase & 16);
-}
-
-static bool scrollMomentumPhaseEndedOrCancelled(int momentum_phase)
-{
-    return (momentum_phase & 8) || (momentum_phase & 16);
-}
-
-static void scheduleScrollSettleSnapshotRefresh(WebContents *contents, NSTimeInterval delay_seconds)
-{
-    if (!contents || !contents->web_view || !useSnapshotLayer() || !webkitScrollSettleRefreshEnabled())
-        return;
-    int tab_id = contents->tab_id;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay_seconds * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        WebContents *current = findContentsByTabId(tab_id);
-        if (!current)
-            return;
-        scheduleSnapshotLayerRefresh(current, @"scroll");
-    });
-}
-
-static void scheduleScrollSettleSnapshotRefreshes(WebContents *contents, int phase, int momentum_phase)
-{
-    if (!scrollPhaseEndedOrCancelled(phase) && !scrollMomentumPhaseEndedOrCancelled(momentum_phase))
-        return;
-    scheduleScrollSettleSnapshotRefresh(contents, 0.08);
-    scheduleScrollSettleSnapshotRefresh(contents, 0.18);
-    scheduleScrollSettleSnapshotRefresh(contents, 0.35);
-}
-
 static void captureRenderProbeAttempt(WebContents *contents, int attempt)
 {
     if (!contents || !contents->web_view)
@@ -5754,19 +5552,6 @@ static void captureRenderProbeAttempt(WebContents *contents, int attempt)
                     captureRenderProbeAttempt(retry, attempt + 1);
             });
             return;
-        }
-        if (!error && snapshotImage && useSnapshotLayer()) {
-            CGImageRef cg_image = [snapshotImage CGImageForProposedRect:nil context:nil hints:nil];
-            if (cg_image) {
-                CALayer *snapshot_layer = snapshotLayerForContents(current);
-                NSSize pointSize = hostWindowPointSizeForContents(current);
-                [CATransaction begin];
-                [CATransaction setDisableActions:YES];
-                snapshot_layer.contents = (__bridge id)cg_image;
-                snapshot_layer.frame = CGRectMake(0, 0, pointSize.width, pointSize.height);
-                [CATransaction commit];
-                fprintf(stderr, "[libtermsurf_webkit] snapshot-layer-refresh reason=render-probe width=%d height=%d\n", current->width, current->height);
-            }
         }
         classifySnapshotImage(current, @"WKWebView.takeSnapshot", snapshotImage, error);
     }];
@@ -6249,18 +6034,25 @@ static void exportContext(WebContents *contents)
         return;
 
     [contents->web_view layoutSubtreeIfNeeded];
-    if (!contents->remote_context) {
-        contents->remote_context = [CAContext remoteContextWithOptions:@{
-            @"kCAContextCIFilterBehavior" : @"ignore",
-        }];
-        contents->remote_context.layer = remoteContextLayerForContents(contents);
+    if (!contents->live_context_id)
+        contents->live_context_id = [contents->web_view _enableTermSurfExternalPresentation];
+
+    if (!contents->live_context_id) {
+        fprintf(stderr, "[libtermsurf_webkit] live-context export failed tab_id=%d context_id=0\n", contents->tab_id);
+        return;
     }
-    scheduleSnapshotLayerRefresh(contents, @"export");
+
+    fprintf(stderr,
+        "[libtermsurf_webkit] live-context tab_id=%d context_id=%u width=%d height=%d\n",
+        contents->tab_id,
+        contents->live_context_id,
+        contents->width,
+        contents->height);
 
     if (g_callbacks.on_ca_context_id) {
         g_callbacks.on_ca_context_id(
             contents,
-            contents->remote_context.contextId,
+            contents->live_context_id,
             contents->width,
             contents->height,
             g_callbacks.on_ca_context_id_data);
@@ -6322,7 +6114,6 @@ static void exportContext(WebContents *contents)
         fireLoading(self.owner, webView.URL.absoluteString, 0);
         applyPdfViewportFix(self.owner, @"navigation-finish");
         exportContext(self.owner);
-        scheduleSnapshotLayerRefresh(self.owner, @"navigation-finish");
         captureRenderProbe(self.owner);
         if (currentUrlLooksPdf(self.owner))
             capturePdfSafeFailureProbe(self.owner, webView.URL.absoluteString);
@@ -6568,10 +6359,8 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->renderer_crash_reported = false;
     contents->renderer_crashed = false;
     contents->has_committed_document = false;
-    contents->snapshot_layer = nil;
-    contents->snapshot_refresh_pending = false;
-    contents->snapshot_refresh_again = false;
-    contents->snapshot_refresh_again_scroll = false;
+    contents->live_context_id = 0;
+    contents->presentation_visible = false;
     contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
     contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
 
@@ -6582,6 +6371,16 @@ ts_web_contents_t ts_create_web_contents(ts_browser_context_t ctx, const char *u
     contents->window.title = @"libtermsurf_webkit";
     contents->window.acceptsMouseMovedEvents = YES;
     contents->window.ignoresMouseEvents = YES;
+    // Space co-location with host (issue 26072110403572 Exp 2).
+    // Clear exclusive fullscreen roles before setting Auxiliary (AppKit).
+    {
+      NSWindowCollectionBehavior b = contents->window.collectionBehavior;
+      b &= ~NSWindowCollectionBehaviorFullScreenPrimary;
+      b &= ~NSWindowCollectionBehaviorFullScreenNone;
+      b |= NSWindowCollectionBehaviorCanJoinAllSpaces;
+      b |= NSWindowCollectionBehaviorFullScreenAuxiliary;
+      contents->window.collectionBehavior = b;
+    }
     contents->window.alphaValue = hostWindowAlpha();
 
     WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
@@ -6675,10 +6474,8 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->renderer_crash_reported = false;
     contents->renderer_crashed = false;
     contents->has_committed_document = false;
-    contents->snapshot_layer = nil;
-    contents->snapshot_refresh_pending = false;
-    contents->snapshot_refresh_again = false;
-    contents->snapshot_refresh_again_scroll = false;
+    contents->live_context_id = 0;
+    contents->presentation_visible = false;
     contents->pending_javascript_dialogs = [[NSMutableDictionary alloc] init];
     contents->pending_http_auth_requests = [[NSMutableDictionary alloc] init];
 
@@ -6689,6 +6486,16 @@ ts_web_contents_t ts_create_devtools_web_contents(
     contents->window.title = @"libtermsurf_webkit_devtools";
     contents->window.acceptsMouseMovedEvents = YES;
     contents->window.ignoresMouseEvents = YES;
+    // Space co-location with host (issue 26072110403572 Exp 2).
+    // Clear exclusive fullscreen roles before setting Auxiliary (AppKit).
+    {
+      NSWindowCollectionBehavior b = contents->window.collectionBehavior;
+      b &= ~NSWindowCollectionBehaviorFullScreenPrimary;
+      b &= ~NSWindowCollectionBehaviorFullScreenNone;
+      b |= NSWindowCollectionBehaviorCanJoinAllSpaces;
+      b |= NSWindowCollectionBehaviorFullScreenAuxiliary;
+      contents->window.collectionBehavior = b;
+    }
     contents->window.alphaValue = hostWindowAlpha();
 
     contents->web_view = inspector_web_view;
@@ -6718,7 +6525,7 @@ void ts_destroy_web_contents(ts_web_contents_t wc)
         return;
 
     unregisterContents(contents);
-    [contents->remote_context invalidate];
+    [contents->web_view _setTermSurfExternalPresentationVisible:NO];
     if (contents->cursor_observer)
         [[NSNotificationCenter defaultCenter] removeObserver:contents->cursor_observer];
     if (contents->is_devtools) {
@@ -6813,7 +6620,6 @@ void ts_set_view_size(
     tracePdfViewGeometry(contents, @"resize", 0, 0, NSMakePoint(0, 0));
     applyPdfViewportFix(contents, @"resize");
     exportContext(contents);
-    scheduleSnapshotLayerRefresh(contents, @"resize");
 }
 
 void ts_forward_mouse_event(ts_web_contents_t wc, int type, int button, int x, int y, int click_count, int modifiers)
@@ -6896,7 +6702,6 @@ void ts_forward_mouse_event(ts_web_contents_t wc, int type, int button, int x, i
         else if (was_dragging && pdfSelectedTextCacheCopyTraceEnabled())
             appendPdfSelectedTextCacheCopyTrace([NSString stringWithFormat:@"webkit-pdf-selected-text-cache tab=%d action=capture-skip reason=drag-threshold generation=%llu", contents->tab_id, (unsigned long long)contents->pdf_selected_text_generation]);
     }
-    scheduleSnapshotLayerRefresh(contents, @"mouse-event");
 }
 
 void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
@@ -6956,8 +6761,6 @@ void ts_forward_mouse_move(ts_web_contents_t wc, int x, int y, int modifiers)
     }
     if (is_drag)
         tracePdfViewGeometry(contents, @"mouse-drag", x, y, original_location);
-    if (is_drag)
-        scheduleSnapshotLayerRefresh(contents, @"mouse-drag");
 }
 
 static int64_t coreGraphicsScrollPhaseForTermSurfPhase(int phase)
@@ -7073,8 +6876,6 @@ void ts_forward_scroll_event(
         dispatch_mode,
         dispatch_target ? NSStringFromClass(dispatch_target.class) : @"nil",
         hit_target ? NSStringFromClass(hit_target.class) : @"nil"]);
-    scheduleSnapshotLayerRefresh(contents, @"scroll");
-    scheduleScrollSettleSnapshotRefreshes(contents, phase, momentum_phase);
 }
 
 static void submitPdfFindQuery(WebContents *contents)
@@ -7099,7 +6900,6 @@ static void submitPdfFindQuery(WebContents *contents)
     WebContents *captured = contents;
     [contents->web_view findString:query withConfiguration:configuration completionHandler:^(WKFindResult *result) {
         tracePdfFind(captured, @"result", [NSString stringWithFormat:@"match_found=%d", result.matchFound ? 1 : 0]);
-        scheduleSnapshotLayerRefresh(captured, @"find");
     }];
 }
 
@@ -7183,7 +6983,6 @@ static bool performPdfKeyboardPageScrollForKeyEvent(WebContents *contents, int t
     [NSApp _setCurrentEvent:event];
     [target scrollWheel:event];
     [NSApp _setCurrentEvent:nil];
-    scheduleSnapshotLayerRefresh(contents, keycode == 34 ? @"pdf-keyboard-page-down" : @"pdf-keyboard-page-up");
     return true;
 }
 
@@ -7216,7 +7015,6 @@ void ts_forward_key_event(ts_web_contents_t wc, int type, int keycode, const cha
         bool invoked = performPdfHudSavePrivateHook(contents);
         tracePdfHudSave(contents, invoked ? @"private-hook-result" : @"private-hook-failed", [NSString stringWithFormat:@"source=command-s invoked=%d", invoked ? 1 : 0]);
         if (invoked) {
-            scheduleSnapshotLayerRefresh(contents, @"pdf-hud-save-private-hook");
             return;
         }
     }
@@ -7224,7 +7022,6 @@ void ts_forward_key_event(ts_web_contents_t wc, int type, int keycode, const cha
         contents->pdf_find_session_active = true;
         contents->pdf_find_query = [NSMutableString string];
         tracePdfFind(contents, @"begin", @"source=command-f");
-        scheduleSnapshotLayerRefresh(contents, @"find-begin");
         return;
     }
     if (type == 0 && is_pdf_url && contents->pdf_find_session_active) {
@@ -7371,7 +7168,6 @@ void ts_forward_key_event(ts_web_contents_t wc, int type, int keycode, const cha
         }
         restorePdfCopyBridge(contents, copy_bridge_mode, &copy_bridge_state);
     }
-    scheduleSnapshotLayerRefresh(contents, @"key-event");
 }
 
 void ts_set_focus(ts_web_contents_t wc, bool focused)
@@ -7414,6 +7210,24 @@ bool ts_web_contents_is_focused(ts_web_contents_t wc)
     if (!contents)
         return false;
     return contents->focused;
+}
+
+void ts_set_presentation_visible(ts_web_contents_t wc, bool visible)
+{
+    WebContents *contents = static_cast<WebContents *>(wc);
+    if (!contents || !contents->web_view)
+        return;
+
+    if (!contents->live_context_id)
+        exportContext(contents);
+
+    contents->presentation_visible = visible;
+    [contents->web_view _setTermSurfExternalPresentationVisible:visible];
+    fprintf(stderr,
+        "[libtermsurf_webkit] presentation-visible tab_id=%d visible=%d context_id=%u\n",
+        contents->tab_id,
+        visible ? 1 : 0,
+        contents->live_context_id);
 }
 
 void ts_set_gui_active(ts_web_contents_t wc, bool active, const char *reason)

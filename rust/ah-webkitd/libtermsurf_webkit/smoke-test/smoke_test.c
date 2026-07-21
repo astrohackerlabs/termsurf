@@ -20,6 +20,10 @@ struct State {
     int initialized;
     int tab_ready;
     int context_id_count;
+    uint32_t context_id;
+    int live_visible_raf_count;
+    int live_hidden_raf_count;
+    int live_visibility_checked;
     int url_changed;
     int loading_started;
     int loading_finished;
@@ -86,6 +90,9 @@ static void run_http_auth_sequence(void *user_data);
 static void query_http_auth_accept_state(void *user_data);
 static void run_renderer_crash_sequence(void *user_data);
 static void check_renderer_crash_sequence(void *user_data);
+static void begin_live_visibility_sequence(void *user_data);
+static void query_hidden_live_state(void *user_data);
+static void query_restored_live_state(void *user_data);
 static void on_cursor_changed(ts_web_contents_t wc, int cursor_type, void *user_data);
 static void on_console_message(
     ts_web_contents_t wc,
@@ -225,8 +232,12 @@ static void finish(void *user_data)
         fail("web contents creation failed");
     if (!state->tab_ready)
         fail("tab ready callback missing");
-    if (!state->context_id_count)
+    if (state->context_id_count < 3)
         fail("ca context id callback missing");
+    if (!state->context_id)
+        fail("stable ca context id missing");
+    if (!state->live_visibility_checked)
+        fail("live presentation visibility check missing");
     if (!state->url_changed)
         fail("url changed callback missing");
     if (!state->loading_started || !state->loading_finished)
@@ -268,10 +279,12 @@ static void finish(void *user_data)
     ts_destroy_browser_context(state->persistent_context);
     ts_destroy_browser_context(state->incognito_context);
     stop_auth_server(state);
-    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d cursor=%d console=%d js_dialogs=%d http_auth=%d renderer_crash=%d\n",
+    printf("SMOKE_PASS initialized=%d tab_ready=%d ca_context=%d stable_context_id=%u live_visibility=%d url=%d loading_started=%d loading_finished=%d title=%d navigations=%d resized=%d focus=%d input=%d target_url=%d cursor=%d console=%d js_dialogs=%d http_auth=%d renderer_crash=%d\n",
         state->initialized,
         state->tab_ready,
         state->context_id_count,
+        state->context_id,
+        state->live_visibility_checked,
         state->url_changed,
         state->loading_started,
         state->loading_finished,
@@ -298,14 +311,94 @@ static void resize_after_navigation(void *user_data)
     ts_post_task(run_input_sequence, state);
 }
 
+static void parse_live_state(const char *result, int *count, char *visibility, size_t visibility_size)
+{
+    if (!result || sscanf(result, "%d:%31s", count, visibility) != 2)
+        fail("live presentation state result missing");
+    visibility[visibility_size - 1] = '\0';
+}
+
+static void check_restored_live_state(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    int count = 0;
+    char visibility[32] = { 0 };
+    parse_live_state(result, &count, visibility, sizeof(visibility));
+    printf("CALLBACK live_state phase=restored count=%d visibility=%s\n", count, visibility);
+    if (strcmp(visibility, "visible") != 0)
+        fail("restored external presentation did not become visible");
+    if (count - state->live_hidden_raf_count < 10)
+        fail("requestAnimationFrame did not resume for restored external presentation");
+    state->live_visibility_checked = 1;
+    ts_post_task(resize_after_navigation, state);
+}
+
+static void query_restored_live_state(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "String(window.__termsurfRafCount) + ':' + document.visibilityState",
+        check_restored_live_state,
+        state);
+}
+
+static void check_hidden_live_state(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    char visibility[32] = { 0 };
+    parse_live_state(result, &state->live_hidden_raf_count, visibility, sizeof(visibility));
+    printf("CALLBACK live_state phase=hidden count=%d visibility=%s\n", state->live_hidden_raf_count, visibility);
+    if (strcmp(visibility, "hidden") != 0)
+        fail("hidden external presentation did not become hidden");
+    if (state->live_hidden_raf_count - state->live_visible_raf_count > 3)
+        fail("requestAnimationFrame continued at foreground rate while hidden");
+    ts_set_presentation_visible(state->web_contents, true);
+    ts_webkit_test_post_delayed_task(1.0, query_restored_live_state, state);
+}
+
+static void query_hidden_live_state(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "String(window.__termsurfRafCount) + ':' + document.visibilityState",
+        check_hidden_live_state,
+        state);
+}
+
+static void check_visible_live_state(const char *result, void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    char visibility[32] = { 0 };
+    parse_live_state(result, &state->live_visible_raf_count, visibility, sizeof(visibility));
+    printf("CALLBACK live_state phase=visible count=%d visibility=%s\n", state->live_visible_raf_count, visibility);
+    if (strcmp(visibility, "visible") != 0)
+        fail("external presentation did not become visible");
+    if (state->live_visible_raf_count < 10)
+        fail("requestAnimationFrame did not run for visible external presentation");
+    ts_set_presentation_visible(state->web_contents, false);
+    ts_webkit_test_post_delayed_task(1.0, query_hidden_live_state, state);
+}
+
+static void begin_live_visibility_sequence(void *user_data)
+{
+    struct State *state = (struct State *)user_data;
+    ts_webkit_test_evaluate_javascript(
+        state->web_contents,
+        "String(window.__termsurfRafCount) + ':' + document.visibilityState",
+        check_visible_live_state,
+        state);
+}
+
 static void check_input_result(const char *result, void *user_data)
 {
     struct State *state = (struct State *)user_data;
     printf("CALLBACK input_state %s\n", result ? result : "");
     if (!result)
         fail("input state result missing");
-    if (!strstr(result, "\"blur\":true"))
-        fail("blur was not observed");
+    /* Pane focus is a TermSurf routing state. The accessory host is never a
+     * key window, so DOM focus/blur is not an oracle for it. */
     /* Accessory host often does not synthesize DOM mousemove from synthetic
      * NSEventTypeMouseMoved; click proves pointer delivery on the same path. */
     if (!strstr(result, "\"move\":\"120,130\"") && !strstr(result, "\"move\":\"110,120\"") &&
@@ -728,7 +821,11 @@ static void on_ca_context_id(ts_web_contents_t wc, uint32_t context_id, int widt
         fail("context id was zero");
     if (width <= 0 || height <= 0)
         fail("context size was invalid");
+    if (state->context_id && state->context_id != context_id)
+        fail("ca context id changed across lifecycle");
+    state->context_id = context_id;
     state->context_id_count++;
+    ts_set_presentation_visible(state->web_contents, true);
     printf("CALLBACK ca_context_id context_id=%u width=%d height=%d\n", context_id, width, height);
 }
 
@@ -752,7 +849,7 @@ static void on_loading_state(ts_web_contents_t wc, const char *url, int loading,
         if (state->navigations_finished == 1) {
             ts_load_url(state->web_contents, state->second_url);
         } else if (state->navigations_finished == 2) {
-            ts_post_task(resize_after_navigation, state);
+            ts_webkit_test_post_delayed_task(1.0, begin_live_visibility_sequence, state);
         } else if (state->navigations_finished == 3) {
             ts_webkit_test_post_delayed_task(1.0, query_http_auth_accept_state, state);
         } else if (state->navigations_finished == 4) {

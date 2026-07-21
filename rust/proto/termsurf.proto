@@ -80,6 +80,9 @@ message TermSurfMessage {
     // TermSurf wire assignment for this contract.
     NavigationAction navigation_action = 45;
     NavigationState navigation_state = 46;
+
+    // GUI → engine: whether this tab's compositor output is actually hosted.
+    SetPresentationVisible set_presentation_visible = 47;
   }
 }
 
@@ -140,6 +143,12 @@ message NavigationState {
   bool can_go_back = 2;
   bool can_go_forward = 3;
   bool can_refresh = 4;
+}
+
+// GUI → engine. This is presentation state, not focus or application activity.
+message SetPresentationVisible {
+  int64 tab_id = 1;
+  bool visible = 2;
 }
 
 // --- Input ---

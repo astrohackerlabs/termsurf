@@ -1,0 +1,62 @@
+From 180beaea2255171081b14ef28d77b4404a165230 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 06:31:57 -0500
+Subject: [PATCH] Exp 2: Clear FS primary before auxiliary Space join
+
+AppKit forbids FullScreenPrimary+Auxiliary together; content shell
+sets Primary, so strip exclusive roles before CanJoinAllSpaces.
+---
+ .../ts_shell_window_mac.mm                    | 23 ++++++++++++++-----
+ 1 file changed, 17 insertions(+), 6 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 2e6d62de72..30057803b0 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -37,6 +37,21 @@ NSRect PrimaryScreenFrame() {
+   return screen.frame;
+ }
+ 
++// Content shell defaults to FullScreenPrimary (see shell_platform_delegate_mac).
++// Primary and Auxiliary are mutually exclusive; clear conflicting roles before
++// setting TermSurf export-window Space policy (issue 26072110403572 Exp 2).
++void ApplyTermSurfSpaceCollectionBehavior(NSWindow* window) {
++  if (!window) {
++    return;
++  }
++  NSWindowCollectionBehavior behavior = window.collectionBehavior;
++  behavior &= ~NSWindowCollectionBehaviorFullScreenPrimary;
++  behavior &= ~NSWindowCollectionBehaviorFullScreenNone;
++  behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
++  behavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
++  window.collectionBehavior = behavior;
++}
++
+ }  // namespace
+ 
+ void ConfigureShellWindowForTermSurf(Shell* shell) {
+@@ -55,9 +70,7 @@ void ConfigureShellWindowForTermSurf(Shell* shell) {
+   // WindowServer occludes the source window and Chromium backgrounds the page.
+   // (Issue 26072110403572 Exp 2 — primary path; no process-wide backgrounding
+   // override.)
+-  window.collectionBehavior =
+-      window.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces |
+-      NSWindowCollectionBehaviorFullScreenAuxiliary;
++  ApplyTermSurfSpaceCollectionBehavior(window);
+ 
+   [window setIgnoresMouseEvents:YES];
+ }
+@@ -125,9 +138,7 @@ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+     return;
+   }
+   // Re-apply Space join on geometry updates in case AppKit cleared behavior.
+-  window.collectionBehavior =
+-      window.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces |
+-      NSWindowCollectionBehaviorFullScreenAuxiliary;
++  ApplyTermSurfSpaceCollectionBehavior(window);
+   [window setIgnoresMouseEvents:YES];
+ 
+   NSRect primary_frame = PrimaryScreenFrame();
+-- 
+2.50.1 (Apple Git-155)
+

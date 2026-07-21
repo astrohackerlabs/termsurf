@@ -7,16 +7,33 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26071814115751):** Electron stable Chromium **`150.0.7871.114`**
-  (`f405107495a07cb1bfcf687d4af8d91117098db6`) / archive
-  `patches/chromium/patches/issue-26071814115751/` (122 format-patches)
+- **Active pin (Issue 26072110403572 Exp 2):** base Electron Chromium
+  **`150.0.7871.114`** + series through
+  `patches/chromium/patches/issue-26071814115751/` (122) and
+  `issue-26072110403572/` (1 Space co-location patch) — **123** total
+- Product branch: `issue-26072110403572-exp2-helper-space-colocation`
+- Product HEAD: `180beaea2255171081b14ef28d77b4404a165230`
+- Product tree: `8417d71be8c7febb95feb03b79711f557a730dd8`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26071814115751 / Electron stable Chromium 150.0.7871.114 (current)
+### Issue 26072110403572 Exp 2 / Space co-location (current tip)
+
+| Field | Value |
+| --- | --- |
+| Parent | `476c8df1c2de6d65fdf8990d02b31c002d81a10b` (122-patch series tip) |
+| Product branch | `issue-26072110403572-exp2-helper-space-colocation` |
+| Product HEAD | `180beaea2255171081b14ef28d77b4404a165230` |
+| Product tree | `8417d71be8c7febb95feb03b79711f557a730dd8` |
+| Add-on archive | `patches/chromium/patches/issue-26072110403572/` |
+| Patches | `0001` Join all Spaces + FullScreenAuxiliary; `0002` clear FullScreenPrimary/None before Auxiliary |
+| Patch SHA-256 | 0001 `b75a3fd9…`; 0002 `2cd114f9…` |
+| Scope | `ApplyTermSurfSpaceCollectionBehavior` on configure + move; exclusive FS roles cleared |
+
+### Issue 26071814115751 / Electron stable Chromium 150.0.7871.114 (base series)
 
 | Field | Value |
 | --- | --- |

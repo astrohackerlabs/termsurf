@@ -88,6 +88,7 @@ extern "C" {
     // --- State ---
 
     pub fn ts_set_focus(wc: TsWebContents, focused: bool);
+    pub fn ts_set_presentation_visible(wc: TsWebContents, visible: bool);
     pub fn ts_set_gui_active(wc: TsWebContents, active: bool, reason: *const c_char);
     pub fn ts_set_color_scheme(wc: TsWebContents, dark: bool);
     pub fn ts_set_view_size(

@@ -1,0 +1,96 @@
+From 2b78cbf340afbb53a5717e9c981c27216b9bd708 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 05:54:25 -0500
+Subject: [PATCH] Exp 1: Chromium disable-backgrounding-occluded-windows argv
+
+Pass stock content switch only on chromium helper spawn so
+fullscreen Space occlusion does not background presented WebContents.
+---
+ src/apprt/termsurf.zig | 41 ++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 40 insertions(+), 1 deletion(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 0cffd2c7f..f3365b063 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4532,6 +4532,16 @@ fn buildBrowserSpawnArgv(
+         return null;
+     }
+ 
++    // Chromium-only: stock content switch so an AppKit-occluded helper source
++    // window (e.g. after host native fullscreen Space move) does not background
++    // the externally presented WebContents. Not applied to WebKit/Ladybird/Gecko.
++    if (std.mem.eql(u8, browser_name, "chromium")) {
++        if (!out.push("--disable-backgrounding-occluded-windows")) {
++            log.warn("browser spawn skipped: argv overflow", .{});
++            return null;
++        }
++    }
++
+     if (renderSurfaceSideChannelBrowser(browser_name)) {
+         const service_name = buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name) orelse return null;
+         out.render_service_len = service_name.len;
+@@ -5678,6 +5688,10 @@ test "Girlbat spawn argv carries render surface service only for Girlbat" {
+     try testing.expectEqual(@as(usize, 0), countArgPrefix(roamium_argv, "--render-surface-service="));
+     try testing.expect(roamium_args.renderService() == null);
+     try expectBaseBrowserArgv(roamium_argv, "/tmp/ah-chromiumd", "chromium");
++    try testing.expectEqual(
++        @as(usize, 1),
++        countExactArg(roamium_argv, "--disable-backgrounding-occluded-windows"),
++    );
+ 
+     var surfari_args: BrowserSpawnArgv = .{};
+     const surfari_argv = buildBrowserSpawnArgv(
+@@ -5692,6 +5706,17 @@ test "Girlbat spawn argv carries render surface service only for Girlbat" {
+     try testing.expectEqual(@as(usize, 0), countArgPrefix(surfari_argv, "--render-surface-service="));
+     try testing.expect(surfari_args.renderService() == null);
+     try expectBaseBrowserArgv(surfari_argv, "/tmp/ah-webkitd", "webkit");
++    try testing.expectEqual(
++        @as(usize, 0),
++        countExactArg(surfari_argv, "--disable-backgrounding-occluded-windows"),
++    );
++
++    // Ladybird base slice (excluding render-surface-service) must not gain the
++    // Chromium-only occlusion switch.
++    try testing.expectEqual(
++        @as(usize, 0),
++        countExactArg(girlbat_argv, "--disable-backgrounding-occluded-windows"),
++    );
+ }
+ 
+ test "render side-channel state is Girlbat gated and cleanup is idempotent" {
+@@ -5731,9 +5756,20 @@ fn countArgPrefix(argv: []const []const u8, prefix: []const u8) usize {
+     return count;
+ }
+ 
++fn countExactArg(argv: []const []const u8, needle: []const u8) usize {
++    var count: usize = 0;
++    for (argv) |arg| {
++        if (std.mem.eql(u8, arg, needle)) count += 1;
++    }
++    return count;
++}
++
+ fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, browser: []const u8) !void {
+     const testing = std.testing;
+-    try testing.expectEqual(@as(usize, 9), argv.len);
++    // Chromium gains --disable-backgrounding-occluded-windows after the common
++    // nine base args; other engines stay at nine until optional side-channels.
++    const expected_len: usize = if (std.mem.eql(u8, browser, "chromium")) 10 else 9;
++    try testing.expectEqual(expected_len, argv.len);
+     try testing.expectEqualStrings(executable, argv[0]);
+     try testing.expect(std.mem.startsWith(u8, argv[1], "--ipc-socket="));
+     try testing.expect(std.mem.startsWith(u8, argv[2], "--browser-name="));
+@@ -5744,6 +5780,9 @@ fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, brows
+     try testing.expectEqualStrings("--no-sandbox", argv[6]);
+     try testing.expectEqualStrings("--enable-logging", argv[7]);
+     try testing.expect(std.mem.startsWith(u8, argv[8], "--log-file="));
++    if (std.mem.eql(u8, browser, "chromium")) {
++        try testing.expectEqualStrings("--disable-backgrounding-occluded-windows", argv[9]);
++    }
+ }
+ 
+ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {
+-- 
+2.50.1 (Apple Git-155)
+

@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072016457563-exp1-replace-ghost-title",
-      "expected_head": "2bbe90f5997860ef182e57d809fce4e099c0cd1a",
-      "expected_tree": "b86a2d2807d8301858e8635591155fb55283cd89",
+      "branch": "issue-26072112084519-exp1-live-compositor-presentation",
+      "expected_head": "3c9ffede08df58661668d4c5dd8c7f5d0f5965d5",
+      "expected_tree": "1c92cf2162a6afff251629a95e18044518510158",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -19,10 +19,12 @@
         "patches/ghostty/patches/issue-26072011262273",
         "patches/ghostty/patches/issue-26072015221509",
         "patches/ghostty/patches/issue-26072016122202",
-        "patches/ghostty/patches/issue-26072016457563"
+        "patches/ghostty/patches/issue-26072016457563",
+        "patches/ghostty/patches/issue-26072110403572",
+        "patches/ghostty/patches/issue-26072112084519"
       ],
-      "patch_count": 35,
-      "archive_sha256": "592f04c7535879a51fec69a8ab118d7669a67744814c294391a16af18a0367d4",
+      "patch_count": 38,
+      "archive_sha256": "6588a63c2dfe7db7441d2e12acda4cde182f375bf813ed3c6a2f7f0efc9f3181",
       "allowed_untracked": []
     },
     {
@@ -55,14 +57,15 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "f405107495a07cb1bfcf687d4af8d91117098db6",
-      "branch": "150.0.7871.114-issue-26071814115751",
-      "expected_head": "476c8df1c2de6d65fdf8990d02b31c002d81a10b",
-      "expected_tree": "ad70b28349aac8c2b8083e61127c4f05953c8b50",
+      "branch": "issue-26072110403572-exp2-helper-space-colocation",
+      "expected_head": "180beaea2255171081b14ef28d77b4404a165230",
+      "expected_tree": "8417d71be8c7febb95feb03b79711f557a730dd8",
       "patch_directories": [
-        "patches/chromium/patches/issue-26071814115751"
+        "patches/chromium/patches/issue-26071814115751",
+        "patches/chromium/patches/issue-26072110403572"
       ],
-      "patch_count": 122,
-      "archive_sha256": "59ff364e27546dd3692381585b797b8f6dccc5bc274c2999fd169a84924a2997",
+      "patch_count": 124,
+      "archive_sha256": "b71a6450a3fcd16bf45bfe55319eda120925fb648cb7f899e36c4a071efc4a33",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",
@@ -90,14 +93,15 @@
       "name": "webkit",
       "checkout": "forks/webkit/src",
       "base": "e0ee95bcafc0c470dfce6db7cfd8ce708c6e9e5e",
-      "branch": "webkit-e0ee95bc-issue-26071814115751",
-      "expected_head": "6d219d5057124a5c432e9cd331c6b1fcd4ff5a78",
-      "expected_tree": "b3957cdcb5dda6a99e3547e19608a10419d19a62",
+      "branch": "issue-26072112084519-exp1-live-compositor-presentation",
+      "expected_head": "bed48373fbdf1400bfbf4f8ecc2c96fb581455cc",
+      "expected_tree": "547986ebaf3970020f4dc86325c20dc2fe5fa756",
       "patch_directories": [
-        "patches/webkit/patches/issue-26071814115751"
+        "patches/webkit/patches/issue-26071814115751",
+        "patches/webkit/patches/issue-26072112084519"
       ],
-      "patch_count": 2,
-      "archive_sha256": "87edc26d71c61fd5595c2fbe56a6850a2d4906516f2d125c68cdc0817c89b8c4",
+      "patch_count": 3,
+      "archive_sha256": "644ecfe100feb5c5449f9ef4a3a205e83422b4dbbdbea810bf79fb1bcf299596",
       "allowed_untracked": []
     },
     {
