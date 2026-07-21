@@ -1,0 +1,297 @@
+From 67b1727d4aed97602ab3e94da7a861e77f07841c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 10:24:04 -0500
+Subject: [PATCH] Make render services selector-agnostic
+
+---
+ src/apprt/termsurf.zig | 199 ++++++++++++++++++-----------------------
+ 1 file changed, 85 insertions(+), 114 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 70391d62b..5a21620dc 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -3476,14 +3476,6 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
+     };
+     const profile = servers[server_index].profileName();
+     const browser = servers[server_index].browserName();
+-    if (!std.mem.eql(u8, browser, "ladybird")) {
+-        log.warn(
+-            "RenderSurface: rejected non-Ladybird browser={s} profile={s} tab_id={}",
+-            .{ browser, profile, surface.*.tab_id },
+-        );
+-        state_mutex.unlock();
+-        return;
+-    }
+     const lookup_index = findTabLookup(profile, browser, surface.*.tab_id) orelse {
+         log.warn(
+             "RenderSurface: unknown tab key={s}/{s} tab_id={}",
+@@ -4631,35 +4623,29 @@ fn buildBrowserSpawnArgv(
+     // Exp 2: do NOT pass --disable-backgrounding-occluded-windows. Space
+     // co-location on helper NSWindows is the product fix (issue 26072110403572).
+ 
+-    if (renderSurfaceSideChannelBrowser(browser_name)) {
+-        const service_name = buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name) orelse return null;
+-        out.render_service_len = service_name.len;
+-        const render_arg = std.fmt.bufPrint(&out.render_service_arg_buf, "--render-surface-service={s}", .{service_name}) catch {
+-            log.warn("browser spawn skipped: render-surface-service arg too long", .{});
+-            return null;
+-        };
+-        if (!out.push(render_arg)) {
+-            log.warn("browser spawn skipped: argv overflow", .{});
+-            return null;
+-        }
++    const service_name = buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name) orelse return null;
++    out.render_service_len = service_name.len;
++    const render_arg = std.fmt.bufPrint(&out.render_service_arg_buf, "--render-surface-service={s}", .{service_name}) catch {
++        log.warn("browser spawn skipped: render-surface-service arg too long", .{});
++        return null;
++    };
++    if (!out.push(render_arg)) {
++        log.warn("browser spawn skipped: argv overflow", .{});
++        return null;
+     }
+ 
+     return out.slice();
+ }
+ 
+-fn renderSurfaceSideChannelBrowser(browser: []const u8) bool {
+-    return std.mem.eql(u8, browser, "ladybird");
+-}
+-
+ fn buildRenderSurfaceServiceName(buf: []u8, ghostboard_pid: i32, profile: []const u8, browser: []const u8) ?[]const u8 {
+     var profile_buf: [max_render_service_component_len]u8 = undefined;
+-    var browser_buf: [max_render_service_component_len]u8 = undefined;
+     const safe_profile = sanitizeRenderServiceComponent(&profile_buf, profile);
+-    const safe_browser = sanitizeRenderServiceComponent(&browser_buf, browser);
++    const profile_hash = std.hash.Wyhash.hash(0, profile);
++    const browser_hash = std.hash.Wyhash.hash(0, browser);
+     return std.fmt.bufPrint(
+         buf,
+-        "com.astrohacker.terminal.ladybirdd.render.{d}.{s}.{s}",
+-        .{ ghostboard_pid, safe_profile, safe_browser },
++        "com.astrohacker.terminal.render.{d}.{s}.{x:0>16}.{x:0>16}",
++        .{ ghostboard_pid, safe_profile, profile_hash, browser_hash },
+     ) catch null;
+ }
+ 
+@@ -5539,43 +5525,35 @@ test "termsurf render surface rejects malformed or stale metadata" {
+     try testing.expectEqual(@as(u64, 0), panes[0].render_surface_pixel_height);
+ }
+ 
+-test "termsurf render surface rejects non-Ladybird browser" {
++test "termsurf render surface accepts opaque absolute browser selector" {
+     const testing = std.testing;
+ 
+     resetTermsurfStateForTest();
+     defer resetTermsurfStateForTest();
+ 
+     const profile: [:0]const u8 = "default";
+-    const roamium: [:0]const u8 = "chromium";
++    const direct_browser: [:0]const u8 = "/tmp/build/arbitrarily-renamed-ladybird";
+ 
+     var browser = try testSocketPair();
+     defer testCloseSocketPair(&browser);
+     var tui = try testSocketPair();
+     defer testCloseSocketPair(&tui);
+ 
+-    try testSetPendingServer(0, profile, roamium);
+-    try testSetPane(0, "pane-chromium", profile, roamium, "https://example.test/chromium", tui[0]);
++    try testSetPendingServer(0, profile, direct_browser);
++    try testSetPane(0, "pane-direct", profile, direct_browser, "https://example.test/direct", tui[0]);
+ 
+     var register: c.Termsurf__ServerRegister = undefined;
+     c.termsurf__server_register__init(&register);
+     register.profile = @constCast(profile.ptr);
+-    register.browser = @constCast(roamium.ptr);
++    register.browser = @constCast(direct_browser.ptr);
+     handleServerRegister(browser[0], &register);
+ 
+     var ready: c.Termsurf__TabReady = undefined;
+     c.termsurf__tab_ready__init(&ready);
+     ready.tab_id = 88;
+-    ready.pane_id = @constCast("pane-chromium");
++    ready.pane_id = @constCast("pane-direct");
+     handleTabReady(&ready);
+ 
+-    var context: c.Termsurf__CaContext = undefined;
+-    c.termsurf__ca_context__init(&context);
+-    context.tab_id = 88;
+-    context.ca_context_id = 4321;
+-    context.pixel_width = 800;
+-    context.pixel_height = 600;
+-    handleCaContext(browser[0], &context);
+-
+     var surface: c.Termsurf__RenderSurface = undefined;
+     c.termsurf__render_surface__init(&surface);
+     surface.tab_id = 88;
+@@ -5586,9 +5564,9 @@ test "termsurf render surface rejects non-Ladybird browser" {
+     surface.generation = 1;
+     handleRenderSurface(browser[0], &surface);
+ 
+-    try testing.expectEqual(@as(u64, 4321), panes[0].ca_context_id);
+-    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_generation);
+-    try testing.expectEqual(@as(u64, 0), panes[0].render_surface_pixel_width);
++    try testing.expectEqual(@as(u64, 0), panes[0].ca_context_id);
++    try testing.expectEqual(@as(u64, 1), panes[0].render_surface_generation);
++    try testing.expectEqual(@as(u64, 16), panes[0].render_surface_pixel_width);
+ }
+ 
+ fn testBrowserResolutionWithRestoredEnv() !void {
+@@ -5738,82 +5716,75 @@ test "Surfari runtime framework path follows executable directory" {
+     try testing.expect(surfariRuntimeFrameworkPath("chromium", "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd") == null);
+ }
+ 
+-test "Girlbat spawn argv carries render surface service only for Girlbat" {
++test "browser spawn argv carries one render surface service for every selector" {
+     const testing = std.testing;
+ 
+-    var girlbat_args: BrowserSpawnArgv = .{};
+-    const girlbat_argv = buildBrowserSpawnArgv(
+-        &girlbat_args,
+-        "/tmp/ah-ladybirdd",
+-        "ladybird",
+-        "default/profile",
+-        "/tmp/termsurf-gui.sock",
+-        "/tmp/termsurf-ladybird.sock",
+-        12345,
+-    ) orelse return error.BuildGirlbatArgvFailed;
+-
+-    try testing.expectEqual(@as(usize, 10), girlbat_argv.len);
+-    try expectBaseBrowserArgv(girlbat_argv[0..9], "/tmp/ah-ladybirdd", "ladybird");
+-    try testing.expectEqual(@as(usize, 1), countArgPrefix(girlbat_argv, "--render-surface-service="));
+-    const render_service = girlbat_args.renderService() orelse return error.MissingRenderService;
+-    var second_render_service_buf: [max_render_service_name_len]u8 = undefined;
+-    const second_render_service = buildRenderSurfaceServiceName(&second_render_service_buf, 12345, "default/profile", "ladybird") orelse return error.MissingRenderService;
+-    try testing.expectEqualStrings(render_service, second_render_service);
+-    try testing.expect(std.mem.startsWith(u8, render_service, "com.astrohacker.terminal.ladybirdd.render.12345."));
+-    try testing.expect(render_service.len < max_render_service_name_len);
+-    try testing.expect(std.mem.indexOfScalar(u8, render_service, '/') == null);
+-    try testing.expect(std.mem.indexOfScalar(u8, render_service, ' ') == null);
+-    try testing.expect(std.mem.indexOf(u8, render_service, "default-profile") != null);
+-
+-    var roamium_args: BrowserSpawnArgv = .{};
+-    const roamium_argv = buildBrowserSpawnArgv(
+-        &roamium_args,
+-        "/tmp/ah-chromiumd",
+-        "chromium",
+-        "default",
+-        "/tmp/termsurf-gui.sock",
+-        "/tmp/termsurf-chromium.sock",
+-        12345,
+-    ) orelse return error.BuildRoamiumArgvFailed;
+-    try testing.expectEqual(@as(usize, 0), countArgPrefix(roamium_argv, "--render-surface-service="));
+-    try testing.expect(roamium_args.renderService() == null);
+-    try expectBaseBrowserArgv(roamium_argv, "/tmp/ah-chromiumd", "chromium");
+-    // Exp 2: diagnostic occlusion flag must not ship on chromium spawn.
+-    try testing.expectEqual(
+-        @as(usize, 0),
+-        countExactArg(roamium_argv, "--disable-backgrounding-occluded-windows"),
+-    );
+-
+-    var surfari_args: BrowserSpawnArgv = .{};
+-    const surfari_argv = buildBrowserSpawnArgv(
+-        &surfari_args,
+-        "/tmp/ah-webkitd",
+-        "webkit",
+-        "default",
+-        "/tmp/termsurf-gui.sock",
+-        "/tmp/termsurf-webkit.sock",
+-        12345,
+-    ) orelse return error.BuildSurfariArgvFailed;
+-    try testing.expectEqual(@as(usize, 0), countArgPrefix(surfari_argv, "--render-surface-service="));
+-    try testing.expect(surfari_args.renderService() == null);
+-    try expectBaseBrowserArgv(surfari_argv, "/tmp/ah-webkitd", "webkit");
+-    try testing.expectEqual(
+-        @as(usize, 0),
+-        countExactArg(surfari_argv, "--disable-backgrounding-occluded-windows"),
+-    );
++    const cases = [_]struct {
++        executable: []const u8,
++        selector: []const u8,
++        listen_socket: []const u8,
++    }{
++        .{ .executable = "/tmp/ah-chromiumd", .selector = "chromium", .listen_socket = "/tmp/termsurf-chromium.sock" },
++        .{ .executable = "/tmp/ah-webkitd", .selector = "webkit", .listen_socket = "/tmp/termsurf-webkit.sock" },
++        .{ .executable = "/tmp/ah-ladybirdd", .selector = "ladybird", .listen_socket = "/tmp/termsurf-ladybird.sock" },
++        .{ .executable = "/tmp/build/renamed-chromium", .selector = "/tmp/build/renamed-chromium", .listen_socket = "/tmp/termsurf-direct-chromium.sock" },
++        .{ .executable = "/tmp/build/arbitrary-webkit-engine", .selector = "/tmp/build/arbitrary-webkit-engine", .listen_socket = "/tmp/termsurf-direct-webkit.sock" },
++        .{ .executable = "/tmp/build/ladybird-from-this-build", .selector = "/tmp/build/ladybird-from-this-build", .listen_socket = "/tmp/termsurf-direct-ladybird.sock" },
++    };
+ 
+-    try testing.expectEqual(
+-        @as(usize, 0),
+-        countExactArg(girlbat_argv, "--disable-backgrounding-occluded-windows"),
+-    );
++    for (cases) |case| {
++        var args: BrowserSpawnArgv = .{};
++        const argv = buildBrowserSpawnArgv(
++            &args,
++            case.executable,
++            case.selector,
++            "default/profile",
++            "/tmp/termsurf-gui.sock",
++            case.listen_socket,
++            12345,
++        ) orelse return error.BuildBrowserArgvFailed;
++
++        try testing.expectEqual(@as(usize, 10), argv.len);
++        try expectBaseBrowserArgv(argv[0..9], case.executable, case.selector);
++        try testing.expectEqual(@as(usize, 1), countArgPrefix(argv, "--render-surface-service="));
++        const render_service = args.renderService() orelse return error.MissingRenderService;
++        try testing.expect(std.mem.startsWith(u8, argv[9], "--render-surface-service="));
++        try testing.expect(std.mem.endsWith(u8, argv[9], render_service));
++        try testing.expect(std.mem.startsWith(u8, render_service, "com.astrohacker.terminal.render.12345."));
++        try testing.expect(render_service.len < max_render_service_name_len);
++        try testing.expect(std.mem.indexOfScalar(u8, render_service, '/') == null);
++        try testing.expect(std.mem.indexOfScalar(u8, render_service, ' ') == null);
++        try testing.expect(std.mem.indexOf(u8, render_service, "default-profile") != null);
++        try testing.expect(std.mem.indexOf(u8, render_service, case.selector) == null);
++        // Exp 2: diagnostic occlusion flag must not ship on any engine spawn.
++        try testing.expectEqual(
++            @as(usize, 0),
++            countExactArg(argv, "--disable-backgrounding-occluded-windows"),
++        );
++    }
+ }
+ 
+-test "render side-channel state is Girlbat gated and cleanup is idempotent" {
++test "render service names hash exact selector and profile" {
+     const testing = std.testing;
+ 
+-    try testing.expect(renderSurfaceSideChannelBrowser("ladybird"));
+-    try testing.expect(!renderSurfaceSideChannelBrowser("chromium"));
+-    try testing.expect(!renderSurfaceSideChannelBrowser("webkit"));
++    var first_buf: [max_render_service_name_len]u8 = undefined;
++    var repeat_buf: [max_render_service_name_len]u8 = undefined;
++    var browser_buf: [max_render_service_name_len]u8 = undefined;
++    var profile_buf: [max_render_service_name_len]u8 = undefined;
++    const first = buildRenderSurfaceServiceName(&first_buf, 12345, "same-prefix-profile-a", "/very/long/path/to/engine-a") orelse return error.MissingRenderService;
++    const repeat = buildRenderSurfaceServiceName(&repeat_buf, 12345, "same-prefix-profile-a", "/very/long/path/to/engine-a") orelse return error.MissingRenderService;
++    const other_browser = buildRenderSurfaceServiceName(&browser_buf, 12345, "same-prefix-profile-a", "/very/long/path/to/engine-b") orelse return error.MissingRenderService;
++    const other_profile = buildRenderSurfaceServiceName(&profile_buf, 12345, "same-prefix-profile-b", "/very/long/path/to/engine-a") orelse return error.MissingRenderService;
++
++    try testing.expectEqualStrings(first, repeat);
++    try testing.expect(!std.mem.eql(u8, first, other_browser));
++    try testing.expect(!std.mem.eql(u8, first, other_profile));
++    try testing.expect(std.mem.indexOf(u8, first, "/very/long/path") == null);
++    try testing.expect(first.len < max_render_service_name_len);
++}
++
++test "render side-channel cleanup is idempotent" {
++    const testing = std.testing;
+ 
+     var state: RenderSideChannelState = .{
+         .in_use = true,
+@@ -5825,7 +5796,7 @@ test "render side-channel state is Girlbat gated and cleanup is idempotent" {
+         .test_iosurface_pointer = @ptrFromInt(0x5678),
+         .test_owned_received_surface = true,
+     };
+-    try testing.expect(copyText(&state.service_name, &state.service_name_len, "com.astrohacker.terminal.ladybirdd.render.test"));
++    try testing.expect(copyText(&state.service_name, &state.service_name_len, "com.astrohacker.terminal.render.test"));
+     releaseRenderSideChannel(&state);
+     try testing.expect(!state.in_use);
+     try testing.expectEqual(@as(c.tsrc_port_t, 0), state.child_port);
+-- 
+2.50.1 (Apple Git-155)
+

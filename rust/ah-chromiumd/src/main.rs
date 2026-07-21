@@ -133,7 +133,8 @@ fn startup_trace(event: &str) {
 // --- main ---
 
 fn main() {
-    if handle_identity_arg(std::env::args().skip(1)) {
+    let process_args: Vec<String> = std::env::args().collect();
+    if handle_identity_arg(process_args.iter().skip(1)) {
         return;
     }
 
@@ -143,7 +144,7 @@ fn main() {
     startup_trace("dispatch_trace_initialized");
 
     // Parse --ipc-socket= and --user-data-dir= from argv.
-    for arg in std::env::args().skip(1) {
+    for arg in process_args.iter().skip(1) {
         if let Some(val) = arg.strip_prefix("--ipc-socket=") {
             let _ = SOCKET_PATH.set(val.to_string());
         } else if let Some(val) = arg.strip_prefix("--listen-socket=") {
@@ -153,6 +154,8 @@ fn main() {
             let _ = PROFILE_NAME.set(name.to_string());
         } else if let Some(val) = arg.strip_prefix("--browser-name=") {
             let _ = BROWSER_NAME.set(val.to_string());
+        } else if let Some(val) = arg.strip_prefix("--render-surface-service=") {
+            eprintln!("[Chromium] accepted optional host render service: {val}");
         } else if arg == "--incognito" {
             let _ = INCOGNITO.set(true);
         }
@@ -163,13 +166,19 @@ fn main() {
     }
     startup_trace("args_parsed");
 
-    if std::env::args().any(|arg| arg == "--termsurf-warmup") {
+    if process_args.iter().any(|arg| arg == "--termsurf-warmup") {
         startup_trace("warmup_exit");
         return;
     }
 
-    // Build argc/argv for ts_content_main.
-    let args: Vec<CString> = std::env::args().map(|a| CString::new(a).unwrap()).collect();
+    // The render service belongs to the host/wrapper contract. Chromium keeps
+    // using its CAContext transport, so do not leak the host-only option into
+    // Chromium's command-line parser.
+    let upstream_args = upstream_engine_args(process_args);
+    let args: Vec<CString> = upstream_args
+        .into_iter()
+        .map(|arg| CString::new(arg).unwrap())
+        .collect();
     let argv: Vec<*const i8> = args.iter().map(|a| a.as_ptr()).collect();
     startup_trace("argv_built");
 
@@ -219,7 +228,7 @@ where
                 print!(
                     "Astrohacker Chromium Engine — Chromium support helper for Astrohacker TermSurf\n\n\
 Usage: ah-chromiumd [OPTIONS]\n\n\
-Options:\n      --ipc-socket=<PATH>       Connect to an Astrohacker TermSurf IPC socket\n      --listen-socket=<PATH>    Listen for browser IPC clients\n      --user-data-dir=<PATH>    Browser profile data directory\n      --browser-name=<NAME>     Browser identity to register\n      --incognito               Use an incognito browser context\n      --termsurf-warmup         Warm runtime dependencies and exit\n  -h, --help                    Print help\n      --version                 Print version\n"
+Options:\n      --ipc-socket=<PATH>       Connect to an Astrohacker TermSurf IPC socket\n      --listen-socket=<PATH>    Listen for browser IPC clients\n      --user-data-dir=<PATH>    Browser profile data directory\n      --browser-name=<NAME>     Browser identity to register\n      --render-surface-service=<NAME>  Accept the optional host render service\n      --incognito               Use an incognito browser context\n      --termsurf-warmup         Warm runtime dependencies and exit\n  -h, --help                    Print help\n      --version                 Print version\n"
                 );
                 return true;
             }
@@ -229,9 +238,22 @@ Options:\n      --ipc-socket=<PATH>       Connect to an Astrohacker TermSurf IPC
     false
 }
 
+fn upstream_engine_args<I, S>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .filter_map(|raw_arg| {
+            let arg = raw_arg.as_ref();
+            (!arg.starts_with("--render-surface-service=")).then(|| arg.to_string())
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::handle_identity_arg;
+    use super::{handle_identity_arg, upstream_engine_args};
 
     #[test]
     fn identity_args_exit_before_runtime_setup() {
@@ -239,5 +261,26 @@ mod tests {
         assert!(handle_identity_arg(["--help"]));
         assert!(handle_identity_arg(["-h"]));
         assert!(!handle_identity_arg(["--termsurf-warmup"]));
+    }
+
+    #[test]
+    fn host_render_service_does_not_reach_chromium() {
+        let args = upstream_engine_args([
+            "/tmp/build/arbitrarily-renamed-chromium",
+            "--browser-name=/tmp/build/arbitrarily-renamed-chromium",
+            "--render-surface-service=com.astrohacker.terminal.render.123.test",
+            "--enable-logging",
+            "--unknown-upstream-option=preserved",
+        ]);
+
+        assert_eq!(
+            args,
+            [
+                "/tmp/build/arbitrarily-renamed-chromium",
+                "--browser-name=/tmp/build/arbitrarily-renamed-chromium",
+                "--enable-logging",
+                "--unknown-upstream-option=preserved",
+            ]
+        );
     }
 }

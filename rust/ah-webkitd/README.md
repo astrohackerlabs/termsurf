@@ -14,3 +14,11 @@ cargo build -p ah-webkitd
 
 The `libtermsurf_webkit` name is an internal ABI compatibility name. Do not
 rename it without a dedicated compatibility issue.
+
+## Host render service
+
+Astrohacker Terminal supplies every controlled engine process with the optional
+`--render-surface-service=<NAME>` host argument, including launches selected by
+absolute executable path. `ah-webkitd` accepts and consumes this host-only
+argument before entering WebKit; WebKit presentation continues to use its
+CAContext transport.

@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072112084519-exp1-live-compositor-presentation",
-      "expected_head": "3c9ffede08df58661668d4c5dd8c7f5d0f5965d5",
-      "expected_tree": "1c92cf2162a6afff251629a95e18044518510158",
+      "branch": "issue-26072114283091-exp1-universal-render-service",
+      "expected_head": "67b1727d4aed97602ab3e94da7a861e77f07841c",
+      "expected_tree": "ad1b948f4e6ec0f22a54b6bdf89b8b6f6c9ad12a",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -21,10 +21,11 @@
         "patches/ghostty/patches/issue-26072016122202",
         "patches/ghostty/patches/issue-26072016457563",
         "patches/ghostty/patches/issue-26072110403572",
-        "patches/ghostty/patches/issue-26072112084519"
+        "patches/ghostty/patches/issue-26072112084519",
+        "patches/ghostty/patches/issue-26072114283091"
       ],
-      "patch_count": 38,
-      "archive_sha256": "6588a63c2dfe7db7441d2e12acda4cde182f375bf813ed3c6a2f7f0efc9f3181",
+      "patch_count": 39,
+      "archive_sha256": "6ea04eac029f6c988ece2ef307c32be0a008e3418b13e910ff799489f7f65896",
       "allowed_untracked": []
     },
     {

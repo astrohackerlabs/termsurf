@@ -336,12 +336,14 @@ mod tests {
     #[test]
     fn parse_render_surface_service_arg() {
         let args = parse_args_from([
-            "--render-surface-service=com.astrohacker.terminal.ladybirdd.render.123.default.ladybird",
+            "--browser-name=/tmp/build/arbitrarily-renamed-ladybird",
+            "--render-surface-service=com.astrohacker.terminal.render.123.default.abc123",
         ]);
 
+        assert_eq!(args.browser_name, "/tmp/build/arbitrarily-renamed-ladybird");
         assert_eq!(
             args.render_surface_service.as_deref(),
-            Some("com.astrohacker.terminal.ladybirdd.render.123.default.ladybird")
+            Some("com.astrohacker.terminal.render.123.default.abc123")
         );
     }
 

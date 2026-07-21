@@ -14,3 +14,11 @@ cargo build -p ah-chromiumd
 ```
 
 Chromium must be prepared separately before full linking or runtime tests.
+
+## Host render service
+
+Astrohacker Terminal supplies every controlled engine process with the optional
+`--render-surface-service=<NAME>` host argument, including launches selected by
+absolute executable path. `ah-chromiumd` accepts and consumes this host-only
+argument before entering Chromium; Chromium presentation continues to use its
+CAContext transport.

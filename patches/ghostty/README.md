@@ -1,5 +1,25 @@
 # Ghostty Patches
 
+## Active Add-on (Issue 26072114283091 Exp 1)
+
+- Parent product commit: `3c9ffede08df58661668d4c5dd8c7f5d0f5965d5`
+  (prior tip on `issue-26072112084519-exp1-live-compositor-presentation`)
+- Product branch: `issue-26072114283091-exp1-universal-render-service`
+- Product HEAD: `67b1727d4aed97602ab3e94da7a861e77f07841c`
+- Product tree: `ad1b948f4e6ec0f22a54b6bdf89b8b6f6c9ad12a`
+- Issue archive: `patches/ghostty/patches/issue-26072114283091/`
+- Patch SHA-256:
+  `b209ebbfcfe53ba95ef49293c2619ef89404c18511a4b92c1e38835c5eacfbab`
+- Aggregate series: 39 patches; archive SHA-256
+  `6ea04eac029f6c988ece2ef307c32be0a008e3418b13e910ff799489f7f65896`
+- Scope: offer one optional render-surface service to every named or opaque
+  absolute-path browser launch; key bounded service names by exact selector and
+  profile hashes; accept `RenderSurface` by registered server/tab identity
+  instead of the literal `ladybird` name.
+- Verification: focused Zig argv, service-name, opaque-selector render-surface,
+  and idempotent-cleanup tests; incremental Release `ahterm` build; manual
+  direct-path engine acceptance.
+
 ## Active Add-on (Issue 26072112084519 Exp 1)
 
 - Parent product commit: `f713728dc20e3c382cd8ad14b11eccf60a96fe21`

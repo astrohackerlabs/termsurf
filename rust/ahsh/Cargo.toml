@@ -1,6 +1,6 @@
 [package]
 name = "ahsh"
-version = "0.1.62"
+version = "0.1.63"
 edition = "2024"
 description = "Astrohacker Shell: Nushell default with zsh environment and alt mode"
 license = "MIT"
