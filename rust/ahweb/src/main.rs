@@ -1136,7 +1136,7 @@ struct Cli {
     #[arg(long, global = true)]
     incognito: bool,
 
-    /// Browser engine to use ("chromium", "webkit", "gecko") or absolute path
+    /// Browser engine to use ("chromium") or absolute path to a helper binary
     #[arg(short, long, global = true)]
     browser: Option<String>,
 
@@ -2874,8 +2874,6 @@ fn browser_display_label(browser: &str) -> &str {
     let basename = browser.rsplit('/').next().unwrap_or(browser);
     match basename {
         "chromium" | "ah-chromiumd" => "chromium",
-        "webkit" | "ah-webkitd" => "webkit",
-        "gecko" | "ah-geckod" => "gecko",
         _ => basename,
     }
 }
@@ -3998,41 +3996,35 @@ mod tests {
 
     #[test]
     fn loading_screen_uses_browser_label_and_immediate_warning() {
-        for browser_label in ["webkit", "chromium"] {
-            let rendered = render_loading_probe(browser_label);
-            assert!(
-                rendered
-                    .capture
-                    .contains(&format!("Waiting for {browser_label}")),
-                "loading screen should name {browser_label}\n{}",
-                rendered.capture
-            );
-            assert!(
-                rendered
-                    .capture
-                    .contains("The first time you load a web browser"),
-                "loading screen should show immediate engine-neutral warning\n{}",
-                rendered.capture
-            );
-            assert!(
-                !rendered.capture.contains("Chromium"),
-                "loading screen should not mention Chromium\n{}",
-                rendered.capture
-            );
-        }
+        let rendered = render_loading_probe("chromium");
+        assert!(
+            rendered.capture.contains("Waiting for chromium"),
+            "loading screen should name chromium\n{}",
+            rendered.capture
+        );
+        // Engine-neutral warning must not hardcode a different engine family.
+        assert!(
+            rendered
+                .capture
+                .contains("The first time you load a web browser"),
+            "loading screen should show immediate engine-neutral warning\n{}",
+            rendered.capture
+        );
     }
 
     #[test]
     fn browser_display_label_maps_known_engines_and_helpers() {
         for (input, expected) in [
             ("chromium", "chromium"),
-            ("webkit", "webkit"),
-            ("gecko", "gecko"),
             ("ah-chromiumd", "chromium"),
-            ("ah-webkitd", "webkit"),
-            ("ah-geckod", "gecko"),
             ("/opt/homebrew/bin/ah-chromiumd", "chromium"),
-            ("/opt/homebrew/bin/ah-webkitd", "webkit"),
+            // Historical helper basenames are not logical product families.
+            ("ah-webkitd", "ah-webkitd"),
+            ("webkit", "webkit"),
+            ("/opt/homebrew/bin/ah-webkitd", "ah-webkitd"),
+            ("ah-geckod", "ah-geckod"),
+            ("gecko", "gecko"),
+            ("/opt/homebrew/bin/ah-geckod", "ah-geckod"),
             ("/tmp/custom-engine", "custom-engine"),
         ] {
             assert_eq!(browser_display_label(input), expected, "{input}");

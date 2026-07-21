@@ -46,12 +46,12 @@ Engine helpers (implementation; on PATH for packaging/debug):
 
 - `ah-chromiumd`
 
-**Not released:** `ah-webkitd` / webkit (archived; Issue 26072120115614),
-`ah-geckod` / gecko.
+**Not released:** `ah-webkitd` / webkit (archived; Issue 26072120115614).
+Gecko / `ah-geckod` was never a shipped product engine (Issue 26072121272459).
 
 Engine **selectors** for `ahweb`: family name `chromium` is the shipped
-product engine. Historical/reserved names such as `webkit` and `gecko` are not
-shipped in the Homebrew cask.
+product engine. Historical names such as `webkit` are not shipped in the
+Homebrew cask.
 
 `TermSurf` remains the **protocol** name (`termsurf.proto`, `libtermsurf_*`,
 `TERMSURF_*` env). It is not the product brand and is not the PATH CLI name
@@ -207,8 +207,8 @@ and credential discovery. After the operator types the exact confirmation, it:
    anything under `forks/` (fork trees are out of scope; `ahterm` still gets
    the release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
 2. proves or reconstructs all released fork inputs from the tracked cumulative
-   patch manifest (Ghostty, Nushell, Reedline, Chromium; WebKit and Gecko are
-   excluded; editor fork excluded);
+   patch manifest (Ghostty, Nushell, Reedline, Chromium; WebKit/Gecko historical
+   archives are excluded from ship; editor fork excluded);
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
 4. packages one archive and freezes its SHA-256;

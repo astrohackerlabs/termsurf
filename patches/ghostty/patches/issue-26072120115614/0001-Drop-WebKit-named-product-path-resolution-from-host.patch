@@ -1,0 +1,276 @@
+From 026e5ece937fa84f0a8e16f5796788ce16fffdaa Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 16:14:52 -0500
+Subject: [PATCH 1/2] Drop WebKit named product path resolution from host
+
+Named webkit/env/opt install paths are no longer product targets.
+Chromium remains the shipped logical engine; absolute paths still work.
+---
+ src/apprt/termsurf.zig | 131 ++++++-----------------------------------
+ 1 file changed, 19 insertions(+), 112 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 9da33e5c1..de3cf950a 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -40,23 +40,17 @@ const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
+ const browser_startup_trace_env = "TERMSURF_BROWSER_STARTUP_TRACE";
+ const devtools_reservation_timeout_env = "TERMSURF_DEVTOOLS_RESERVATION_TIMEOUT_MS";
+ const default_devtools_reservation_timeout_ms: i64 = 15_000;
+-// Product primary engine path overrides (preferred).
++// Product primary engine path overrides (preferred). Chromium is the only
++// shipped logical engine family; WebKit/Ladybird named product paths are gone.
+ const chromium_path_env = "ASTROHACKER_CHROMIUM_PATH";
+-const webkit_path_env = "ASTROHACKER_WEBKIT_PATH";
+ // Legacy dual-read aliases (deprecated codenames; still accepted one cycle).
+ const chromium_path_env_legacy = "TERMSURF_ROAMIUM_PATH";
+-const webkit_path_env_legacy = "TERMSURF_SURFARI_PATH";
+ const chromium_path_env_legacy_installed = "TERMSURF_INSTALLED_ROAMIUM_PATH";
+-const webkit_path_env_legacy_installed = "TERMSURF_INSTALLED_SURFARI_PATH";
+ const installed_chromium_path = "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd";
+-const installed_webkit_path = "/opt/homebrew/opt/astrohacker-terminal-ah-webkitd/ah-webkitd";
+ // Compat names used by older test helpers (same values as installed_*).
+ const installed_roamium_path = installed_chromium_path;
+-const installed_surfari_path = installed_webkit_path;
+ const roamium_path_env = chromium_path_env_legacy;
+-const surfari_path_env = webkit_path_env_legacy;
+ const installed_roamium_path_env = chromium_path_env_legacy_installed;
+-const installed_surfari_path_env = webkit_path_env_legacy_installed;
+ 
+ const render_side_channel_receive_timeout_ms: u32 = 30_000;
+ 
+@@ -1972,18 +1966,6 @@ fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]cons
+         );
+     }
+ 
+-    if (std.mem.eql(u8, browser, "webkit")) {
+-        return resolveEnginePathFromEnv(
+-            browser,
+-            is_debug,
+-            webkit_path_env,
+-            webkit_path_env_legacy,
+-            webkit_path_env_legacy_installed,
+-            installed_webkit_path,
+-        );
+-    }
+-
+-
+     log.warn("SetOverlay: named browser unsupported browser={s}", .{browser});
+     return null;
+ }
+@@ -4474,27 +4456,11 @@ fn spawnBrowserProcess(
+     };
+     defer if (child_env) |*env| env.deinit();
+     if (child_env) |*env| {
+-        const inherited_framework_path = env.get("DYLD_FRAMEWORK_PATH");
+-        if (inherited_framework_path) |framework_path| {
+-            if (std.mem.eql(u8, browser_name_z, "webkit")) {
+-                log.info(
+-                    "browser spawn runtime env browser={s} inherited DYLD_FRAMEWORK_PATH={s}",
+-                    .{ browser_name_z, framework_path },
+-                );
+-            }
+-        } else if (shouldSupplySurfariRuntimeFrameworkPath(browser_name_z, inherited_framework_path)) {
+-            const framework_path = surfariRuntimeFrameworkPath(browser_name_z, browser_executable_z).?;
+-            env.put("DYLD_FRAMEWORK_PATH", framework_path) catch |err| {
+-                log.warn(
+-                    "browser spawn runtime env skipped browser={s} path={s} err={}",
+-                    .{ browser_name_z, framework_path, err },
+-                );
+-            };
+-            log.info(
+-                "browser spawn runtime env browser={s} DYLD_FRAMEWORK_PATH={s}",
+-                .{ browser_name_z, framework_path },
+-            );
+-        }
++        // Historical WebKit (Surfari) DYLD_FRAMEWORK_PATH injection removed with
++        // the shipped WebKit product engine. Absolute-path helpers must set their
++        // own runtime env if needed.
++        _ = browser_name_z;
++        _ = browser_executable_z;
+         child.env_map = env;
+     }
+     traceBrowserStartup(
+@@ -4651,15 +4617,6 @@ fn sanitizeRenderServiceComponent(buf: []u8, value: []const u8) []const u8 {
+     return buf[0..len];
+ }
+ 
+-fn shouldSupplySurfariRuntimeFrameworkPath(browser: []const u8, inherited_framework_path: ?[]const u8) bool {
+-    return std.mem.eql(u8, browser, "webkit") and inherited_framework_path == null;
+-}
+-
+-fn surfariRuntimeFrameworkPath(browser: []const u8, browser_executable: []const u8) ?[]const u8 {
+-    if (!std.mem.eql(u8, browser, "webkit")) return null;
+-    return std.fs.path.dirname(browser_executable);
+-}
+-
+ fn buildUserDataDir(buf: []u8, browser: []const u8, profile: []const u8) ?[:0]u8 {
+     const home = std.posix.getenv("HOME") orelse {
+         log.warn("browser spawn skipped: HOME is not set", .{});
+@@ -4681,8 +4638,8 @@ fn buildUserDataDir(buf: []u8, browser: []const u8, profile: []const u8) ?[:0]u8
+ }
+ 
+ fn browserProfileDirName(browser: []const u8) []const u8 {
+-    if (std.mem.eql(u8, browser, "webkit")) return "webkit-profiles";
+-    if (std.mem.eql(u8, browser, default_browser)) return "chromium-profiles";
++    if (std.mem.eql(u8, browser, default_browser) or std.mem.eql(u8, browser, "chromium"))
++        return "chromium-profiles";
+     return "browser-profiles";
+ }
+ 
+@@ -5052,7 +5009,8 @@ test "termsurf server register matches profile and browser" {
+ 
+     var webkit_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+     const webkit_data_dir = buildUserDataDir(&webkit_data_dir_buf, webkit, profile) orelse return error.UserDataDirFailed;
+-    try testing.expect(std.mem.indexOf(u8, webkit_data_dir, "webkit-profiles") != null);
++    // Non-chromium logical names use generic browser-profiles (WebKit not shipped).
++    try testing.expect(std.mem.indexOf(u8, webkit_data_dir, "browser-profiles") != null);
+     try testing.expect(std.mem.indexOf(u8, webkit_data_dir, "chromium-profiles") == null);
+ 
+     var chromium_data_dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+@@ -5553,116 +5511,66 @@ test "termsurf render surface accepts opaque absolute browser selector" {
+ }
+ 
+ fn testBrowserResolutionWithRestoredEnv() !void {
+-    try testWithRestoredEnv(chromium_path_env, testBrowserResolutionRestoreWebkitPrimary);
+-}
+-
+-fn testBrowserResolutionRestoreChromiumPrimary() !void {
+-    try testWithRestoredEnv(chromium_path_env, testBrowserResolutionRestoreWebkitPrimary);
+-}
+-
+-fn testBrowserResolutionRestoreWebkitPrimary() !void {
+-    try testWithRestoredEnv(webkit_path_env, testBrowserResolutionRestoreRoamiumLegacy);
++    try testWithRestoredEnv(chromium_path_env, testBrowserResolutionRestoreRoamiumLegacy);
+ }
+ 
+ fn testBrowserResolutionRestoreRoamiumLegacy() !void {
+-    try testWithRestoredEnv(roamium_path_env, testBrowserResolutionRestoreSurfari);
+-}
+-
+-fn testBrowserResolutionRestoreSurfari() !void {
+-    try testWithRestoredEnv(surfari_path_env, testBrowserResolutionRestoreInstalledRoamium);
++    try testWithRestoredEnv(roamium_path_env, testBrowserResolutionRestoreInstalledRoamium);
+ }
+ 
+ fn testBrowserResolutionRestoreInstalledRoamium() !void {
+-    try testWithRestoredEnv(installed_roamium_path_env, testBrowserResolutionRestoreInstalledSurfari);
+-}
+-
+-fn testBrowserResolutionRestoreInstalledSurfari() !void {
+-    try testWithRestoredEnv(installed_surfari_path_env, testBrowserResolution);
++    try testWithRestoredEnv(installed_roamium_path_env, testBrowserResolution);
+ }
+ 
+ fn testBrowserResolution() !void {
+     const testing = std.testing;
+-    const surfari: [:0]const u8 = "webkit";
+     const roamium: [:0]const u8 = "chromium";
+     const fake_primary_chromium: [:0]const u8 = "/tmp/astrohacker-primary-chromium";
+-    const fake_primary_webkit: [:0]const u8 = "/tmp/astrohacker-primary-webkit";
+-    const fake_surfari_path: [:0]const u8 = "/tmp/termsurf-test-webkit";
+     const fake_roamium_path: [:0]const u8 = "/tmp/termsurf-test-chromium";
+-    const installed_surfari_override: [:0]const u8 = "/tmp/termsurf-installed-webkit";
+     const installed_roamium_override: [:0]const u8 = "/tmp/termsurf-installed-chromium";
+     const invalid_override: [:0]const u8 = "relative-browser";
+ 
+     _ = c.unsetenv(chromium_path_env);
+-    _ = c.unsetenv(webkit_path_env);
+     _ = c.unsetenv(roamium_path_env);
+-    _ = c.unsetenv(surfari_path_env);
+     _ = c.unsetenv(installed_roamium_path_env);
+-    _ = c.unsetenv(installed_surfari_path_env);
+ 
+-    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
++    // Named WebKit / Ladybird are no longer product path targets.
++    try testing.expect(resolveBrowserExecutableForBuild("webkit", true) == null);
++    try testing.expect(resolveBrowserExecutableForBuild("webkit", false) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild("unknown-browser", true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild("ladybird", true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild("ladybird", false) == null);
+     try testing.expectEqualStrings("/tmp/absolute-browser", resolveBrowserExecutableForBuild("/tmp/absolute-browser", true).?);
+ 
+-    try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+ 
+     // Primary product env wins.
+     if (c.setenv(chromium_path_env, fake_primary_chromium, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(webkit_path_env, fake_primary_webkit, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(roamium_path_env, fake_roamium_path, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(surfari_path_env, fake_surfari_path, 1) != 0) return error.SetenvFailed;
+-    try testing.expectEqualStrings(fake_primary_webkit, resolveBrowserExecutableForBuild(surfari, true).?);
+     try testing.expectEqualStrings(fake_primary_chromium, resolveBrowserExecutableForBuild(roamium, true).?);
+-    try testing.expectEqualStrings(fake_primary_webkit, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(fake_primary_chromium, resolveBrowserExecutableForBuild(roamium, false).?);
+ 
+     // Invalid primary falls through to valid legacy.
+     if (c.setenv(chromium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+-    if (c.setenv(webkit_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+-    try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
+ 
+     // Legacy-only still works.
+     _ = c.unsetenv(chromium_path_env);
+-    _ = c.unsetenv(webkit_path_env);
+-    try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, true).?);
+-    try testing.expectEqualStrings(fake_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, true).?);
+     try testing.expectEqualStrings(fake_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+ 
+     // Invalid legacy falls through to installed default (non-debug).
+-    if (c.setenv(surfari_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(roamium_path_env, invalid_override, 1) != 0) return error.SetenvFailed;
+-    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+-    try testing.expectEqualStrings(installed_surfari_path, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+ 
+-    _ = c.unsetenv(surfari_path_env);
+     _ = c.unsetenv(roamium_path_env);
+-    if (c.setenv(installed_surfari_path_env, installed_surfari_override, 1) != 0) return error.SetenvFailed;
+     if (c.setenv(installed_roamium_path_env, installed_roamium_override, 1) != 0) return error.SetenvFailed;
+-    try testing.expect(resolveBrowserExecutableForBuild(surfari, true) == null);
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+-    try testing.expectEqualStrings(installed_surfari_override, resolveBrowserExecutableForBuild(surfari, false).?);
+     try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
+ }
+ 
+-test "Surfari runtime framework path follows executable directory" {
+-    const testing = std.testing;
+-    try testing.expect(shouldSupplySurfariRuntimeFrameworkPath("webkit", null));
+-    try testing.expect(!shouldSupplySurfariRuntimeFrameworkPath("webkit", "/tmp/WebKitBuild/Debug"));
+-    try testing.expect(!shouldSupplySurfariRuntimeFrameworkPath("chromium", null));
+-    try testing.expectEqualStrings(
+-        "/opt/homebrew/opt/astrohacker-terminal-ah-webkitd",
+-        surfariRuntimeFrameworkPath("webkit", "/opt/homebrew/opt/astrohacker-terminal-ah-webkitd/ah-webkitd").?,
+-    );
+-    try testing.expect(surfariRuntimeFrameworkPath("chromium", "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd") == null);
+-}
+-
+ test "browser spawn argv carries one render surface service for every selector" {
+     const testing = std.testing;
+ 
+@@ -5672,9 +5580,8 @@ test "browser spawn argv carries one render surface service for every selector"
+         listen_socket: []const u8,
+     }{
+         .{ .executable = "/tmp/ah-chromiumd", .selector = "chromium", .listen_socket = "/tmp/termsurf-chromium.sock" },
+-        .{ .executable = "/tmp/ah-webkitd", .selector = "webkit", .listen_socket = "/tmp/termsurf-webkit.sock" },
+         .{ .executable = "/tmp/build/renamed-chromium", .selector = "/tmp/build/renamed-chromium", .listen_socket = "/tmp/termsurf-direct-chromium.sock" },
+-        .{ .executable = "/tmp/build/arbitrary-webkit-engine", .selector = "/tmp/build/arbitrary-webkit-engine", .listen_socket = "/tmp/termsurf-direct-webkit.sock" },
++        .{ .executable = "/tmp/build/arbitrary-engine", .selector = "/tmp/build/arbitrary-engine", .listen_socket = "/tmp/termsurf-direct-engine.sock" },
+     };
+ 
+     for (cases) |case| {
+@@ -5845,7 +5752,7 @@ fn resetTermsurfStateForTest() void {
+ test "termsurf create tab uses tracked color scheme" {
+     const testing = std.testing;
+ 
+-    for ([_][]const u8{ "chromium", "webkit" }) |browser_name| {
++    for ([_][]const u8{ "chromium", "engine-b" }) |browser_name| {
+         for ([_]bool{ false, true }) |dark| {
+             resetTermsurfStateForTest();
+             defer resetTermsurfStateForTest();
+-- 
+2.50.1 (Apple Git-155)
+

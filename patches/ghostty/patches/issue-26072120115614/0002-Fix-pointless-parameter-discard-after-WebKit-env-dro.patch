@@ -1,0 +1,26 @@
+From 6af85acc6b4802c329a3b5aed41d9347483b088f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 16:17:27 -0500
+Subject: [PATCH 2/2] Fix pointless parameter discard after WebKit env drop
+
+browser_name_z and browser_executable_z are still used for spawn logs.
+---
+ src/apprt/termsurf.zig | 2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index de3cf950a..ad217fae1 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4459,8 +4459,6 @@ fn spawnBrowserProcess(
+         // Historical WebKit (Surfari) DYLD_FRAMEWORK_PATH injection removed with
+         // the shipped WebKit product engine. Absolute-path helpers must set their
+         // own runtime env if needed.
+-        _ = browser_name_z;
+-        _ = browser_executable_z;
+         child.env_map = env;
+     }
+     traceBrowserStartup(
+-- 
+2.50.1 (Apple Git-155)
+

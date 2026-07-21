@@ -8,8 +8,6 @@ RUST_DIR="$COMPANY_DIR"
 CHROMIUM_SRC="$COMPANY_DIR/forks/chromium/src"
 CHROMIUM_OUT="$CHROMIUM_SRC/out/Default"
 CHROMIUM_PROTOC="$CHROMIUM_OUT/protoc"
-WEBKIT_SRC="$COMPANY_DIR/forks/webkit/src"
-WEBKIT_LIB_DIR="$RUST_DIR/rust/ah-webkitd/libtermsurf_webkit"
 GHOSTTY_DIR="$COMPANY_DIR/forks/ghostty"
 
 RELEASE=false
@@ -20,8 +18,8 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ahterm, ahsh, ahweb, ahcalc, chromium-fork, ah-chromiumd, webkit-fork, webkit-lib, ah-webkitd, all"
-  echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd, webkit→ah-webkitd"
+  echo "Components: ahterm, ahsh, ahweb, ahcalc, chromium-fork, ah-chromiumd, all"
+  echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
 configuration() {
@@ -161,96 +159,6 @@ build_chromiumd() {
   echo "  Chromium: $CHROMIUM_OUT/ah-chromiumd"
 }
 
-build_webkit_fork() {
-  local CONFIGURATION
-  CONFIGURATION="$(configuration)"
-  local CONFIG_FLAG="--debug"
-  if $RELEASE; then
-    CONFIG_FLAG="--release"
-  fi
-  local WEBKIT_ARCH="${TERMSURF_WEBKIT_ARCH:-arm64}"
-  local WEBKIT_SCOPE_FLAG="--only=WebKit"
-  if [ "${TERMSURF_WEBKIT_FULL_BUILD:-0}" = "1" ]; then
-    WEBKIT_SCOPE_FLAG=""
-  fi
-  local WEBKIT_BUILD_SETTINGS=(
-    "--architecture=$WEBKIT_ARCH"
-    "OVERRIDE_ENABLE_MODULE_VERIFIER=NO"
-    "ENABLE_WK_LIBRARY_MODULE_VERIFIER=NO"
-  )
-  if $RELEASE; then
-    # Xcode 26.5 can build bmalloc's Swift C++ interop module through both
-    # staged and source header paths, which trips duplicate definitions.
-    WEBKIT_BUILD_SETTINGS+=("WK_SWIFT_EXPLICIT_MODULES_ALLOW_CXX_INTEROP=NO")
-  fi
-
-  if [ ! -d "$WEBKIT_SRC" ]; then
-    echo "==> Skipping WebKit ($WEBKIT_SRC not found)"
-    return
-  fi
-
-  cd "$COMPANY_DIR"
-  if $CLEAN; then
-    echo "==> Cleaning WebKit ($CONFIGURATION)..."
-    "$WEBKIT_SRC/Tools/Scripts/build-webkit" "$CONFIG_FLAG" --clean "${WEBKIT_BUILD_SETTINGS[@]}"
-  fi
-
-  echo "==> Building WebKit ($CONFIGURATION, $WEBKIT_ARCH)..."
-  if $RELEASE && [ -n "$WEBKIT_SCOPE_FLAG" ]; then
-    local WEBKIT_RELEASE_TARGETS=(
-      "Everything up to WebKit"
-      "WebInspectorUI"
-    )
-    for target in "${WEBKIT_RELEASE_TARGETS[@]}"; do
-      echo "==> Building WebKit prerequisite ($target, $CONFIGURATION, $WEBKIT_ARCH)..."
-      "$WEBKIT_SRC/Tools/Scripts/build-webkit" "$CONFIG_FLAG" "--only=$target" "${WEBKIT_BUILD_SETTINGS[@]}"
-    done
-  elif [ -n "$WEBKIT_SCOPE_FLAG" ]; then
-    "$WEBKIT_SRC/Tools/Scripts/build-webkit" "$CONFIG_FLAG" "$WEBKIT_SCOPE_FLAG" "${WEBKIT_BUILD_SETTINGS[@]}"
-  else
-    "$WEBKIT_SRC/Tools/Scripts/build-webkit" "$CONFIG_FLAG" "${WEBKIT_BUILD_SETTINGS[@]}"
-  fi
-  echo "  WebKit: $WEBKIT_SRC/WebKitBuild/$CONFIGURATION"
-}
-
-build_webkit_lib() {
-  local CONFIGURATION
-  CONFIGURATION="$(configuration)"
-
-  echo "==> Building libtermsurf_webkit ($CONFIGURATION)..."
-  cd "$COMPANY_DIR"
-  local args=("--configuration" "$CONFIGURATION")
-  if $CLEAN; then
-    args+=("--clean")
-  fi
-  "$WEBKIT_LIB_DIR/build.sh" "${args[@]}"
-  echo "  libtermsurf_webkit: $WEBKIT_LIB_DIR/build/libtermsurf_webkit.dylib"
-}
-
-build_webkitd() {
-  local CONFIGURATION
-  CONFIGURATION="$(configuration)"
-
-  build_webkit_lib
-
-  cd "$RUST_DIR"
-  if $CLEAN; then
-    echo "==> Cleaning WebKit..."
-    cargo clean -p ah-webkitd
-  fi
-  if $RELEASE; then
-    echo "==> Building WebKit (release)..."
-    cargo build --release -p ah-webkitd
-    echo "  WebKit: $RUST_DIR/target/release/ah-webkitd"
-  else
-    echo "==> Building WebKit (debug)..."
-    cargo build -p ah-webkitd
-    echo "  WebKit: $RUST_DIR/target/debug/ah-webkitd"
-  fi
-}
-
-
-
 build_ahterm() {
   local CONFIGURATION="Debug"
   local ZIG_OPTIMIZE="Debug"
@@ -326,13 +234,9 @@ case "$COMPONENT" in
   ahsh)       build_ahsh ;;
   ahcalc)     build_ahcalc ;;
   ah-chromiumd|chromium)   build_chromiumd ;;
-  webkit-fork) build_webkit_fork ;;
-  webkit-lib) build_webkit_lib ;;
-  ah-webkitd|webkit)     build_webkitd ;;
   ahterm|aht) build_ahterm ;;
   all)
-    # Shipped desktop engines: Chromium only (WebKit archived; optional
-    # webkit-fork / ah-webkitd targets remain for local reconstruction).
+    # Shipped desktop engines: Chromium only (WebKit product targets removed).
     build_chromium_fork
     build_ahweb
     build_ahsh

@@ -10,7 +10,8 @@ script locals. Agents and humans should add new names only under this scheme.
 | `TERMSURF_*` | TermSurf **protocol** and pane/session IPC; protocol-adjacent embedding traces |
 | `ASTROHACKER_TERMINAL_*` | Desktop host product packaging, release, smoke, install knobs |
 | `ASTROHACKER_SHELL_*` | Shell component (reserved if needed later) |
-| `ASTROHACKER_{CHROMIUM,WEBKIT}_*` | Engine helper product overrides |
+| `ASTROHACKER_CHROMIUM_*` | Chromium engine helper product overrides |
+| `ASTROHACKER_WEBKIT_*` | **Not shipped** (archived WebKit; historical rename table only) |
 
 **Do not** introduce process environment variables named `AHT_*`, `AHE_*`,
 `AHW_*`, or retired codenames (`ROAMIUM`, `SURFARI`, `GIRLBAT`, `GHOSTBOARD`).
@@ -81,8 +82,10 @@ Resolution order for each engine family:
 | Primary | Legacy dual-read (deprecated) |
 | --- | --- |
 | `ASTROHACKER_CHROMIUM_PATH` | `TERMSURF_ROAMIUM_PATH`, `TERMSURF_INSTALLED_ROAMIUM_PATH` |
-| `ASTROHACKER_WEBKIT_PATH` | `TERMSURF_SURFARI_PATH`, `TERMSURF_INSTALLED_SURFARI_PATH` |
-| `ASTROHACKER_GECKO_PATH` | (none; no legacy alias) |
+| `ASTROHACKER_WEBKIT_PATH` (historical; not shipped) | `TERMSURF_SURFARI_PATH`, `TERMSURF_INSTALLED_SURFARI_PATH` |
+
+There is no product `ASTROHACKER_GECKO_PATH` (Gecko was never a shipped engine;
+Issue 26072121272459).
 
 ## Rename map (product knobs)
 

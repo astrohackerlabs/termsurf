@@ -1,12 +1,27 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072117006454 Exp 1)
+## Active Add-on (Issue 26072120115614 Exp 3)
+
+- Product branch: `issue-26072120115614-exp3-remove-webkit-resolve`
+- Product HEAD: `6af85acc6b4802c329a3b5aed41d9347483b088f`
+- Product tree: `7081a489578be12cb1d0918d7ff3b4b02aa3368b`
+- Issue archive: `patches/ghostty/patches/issue-26072120115614/`
+- Patches: `0001` drop named WebKit/Surfari product path resolution and runtime
+  framework injection; `0002` fix pointless parameter discard after env-block
+  removal (compile).
+- Patch SHA-256:
+  - 0001: `5f8371f486b7d6e6b34d9d1750173c1305a6ff79900e5ede260e20c828261bc3`
+  - 0002: `b100c07cb2d7c5e176c8c3514cc006eccca4eb606c55ee2ac73ba7d80367532c`
+- Scope: Chromium is the only shipped logical engine; absolute paths still
+  work. Historical WebKit/Ladybird patch archives elsewhere are unchanged.
+
+## Prior Add-on (Issue 26072117006454 Exp 1)
 
 - Product branch: `issue-26072117006454-exp1-remove-ladybird`
 - Product HEAD: `dccf7bd96251d08d78cf30682829fa2f4bb361e0`
 - Product tree: `f2f2207f0ec73c23e1a2e57a3ffa58f8846c752e`
 - Issue archive: `patches/ghostty/patches/issue-26072117006454/`
-- Scope: drop Ladybird/Girlbat named engine path resolution; Chromium+WebKit only.
+- Scope: drop Ladybird/Girlbat named engine path resolution.
 - Historical Ladybird patch archives elsewhere are unchanged.
 
 

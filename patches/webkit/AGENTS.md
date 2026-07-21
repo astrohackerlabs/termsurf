@@ -1,40 +1,20 @@
-# WebKit Patch Workspace
+# WebKit Patch Workspace (tombstone)
 
-Read this **and** [`../AGENTS.md`](../AGENTS.md) before modifying WebKit for
-Astrohacker Terminal.
+WebKit is **not** a shipped Astrohacker Terminal engine (Issue
+26072120115614). Chromium is the supported product browser engine.
 
-## Contract (MUST)
+Do **not** re-open a product pin, rebuild a live fork for shipping, or revive
+`ah-webkitd` packaging without a **new** issue.
 
-Obey the hub **Fork change contract** in full:
+## What remains
 
-- Every intentional source edit → tracked `format-patch` under
-  `patches/webkit/patches/issue-{ID}/` + monorepo pin update (this fork’s
-  `README.md` + `patches/release-manifest.json` when the series changes) +
-  record in the **current** issue experiment.
-- Branch **must** include issue id and `exp{N}` (see local pattern below).
-- Work is **incomplete** until the monorepo archive/pin is updated and
-  commit-ready (not merely committed inside ignored `forks/webkit/`).
-
-## Local details
-
-- Source: `forks/webkit/src`
-- Patches: `patches/webkit/patches/`
-- Branch pattern:
-
-  ```text
-  issue-{ISSUE_ID}-exp{N}-{short-slug}
-  ```
-
-- Archive style: follow this fork’s `README.md` (next ordered `NNNN` or
-  full regenerate when the README says the archive is cumulative-from-base).
-
-## Fork-specific hazards
-
-- Do not commit WebKit source or build outputs to the Astrohacker repo.
+- **Historical** patch archives under `patches/webkit/patches/` — immutable
+  records of past product series. Do not mass-delete `issue-*` folders.
+- Hub contract and release authority still apply if a future issue deliberately
+  reintroduces WebKit; until then, treat this tree as archive-only.
 
 ## Learn more
 
-- Reconstruction and current archives: [`README.md`](./README.md)
-- Hub fork-change contract: [`../AGENTS.md`](../AGENTS.md)
-- Shared patch policy: [`../README.md`](../README.md)
+- Current product state: [`README.md`](./README.md)
+- Hub: [`../AGENTS.md`](../AGENTS.md), [`../README.md`](../README.md)
 - Release series authority: [`../release-manifest.json`](../release-manifest.json)

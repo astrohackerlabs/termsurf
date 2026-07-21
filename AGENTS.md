@@ -18,12 +18,14 @@ Common build commands:
 
 ```bash
 ./scripts/build.sh chromium
-./scripts/build.sh webkit
-./scripts/build.sh webkit-lib
 ./scripts/build.sh ahweb
 ./scripts/build.sh ahterm
 ./scripts/build.sh all --release
 ```
+
+Shipped product engine is **Chromium** only. Optional historical WebKit/Gecko
+build targets may exist for reconstruction; they are not required for
+`all --release`.
 
 ## Engine Workspaces
 
@@ -33,10 +35,10 @@ dependency caches.
 
 Relevant public patch docs:
 
-- `patches/chromium/README.md`
-- `patches/webkit/README.md`
+- `patches/chromium/README.md` (shipped engine)
 - `patches/ghostty/README.md`
-- `patches/gecko/README.md`
+- `patches/webkit/README.md` (tombstone / historical archives only)
+- `patches/gecko/README.md` (not shipped)
 
 ## Project Layout
 

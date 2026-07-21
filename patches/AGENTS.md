@@ -75,7 +75,7 @@ add local paths and branch prefixes only.
 | `chromium/` | Engine; large cumulative archives |
 | `webkit/` | Engine |
 | `ghostty/` | Host terminal (`ahterm`) |
-| `gecko/` | Optional engine; not in Homebrew ship set |
+| `gecko/` | Historical archive only (never shipped; Issue 26072121272459) |
 | `nushell/` | Shell product fork |
 | `reedline/` | Tip pin only (no product patch unless source is edited) |
 
