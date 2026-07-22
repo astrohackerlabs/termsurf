@@ -1,6 +1,21 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072120115614 Exp 3)
+## Active Add-on (Issue 26072211054002 Exp 1)
+
+- Product branch: `issue-26072211054002-exp1-clip-surface-content`
+- Product HEAD: `527697e201a4ae186bfa6bd92049b3b05a375f79`
+- Product tree: `995896daa2ae649e9e1fd369981ef4c7dbff8d57`
+- Issue archive: `patches/ghostty/patches/issue-26072211054002/`
+- Patches: `0001` clip surface content to rounded pane/window corners
+  (single-pane window R; split concentric R−w; SwiftUI clipShape +
+  compositingGroup; AppKit masksToBounds on surface host).
+- Patch SHA-256:
+  - 0001: `59232de3f04b7b7fe998364204281898827f805d7bd8a735592c5938eda8e073`
+- Scope: stop terminal content painting outside rounded corners (overflow
+  hidden analogue). Browser-overlay residuals may remain (named Partial if
+  observed).
+
+## Prior Add-on (Issue 26072120115614 Exp 3)
 
 - Product branch: `issue-26072120115614-exp3-remove-webkit-resolve`
 - Product HEAD: `6af85acc6b4802c329a3b5aed41d9347483b088f`

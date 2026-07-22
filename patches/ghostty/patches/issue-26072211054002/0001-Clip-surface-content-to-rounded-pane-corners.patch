@@ -1,0 +1,231 @@
+From 527697e201a4ae186bfa6bd92049b3b05a375f79 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 06:12:36 -0500
+Subject: [PATCH] Clip surface content to rounded pane corners
+
+Single-pane content uses window radius; splits keep
+concentric R-w. SwiftUI clipShape + compositingGroup
+and AppKit masksToBounds on the surface host.
+---
+ .../Surface View/SurfaceContentClip.swift     | 31 +++++++++++
+ .../Surface View/SurfaceScrollView.swift      | 28 ++++++++++
+ .../Ghostty/Surface View/SurfaceView.swift    | 34 ++++++++----
+ .../Terminal/SurfaceContentClipTests.swift    | 53 +++++++++++++++++++
+ 4 files changed, 136 insertions(+), 10 deletions(-)
+ create mode 100644 macos/Sources/Ghostty/Surface View/SurfaceContentClip.swift
+ create mode 100644 macos/Tests/Terminal/SurfaceContentClipTests.swift
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceContentClip.swift b/macos/Sources/Ghostty/Surface View/SurfaceContentClip.swift
+new file mode 100644
+index 000000000..070d9f889
+--- /dev/null
++++ b/macos/Sources/Ghostty/Surface View/SurfaceContentClip.swift	
+@@ -0,0 +1,31 @@
++import CoreGraphics
++
++/// Content clip radius for terminal surface pixels (HTML `overflow: hidden`
++/// on a rounded box). Shared by SwiftUI chrome and AppKit layer clips.
++enum SurfaceContentClip {
++    /// Fallback when window `_cornerRadius` is unavailable (matches split border).
++    static let windowCornerRadiusFallback: CGFloat = 10
++
++    /// Radius used to clip surface content (not the outer border stroke alone).
++    ///
++    /// - Parameters:
++    ///   - isSplit: Multi-pane split surface.
++    ///   - effectiveRadius: Outer pane/window continuous radius (config auto/0/N).
++    ///   - borderWidth: Drawn split border width (0 for single-pane or no border).
++    /// - Returns: Clip radius for content. Split uses concentric `max(0, R - w)`;
++    ///   single-pane uses full window `R` so content cannot paint past the
++    ///   window curve. Zero `effectiveRadius` forces square (no clip rounding).
++    static func contentClipRadius(
++        isSplit: Bool,
++        effectiveRadius: CGFloat,
++        borderWidth: CGFloat
++    ) -> CGFloat {
++        if effectiveRadius <= 0 {
++            return 0
++        }
++        if isSplit {
++            return max(0, effectiveRadius - max(0, borderWidth))
++        }
++        return effectiveRadius
++    }
++}
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceScrollView.swift b/macos/Sources/Ghostty/Surface View/SurfaceScrollView.swift
+index c64fe920a..050c4a190 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceScrollView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceScrollView.swift	
+@@ -216,6 +216,34 @@ class SurfaceScrollView: NSView {
+ 
+     // MARK: Scrolling
+ 
++
++    /// Clip terminal pixels to a rounded rect (overflow: hidden). Radius 0 = square.
++    func applyContentCornerRadius(_ radius: CGFloat) {
++        let r = max(0, radius)
++        wantsLayer = true
++        layer?.masksToBounds = r > 0
++        layer?.cornerRadius = r
++        if #available(macOS 10.15, *) {
++            layer?.cornerCurve = .continuous
++        }
++
++        scrollView.wantsLayer = true
++        scrollView.layer?.masksToBounds = r > 0
++        scrollView.layer?.cornerRadius = r
++        if #available(macOS 10.15, *) {
++            scrollView.layer?.cornerCurve = .continuous
++        }
++
++        // Clip the metal surface itself; SwiftUI clipShape alone may not
++        // constrain Metal CALayers in all configurations.
++        surfaceView.wantsLayer = true
++        surfaceView.layer?.masksToBounds = r > 0
++        surfaceView.layer?.cornerRadius = r
++        if #available(macOS 10.15, *) {
++            surfaceView.layer?.cornerCurve = .continuous
++        }
++    }
++
+     private func synchronizeAppearance() {
+         let scrollbarConfig = surfaceView.derivedConfig.scrollbar
+         scrollView.hasVerticalScroller = scrollbarConfig != .never
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index d3bb0c828..25a683706 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -157,7 +157,14 @@ extension Ghostty {
+                     )
+                     let saturation = ghostty.config.unfocusedSplitSaturation
+ 
+-                    SurfaceRepresentable(view: surfaceView, size: insetSize)
++                    SurfaceRepresentable(
++                        view: surfaceView,
++                        size: insetSize,
++                        contentCornerRadius: SurfaceContentClip.contentClipRadius(
++                            isSplit: isSplit,
++                            effectiveRadius: effectiveSplitBorderCornerRadius,
++                            borderWidth: CGFloat(borderWidth))
++                    )
+                         .frame(width: insetSize.width, height: insetSize.height)
+                         .offset(x: borderInset, y: borderInset)
+                         .focused($surfaceFocus)
+@@ -193,13 +200,15 @@ extension Ghostty {
+                     }
+                 }
+                 .ghosttySurfaceView(surfaceView)
++                // Flatten Metal/AppKit content before clip so pixels respect
++                // the rounded hole (HTML overflow:hidden on a rounded box).
++                .compositingGroup()
+                 .clipShape(
+                     RoundedRectangle(
+-                        cornerRadius: isSplit
+-                            ? innerBorderRadius(
+-                                effectiveRadius: effectiveSplitBorderCornerRadius,
+-                                borderWidth: CGFloat(ghostty.config.splitBorderWidth))
+-                            : 0,
++                        cornerRadius: SurfaceContentClip.contentClipRadius(
++                            isSplit: isSplit,
++                            effectiveRadius: effectiveSplitBorderCornerRadius,
++                            borderWidth: CGFloat(ghostty.config.splitBorderWidth)),
+                         style: .continuous
+                     )
+                 )
+@@ -212,11 +221,10 @@ extension Ghostty {
+                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
+                     let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
+                     let borderInset = CGFloat(isSplit ? borderWidth : 0)
+-                    let progressInnerR = isSplit
+-                        ? innerBorderRadius(
++                    let progressInnerR = SurfaceContentClip.contentClipRadius(
++                            isSplit: isSplit,
+                             effectiveRadius: effectiveSplitBorderCornerRadius,
+                             borderWidth: borderWidth)
+-                        : 0
+                     GeometryReader { geo in
+                         let contentW = max(10, geo.size.width - borderInset * 2)
+                         let contentH = max(10, geo.size.height - borderInset * 2)
+@@ -784,13 +792,19 @@ extension Ghostty {
+         /// The best approach is to wrap this view in a GeometryReader and pass in the geo.size.
+         let size: CGSize
+ 
++        /// Content corner radius for AppKit layer clip (0 = square).
++        var contentCornerRadius: CGFloat = 0
++
+         #if canImport(AppKit)
+         func makeOSView(context: Context) -> SurfaceScrollView {
+             // On macOS, wrap the surface view in a scroll view
+-            return SurfaceScrollView(contentSize: size, surfaceView: view)
++            let scrollView = SurfaceScrollView(contentSize: size, surfaceView: view)
++            scrollView.applyContentCornerRadius(contentCornerRadius)
++            return scrollView
+         }
+ 
+         func updateOSView(_ scrollView: SurfaceScrollView, context: Context) {
++            scrollView.applyContentCornerRadius(contentCornerRadius)
+             // SwiftUI may defer frame updates under system load (e.g., memory
+             // pressure, heavy I/O) or when external window managers trigger rapid
+             // layout changes. When that happens, the scroll view's bounds can
+diff --git a/macos/Tests/Terminal/SurfaceContentClipTests.swift b/macos/Tests/Terminal/SurfaceContentClipTests.swift
+new file mode 100644
+index 000000000..dfe8f8e99
+--- /dev/null
++++ b/macos/Tests/Terminal/SurfaceContentClipTests.swift
+@@ -0,0 +1,53 @@
++import Testing
++@testable import Ghostty
++
++struct SurfaceContentClipTests {
++    @Test func splitConcentricInnerRadius() {
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: true,
++            effectiveRadius: 12,
++            borderWidth: 2)
++        #expect(r == 10)
++    }
++
++    @Test func splitRadiusZeroIsSquare() {
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: true,
++            effectiveRadius: 0,
++            borderWidth: 4)
++        #expect(r == 0)
++    }
++
++    @Test func splitBorderWiderThanRadiusClampsToZero() {
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: true,
++            effectiveRadius: 3,
++            borderWidth: 8)
++        #expect(r == 0)
++    }
++
++    @Test func singlePaneUsesFullWindowRadius() {
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: false,
++            effectiveRadius: 12,
++            borderWidth: 0)
++        #expect(r == 12)
++    }
++
++    @Test func singlePaneIgnoresBorderWidthForClip() {
++        // Single-pane does not draw split border chrome; content uses full R.
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: false,
++            effectiveRadius: 10,
++            borderWidth: 99)
++        #expect(r == 10)
++    }
++
++    @Test func singlePaneZeroRadiusIsSquare() {
++        let r = SurfaceContentClip.contentClipRadius(
++            isSplit: false,
++            effectiveRadius: 0,
++            borderWidth: 0)
++        #expect(r == 0)
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+

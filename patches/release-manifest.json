@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072120115614-exp3-remove-webkit-resolve",
-      "expected_head": "6af85acc6b4802c329a3b5aed41d9347483b088f",
-      "expected_tree": "7081a489578be12cb1d0918d7ff3b4b02aa3368b",
+      "branch": "issue-26072211054002-exp1-clip-surface-content",
+      "expected_head": "527697e201a4ae186bfa6bd92049b3b05a375f79",
+      "expected_tree": "995896daa2ae649e9e1fd369981ef4c7dbff8d57",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -24,10 +24,11 @@
         "patches/ghostty/patches/issue-26072112084519",
         "patches/ghostty/patches/issue-26072114283091",
         "patches/ghostty/patches/issue-26072117006454",
-        "patches/ghostty/patches/issue-26072120115614"
+        "patches/ghostty/patches/issue-26072120115614",
+        "patches/ghostty/patches/issue-26072211054002"
       ],
-      "patch_count": 42,
-      "archive_sha256": "662fc6141a550c70d034f87ebecbd1223ffa907697afa87da79e0f946882ee02",
+      "patch_count": 43,
+      "archive_sha256": "363005419bee20b459a0875329e4fa59343a0c0d1a32e376a102b0e1135ffc8b",
       "allowed_untracked": []
     },
     {
