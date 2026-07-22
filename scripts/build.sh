@@ -79,11 +79,16 @@ build_chromium_fork() {
     return
   fi
   export PATH="$COMPANY_DIR/forks/chromium/depot_tools:$PATH"
+  # Product GN args (incl. proprietary_codecs + Chrome ffmpeg) — Issue 26072212448824.
+  echo "==> Ensuring Chromium product args.gn..."
+  ASTROHACKER_CHROMIUM_OUT="$CHROMIUM_OUT" "$SCRIPT_DIR/ensure-chromium-args.sh"
   cd "$CHROMIUM_SRC"
   if $CLEAN; then
     echo "==> Cleaning Chromium..."
     gn clean out/Default
   fi
+  echo "==> gn gen out/Default (product args)..."
+  gn gen out/Default
   echo "==> Building Chromium..."
   autoninja -C out/Default libtermsurf_chromium
   echo "  Chromium: $CHROMIUM_OUT"
