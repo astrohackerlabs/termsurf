@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072211054002-exp1-clip-surface-content",
-      "expected_head": "527697e201a4ae186bfa6bd92049b3b05a375f79",
-      "expected_tree": "995896daa2ae649e9e1fd369981ef4c7dbff8d57",
+      "branch": "issue-26072211341927-exp1-product-xdg-termsurf",
+      "expected_head": "d21ef7b498bee9e7a854b1a24bbf6a7a2456da40",
+      "expected_tree": "b07eb9f91c457e025a2877ba7895bb85953779a7",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -25,10 +25,11 @@
         "patches/ghostty/patches/issue-26072114283091",
         "patches/ghostty/patches/issue-26072117006454",
         "patches/ghostty/patches/issue-26072120115614",
-        "patches/ghostty/patches/issue-26072211054002"
+        "patches/ghostty/patches/issue-26072211054002",
+        "patches/ghostty/patches/issue-26072211341927"
       ],
-      "patch_count": 43,
-      "archive_sha256": "363005419bee20b459a0875329e4fa59343a0c0d1a32e376a102b0e1135ffc8b",
+      "patch_count": 44,
+      "archive_sha256": "982e37855993c6a1ec595fcf0eb5262dbed6e74348d98d4858c69f7893ec1784",
       "allowed_untracked": []
     },
     {

@@ -3097,8 +3097,8 @@ EOF
 fi
 
 if [ "$SCENARIO" != "ghostboard-config-paths" ]; then
-  mkdir -p "$RELEASE_XDG_CONFIG_HOME/astrohacker/terminal"
-  cp "$CONFIG" "$RELEASE_XDG_CONFIG_HOME/astrohacker/terminal/config"
+  mkdir -p "$RELEASE_XDG_CONFIG_HOME/astrohacker/termsurf"
+  cp "$CONFIG" "$RELEASE_XDG_CONFIG_HOME/astrohacker/termsurf/config"
 fi
 
 if [ "$SCENARIO" = "ghostboard-config-paths" ]; then
@@ -3157,7 +3157,7 @@ EOF
     local case_xdg="$case_dir/xdg"
     local case_command="$case_dir/run-web.sh"
     local explicit_config="$case_dir/explicit-config"
-    local xdg_astrohacker_terminal_config="$case_xdg/astrohacker/terminal/config"
+    local xdg_astrohacker_termsurf_config="$case_xdg/astrohacker/termsurf/config"
     local xdg_ghostty_config="$case_xdg/ghostty/config.ghostty"
     local app_support_ghostty_config="$case_home/Library/Application Support/com.mitchellh.ghostty/config.ghostty"
     local app_support_termsurf_config_ghostty="$case_home/Library/Application Support/com.termsurf/config.ghostty"
@@ -3175,7 +3175,7 @@ EOF
 
     write_config_path_case_config "$explicit_config" "$case_command" "$sentinel_prefix-explicit"
     if [ "$mode" != "no-xdg" ]; then
-      write_config_path_case_config "$xdg_astrohacker_terminal_config" "$case_command" "$sentinel_prefix-xdg-astrohacker-terminal"
+      write_config_path_case_config "$xdg_astrohacker_termsurf_config" "$case_command" "$sentinel_prefix-xdg-astrohacker-terminal"
     fi
     write_config_path_case_config "$xdg_ghostty_config" "$case_command" "$sentinel_prefix-xdg-ghostty"
     write_config_path_case_config "$app_support_ghostty_config" "$case_command" "$sentinel_prefix-appsupport-ghostty"
@@ -3257,8 +3257,8 @@ EOF
   log "web=$WEB"
   log "chromium=$CHROMIUM"
   run_config_path_case "explicit-env" "explicit" "$RUN_DIR/config-paths-explicit-env/explicit-config" "https://example.net/issue819-exp5-explicit-env-explicit"
-  run_config_path_case "xdg-default" "default" "$RUN_DIR/config-paths-xdg-default/xdg/astrohacker/terminal/config" "https://example.net/issue819-exp5-xdg-default-xdg-astrohacker-terminal"
-  run_config_path_case "no-current-xdg" "no-xdg" "$RUN_DIR/config-paths-no-current-xdg/xdg/astrohacker/terminal/config" ""
+  run_config_path_case "xdg-default" "default" "$RUN_DIR/config-paths-xdg-default/xdg/astrohacker/termsurf/config" "https://example.net/issue819-exp5-xdg-default-xdg-astrohacker-terminal"
+  run_config_path_case "no-current-xdg" "no-xdg" "$RUN_DIR/config-paths-no-current-xdg/xdg/astrohacker/termsurf/config" ""
   log "PASS: scenario ghostboard-config-paths"
   exit 0
 fi

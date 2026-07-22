@@ -1,6 +1,22 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072211054002 Exp 1)
+## Active Add-on (Issue 26072211341927 Exp 1)
+
+- Product branch: `issue-26072211341927-exp1-product-xdg-termsurf`
+- Product HEAD: `d21ef7b498bee9e7a854b1a24bbf6a7a2456da40`
+- Product tree: `b07eb9f91c457e025a2877ba7895bb85953779a7`
+- Issue archive: `patches/ghostty/patches/issue-26072211341927/`
+- Patches: `0001` rename product XDG segment `astrohacker/terminal` →
+  `astrohacker/termsurf` (config, themes, browser data/state, crash,
+  sentry, SSH cache, UI/docs strings, tests).
+- Patch SHA-256:
+  - 0001: `1ecd100634234be568d54f57f132f72b6f21106b1dfb6e5e0ea11c13edaa8a57`
+- Aggregate series: 44 patches; archive SHA-256
+  `982e37855993c6a1ec595fcf0eb5262dbed6e74348d98d4858c69f7893ec1784`
+- Scope: TermSurf-owned XDG defaults use product id `termsurf`; no migration
+  from `terminal` path segment.
+
+## Prior Add-on (Issue 26072211054002 Exp 1)
 
 - Product branch: `issue-26072211054002-exp1-clip-surface-content`
 - Product HEAD: `527697e201a4ae186bfa6bd92049b3b05a375f79`
