@@ -1,0 +1,310 @@
+From 6f21c94658801c99c6018ec24f25084198ced1c5 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 08:52:17 -0500
+Subject: [PATCH] ahsh: Nu-first PATH union for alt-shell env merge
+
+Smart late merge: keep Nu scalars, PATH = Nu ++ zsh deduped.
+---
+ crates/nu-cli/src/alt_shell_env.rs | 216 +++++++++++++++++++++++++++++
+ crates/nu-cli/src/lib.rs           |   4 +
+ crates/nu-cli/src/repl.rs          |  25 +---
+ 3 files changed, 222 insertions(+), 23 deletions(-)
+ create mode 100644 crates/nu-cli/src/alt_shell_env.rs
+
+diff --git a/crates/nu-cli/src/alt_shell_env.rs b/crates/nu-cli/src/alt_shell_env.rs
+new file mode 100644
+index 000000000..f0a56291b
+--- /dev/null
++++ b/crates/nu-cli/src/alt_shell_env.rs
+@@ -0,0 +1,216 @@
++//! Merge policy for async alt-shell (zsh) bootstrap env into a live Nu stack.
++//!
++//! Issue 26072213251282 Exp 2:
++//! - Zsh provides baseline env
++//! - Nu config overrides scalars (do not overwrite keys Nu already set)
++//! - PATH = Nu entries prepended to zsh entries (dedupe, first wins)
++
++use std::collections::{HashMap, HashSet};
++use std::ffi::OsString;
++
++use nu_protocol::{
++    Span, Value,
++    engine::{EngineState, Stack},
++};
++
++/// Dedupe-preserving union: `nu` entries first, then `zsh` entries.
++pub fn union_path_nu_first(
++    nu_paths: impl IntoIterator<Item = String>,
++    zsh_paths: impl IntoIterator<Item = String>,
++) -> Vec<String> {
++    let mut out = Vec::new();
++    let mut seen = HashSet::new();
++    for p in nu_paths.into_iter().chain(zsh_paths) {
++        if p.is_empty() {
++            continue;
++        }
++        if seen.insert(p.clone()) {
++            out.push(p);
++        }
++    }
++    out
++}
++
++fn path_key() -> &'static str {
++    if cfg!(windows) { "Path" } else { "PATH" }
++}
++
++fn is_path_key(key: &str) -> bool {
++    key.eq_ignore_ascii_case("PATH")
++}
++
++fn split_path_string(s: &str) -> Vec<String> {
++    std::env::split_paths(s)
++        .map(|p| p.to_string_lossy().into_owned())
++        .filter(|p| !p.is_empty())
++        .collect()
++}
++
++fn join_path_list(paths: &[String]) -> String {
++    std::env::join_paths(paths.iter().map(OsString::from))
++        .map(|p| p.to_string_lossy().into_owned())
++        .unwrap_or_else(|_| paths.join(":"))
++}
++
++fn existing_has_key(existing: &HashMap<String, String>, key: &str) -> bool {
++    existing.keys().any(|k| k == key || (is_path_key(key) && is_path_key(k)))
++}
++
++/// Pure merge of zsh bootstrap env onto an existing Nu string-env snapshot.
++///
++/// - Non-PATH: only keys **missing** from `existing` are taken from `zsh`
++///   (Nu wins if already set).
++/// - PATH: `union_path_nu_first(existing_PATH, zsh_PATH)` always written under
++///   the platform path key when `zsh` provides PATH.
++///
++/// Returns only the keys that should be written onto the stack (not a full env).
++pub fn merge_alt_shell_bootstrap_env(
++    existing: &HashMap<String, String>,
++    zsh: &HashMap<String, String>,
++) -> HashMap<String, String> {
++    let mut out = HashMap::new();
++    let mut path_from_zsh: Option<String> = None;
++
++    for (key, zsh_val) in zsh {
++        if is_path_key(key) {
++            path_from_zsh = Some(zsh_val.clone());
++            continue;
++        }
++        if !existing_has_key(existing, key) {
++            out.insert(key.clone(), zsh_val.clone());
++        }
++    }
++
++    if let Some(zsh_path) = path_from_zsh {
++        let nu_path = existing
++            .iter()
++            .find(|(k, _)| is_path_key(k))
++            .map(|(_, v)| v.as_str())
++            .unwrap_or("");
++        let nu_list = split_path_string(nu_path);
++        let zsh_list = split_path_string(&zsh_path);
++        let merged = union_path_nu_first(nu_list, zsh_list);
++        out.insert(path_key().to_string(), join_path_list(&merged));
++    }
++
++    out
++}
++
++fn path_list_from_value(value: &Value) -> Vec<String> {
++    match value {
++        Value::List { vals, .. } => vals
++            .iter()
++            .filter_map(|v| v.as_str().ok().map(|s| s.to_string()))
++            .filter(|s| !s.is_empty())
++            .collect(),
++        Value::String { val, .. } => split_path_string(val),
++        _ => Vec::new(),
++    }
++}
++
++/// Apply zsh/async bootstrap env into the live Nu stack (Option B smart merge).
++pub fn apply_mode_dispatcher_env_merge(
++    engine_state: &EngineState,
++    stack: &mut Stack,
++    pending: HashMap<String, String>,
++) {
++    let span = Span::unknown();
++    let pk = path_key();
++
++    // Snapshot existing Nu env for keys we might touch (all pending keys + PATH).
++    let mut existing: HashMap<String, String> = HashMap::new();
++    if let Some(path_val) = stack
++        .get_env_var(engine_state, pk)
++        .or_else(|| stack.get_env_var(engine_state, "PATH"))
++        .or_else(|| stack.get_env_var(engine_state, "Path"))
++    {
++        let list = path_list_from_value(path_val);
++        existing.insert(pk.to_string(), join_path_list(&list));
++    }
++    for key in pending.keys() {
++        if is_path_key(key) {
++            continue;
++        }
++        if let Some(val) = stack.get_env_var(engine_state, key) {
++            if let Value::String { val, .. } = val {
++                existing.insert(key.clone(), val.clone());
++            } else if let Ok(s) = val.coerce_str() {
++                existing.insert(key.clone(), s.to_string());
++            }
++        }
++    }
++
++    let to_write = merge_alt_shell_bootstrap_env(&existing, &pending);
++    for (key, value) in to_write {
++        if is_path_key(&key) {
++            let paths: Vec<Value> = split_path_string(&value)
++                .into_iter()
++                .map(|p| Value::string(p, span))
++                .collect();
++            stack.add_env_var(pk.to_string(), Value::list(paths, span));
++        } else {
++            stack.add_env_var(key, Value::string(value, span));
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn path_union_nu_first_order() {
++        let got = union_path_nu_first(
++            vec!["n1".into(), "n2".into()],
++            vec!["a".into(), "b".into()],
++        );
++        assert_eq!(got, vec!["n1", "n2", "a", "b"]);
++    }
++
++    #[test]
++    fn path_union_dedupes_keeping_nu_first() {
++        let got = union_path_nu_first(
++            vec!["/nu/bin".into()],
++            vec!["/nu/bin".into(), "/zsh/bin".into()],
++        );
++        assert_eq!(got, vec!["/nu/bin", "/zsh/bin"]);
++    }
++
++    #[test]
++    fn scalar_nu_wins_zsh_fills_missing() {
++        let mut existing = HashMap::new();
++        existing.insert("FOO".into(), "nu".into());
++        existing.insert("PATH".into(), "/nu/bin".into());
++        let mut zsh = HashMap::new();
++        zsh.insert("FOO".into(), "zsh".into());
++        zsh.insert("BAR".into(), "zsh".into());
++        zsh.insert("PATH".into(), "/zsh/bin".into());
++        let out = merge_alt_shell_bootstrap_env(&existing, &zsh);
++        assert!(!out.contains_key("FOO"), "must not overwrite Nu FOO");
++        assert_eq!(out.get("BAR").map(String::as_str), Some("zsh"));
++        let path = out.get(path_key()).expect("PATH written");
++        let parts: Vec<&str> = std::env::split_paths(path)
++            .map(|p| p.to_string_lossy().into_owned())
++            .collect::<Vec<_>>()
++            .iter()
++            .map(|s| s.as_str())
++            .collect();
++        // Allow platform path form; order Nu then zsh
++        assert!(
++            parts.iter().position(|p| p.ends_with("nu/bin") || *p == "/nu/bin")
++                < parts.iter().position(|p| p.ends_with("zsh/bin") || *p == "/zsh/bin"),
++            "nu before zsh in {parts:?}"
++        );
++    }
++
++    #[test]
++    fn path_only_zsh_when_nu_empty() {
++        let existing = HashMap::new();
++        let mut zsh = HashMap::new();
++        zsh.insert("PATH".into(), "/zsh/a:/zsh/b".into());
++        let out = merge_alt_shell_bootstrap_env(&existing, &zsh);
++        let path = out.get(path_key()).unwrap();
++        let parts = split_path_string(path);
++        assert_eq!(parts, vec!["/zsh/a", "/zsh/b"]);
++    }
++}
+diff --git a/crates/nu-cli/src/lib.rs b/crates/nu-cli/src/lib.rs
+index 8cd237a8d..0103014d5 100644
+--- a/crates/nu-cli/src/lib.rs
++++ b/crates/nu-cli/src/lib.rs
+@@ -9,6 +9,7 @@ mod eval_cmds;
+ mod eval_file;
+ mod hints;
+ mod menus;
++mod alt_shell_env;
+ mod mode_dispatcher;
+ mod prompt;
+ mod prompt_update;
+@@ -25,6 +26,9 @@ pub use config_files::eval_config_contents;
+ pub use eval_cmds::{EvaluateCommandsOpts, evaluate_commands};
+ pub use eval_file::evaluate_file;
+ pub use menus::NuHelpCompleter;
++pub use alt_shell_env::{
++    apply_mode_dispatcher_env_merge, merge_alt_shell_bootstrap_env, union_path_nu_first,
++};
+ pub use mode_dispatcher::{ModeDispatcher, ModeResult};
+ pub use commands::{NuHighlight, Print};
+ pub use prompt::NushellPrompt;
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 75df1da91..21d208b17 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -442,7 +442,7 @@ fn run_command(ctx: RunContext) -> Reedline {
+     if let Some(ref dispatcher) = mode_dispatcher {
+         if let Ok(mut guard) = dispatcher.lock() {
+             if let Some(pending) = guard.take_pending_env_merge_blocking() {
+-                apply_mode_dispatcher_env_merge(stack, pending);
++                crate::apply_mode_dispatcher_env_merge(engine_state, stack, pending);
+             }
+         }
+     }
+@@ -590,7 +590,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+     if let Some(ref dispatcher) = mode_dispatcher {
+         if let Ok(mut guard) = dispatcher.lock() {
+             if let Some(pending) = guard.take_pending_env_merge() {
+-                apply_mode_dispatcher_env_merge(&mut stack, pending);
++                crate::apply_mode_dispatcher_env_merge(engine_state, &mut stack, pending);
+             }
+         }
+     }
+@@ -1354,27 +1354,6 @@ fn flush_engine_state_repl_buffer(
+     line_editor
+ }
+ 
+-/// Apply one-shot alt-shell bootstrap env into the Nu stack.
+-/// PATH/Path strings are split into lists (Nu external-command convention).
+-fn apply_mode_dispatcher_env_merge(stack: &mut Stack, pending: HashMap<String, String>) {
+-    let span = Span::unknown();
+-    for (key, value) in pending {
+-        if key.eq_ignore_ascii_case("PATH") {
+-            let paths: Vec<Value> = std::env::split_paths(&value)
+-                .map(|p| Value::string(p.to_string_lossy(), span))
+-                .collect();
+-            let path_key = if cfg!(windows) {
+-                "Path".to_string()
+-            } else {
+-                "PATH".to_string()
+-            };
+-            stack.add_env_var(path_key, Value::list(paths, span));
+-        } else {
+-            stack.add_env_var(key, Value::string(value, span));
+-        }
+-    }
+-}
+-
+ fn switch_shannon_mode(engine_state: &EngineState, stack: &mut Stack) {
+     let current = stack
+         .get_env_var(engine_state, "SHANNON_MODE")
+-- 
+2.50.1 (Apple Git-155)
+

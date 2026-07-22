@@ -16,15 +16,22 @@ type BootstrapResult = Result<(ZshProcess, HashMap<String, String>), String>;
 /// Interactive mode dispatcher with **lazy** background zsh bootstrap.
 ///
 /// Construction starts zsh login + `.zshrc` on a background thread and returns
-/// immediately so the first Nu prompt is not blocked. Env is available for a
-/// one-shot Nu stack merge via [`ModeDispatcher::take_pending_env_merge`]. First
-/// zsh-mode [`ModeDispatcher::execute`] waits for readiness if needed.
+/// immediately so the first Nu prompt is not blocked. Bootstrap env is a
+/// one-shot merge into Nu:
+/// - non-blocking poll at REPL loop head
+/// - **blocking** poll immediately before Nu command execution if not yet applied
+///
+/// First zsh-mode [`ModeDispatcher::execute`] waits for readiness if needed but
+/// never discards an unapplied Nu env merge.
 pub struct ShannonDispatcher {
     rx: Option<Receiver<BootstrapResult>>,
     zsh: Option<ZshProcess>,
     /// Captured bootstrap env not yet yielded to Nu (one-shot).
     pending_merge: Option<HashMap<String, String>>,
+    /// True after Nu has been offered bootstrap env once (success or hard fail).
+    nu_env_applied: bool,
     error: Option<String>,
+    error_reported: bool,
 }
 
 impl ShannonDispatcher {
@@ -42,7 +49,9 @@ impl ShannonDispatcher {
             rx: Some(rx),
             zsh: None,
             pending_merge: None,
+            nu_env_applied: false,
             error: None,
+            error_reported: false,
         }
     }
 
@@ -94,6 +103,27 @@ impl ShannonDispatcher {
         }
     }
 
+    /// Yield bootstrap env to Nu at most once.
+    fn yield_pending_for_nu(&mut self) -> Option<HashMap<String, String>> {
+        if self.nu_env_applied {
+            return None;
+        }
+        if let Some(err) = &self.error {
+            if !self.error_reported {
+                eprintln!("ahsh: zsh env unavailable: {err}");
+                self.error_reported = true;
+            }
+            // Do not block forever on later takes; continue with parent env.
+            self.nu_env_applied = true;
+            return None;
+        }
+        if let Some(env) = self.pending_merge.take() {
+            self.nu_env_applied = true;
+            return Some(env);
+        }
+        None
+    }
+
     /// For tests: spin until ready or timeout.
     #[cfg(test)]
     pub fn wait_ready_for_test(&mut self, timeout: Duration) -> Result<(), String> {
@@ -107,7 +137,6 @@ impl ShannonDispatcher {
                 return Err(e.clone());
             }
             if std::time::Instant::now() >= deadline {
-                // Fall back to blocking ensure (bootstrap should be near done).
                 self.ensure_ready();
                 if self.zsh.is_some() {
                     return Ok(());
@@ -119,6 +148,16 @@ impl ShannonDispatcher {
             }
             thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[cfg(test)]
+    pub fn nu_env_applied_for_test(&self) -> bool {
+        self.nu_env_applied
+    }
+
+    #[cfg(test)]
+    pub fn has_pending_merge_for_test(&self) -> bool {
+        self.pending_merge.is_some()
     }
 }
 
@@ -160,9 +199,8 @@ impl ModeDispatcher for ShannonDispatcher {
                         exit_code: 1,
                     };
                 };
-                // If Nu never polled pending merge, drop it so execute path owns env.
-                // execute still injects the live Nu env for this command.
-                let _ = self.pending_merge.take();
+                // Do not discard unapplied Nu env merge — leave pending_merge for
+                // Nu take / pre-command barrier (Issue 26072213251282).
                 zsh.inject_state(&state);
                 let result = zsh.execute(command);
                 ModeResult {
@@ -181,7 +219,15 @@ impl ModeDispatcher for ShannonDispatcher {
 
     fn take_pending_env_merge(&mut self) -> Option<HashMap<String, String>> {
         self.try_finish_bootstrap();
-        self.pending_merge.take()
+        self.yield_pending_for_nu()
+    }
+
+    fn take_pending_env_merge_blocking(&mut self) -> Option<HashMap<String, String>> {
+        if self.nu_env_applied {
+            return None;
+        }
+        self.ensure_ready();
+        self.yield_pending_for_nu()
     }
 }
 
@@ -192,7 +238,6 @@ mod tests {
 
     #[test]
     fn lazy_new_returns_before_blocking_on_zsh() {
-        // Construction must not wait for zsh - just spawn the thread.
         let t0 = std::time::Instant::now();
         let mut d = ShannonDispatcher::new();
         let construct_ms = t0.elapsed().as_millis();
@@ -200,7 +245,6 @@ mod tests {
             construct_ms < 200,
             "ShannonDispatcher::new must not wait on zsh bootstrap, took {construct_ms}ms"
         );
-        // Still becomes ready.
         d.wait_ready_for_test(Duration::from_secs(30)).unwrap();
         assert!(d.zsh.is_some());
     }
@@ -215,14 +259,26 @@ mod tests {
             first.as_ref().unwrap().contains_key("PATH"),
             "bootstrap env should include PATH"
         );
+        assert!(d.nu_env_applied_for_test());
         let second = d.take_pending_env_merge();
         assert!(second.is_none(), "second take must be None (one-shot)");
+        assert!(d.take_pending_env_merge_blocking().is_none());
+    }
+
+    #[test]
+    fn blocking_take_waits_and_yields_path() {
+        let mut d = ShannonDispatcher::new();
+        // Do not wait_ready first — blocking take must join.
+        let env = d.take_pending_env_merge_blocking();
+        assert!(env.is_some(), "blocking take must yield after bootstrap");
+        assert!(env.unwrap().contains_key("PATH"));
+        assert!(d.nu_env_applied_for_test());
+        assert!(d.take_pending_env_merge_blocking().is_none());
     }
 
     #[test]
     fn first_zsh_execute_waits_for_ready() {
         let mut d = ShannonDispatcher::new();
-        // Do not call wait_ready first — execute must join.
         let result = d.execute(
             "zsh",
             "echo AHSH_LAZY_EXECUTE_OK",
@@ -231,5 +287,32 @@ mod tests {
         );
         assert_eq!(result.exit_code, 0);
         assert!(d.zsh.is_some());
+    }
+
+    #[test]
+    fn zsh_execute_before_nu_take_does_not_discard_pending() {
+        let mut d = ShannonDispatcher::new();
+        d.wait_ready_for_test(Duration::from_secs(30)).unwrap();
+        assert!(
+            d.has_pending_merge_for_test(),
+            "ready bootstrap should leave pending merge for Nu"
+        );
+        let result = d.execute(
+            "zsh",
+            "true",
+            HashMap::new(),
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
+        );
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            !d.nu_env_applied_for_test(),
+            "zsh execute must not mark Nu env applied"
+        );
+        let pending = d.take_pending_env_merge();
+        assert!(
+            pending.is_some(),
+            "pending Nu merge must survive zsh execute before Nu take"
+        );
+        assert!(pending.unwrap().contains_key("PATH"));
     }
 }

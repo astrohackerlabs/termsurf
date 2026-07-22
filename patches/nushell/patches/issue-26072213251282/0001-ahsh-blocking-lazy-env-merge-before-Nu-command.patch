@@ -1,0 +1,103 @@
+From 8f4f67aa9bcbedb807e25b32a33c27eed9f47743 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 08:32:00 -0500
+Subject: [PATCH] ahsh: blocking lazy env merge before Nu command
+
+Add take_pending_env_merge_blocking and apply PATH list fixup so
+async zsh bootstrap env is guaranteed before first command run.
+---
+ crates/nu-cli/src/mode_dispatcher.rs | 10 +++++++
+ crates/nu-cli/src/repl.rs            | 39 ++++++++++++++++++++++++----
+ 2 files changed, 44 insertions(+), 5 deletions(-)
+
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+index 5ee7cdc03..e4a5bedfb 100644
+--- a/crates/nu-cli/src/mode_dispatcher.rs
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -35,6 +35,16 @@ pub trait ModeDispatcher: Send {
+     fn take_pending_env_merge(&mut self) -> Option<HashMap<String, String>> {
+         None
+     }
++
++    /// Like [`take_pending_env_merge`], but may block until async bootstrap
++    /// finishes if the host has not yet applied env to Nu.
++    ///
++    /// Used immediately before command execution so Nu externals see login PATH
++    /// even when bootstrap completed while the user sat at the prompt.
++    /// Default: same as non-blocking take (no wait).
++    fn take_pending_env_merge_blocking(&mut self) -> Option<HashMap<String, String>> {
++        self.take_pending_env_merge()
++    }
+ }
+ 
+ /// Result of a mode dispatch execution.
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index b4fad5ad3..75df1da91 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -436,6 +436,17 @@ fn run_command(ctx: RunContext) -> Reedline {
+     // Actual command execution logic starts from here
+     let cmd_execution_start_time = Instant::now();
+ 
++    // Hybrid env barrier (Issue 26072213251282): if lazy alt-shell bootstrap
++    // has not yet merged into Nu, wait once before running this command so
++    // PATH/tools from login/.zshrc are visible on the first Nu command.
++    if let Some(ref dispatcher) = mode_dispatcher {
++        if let Ok(mut guard) = dispatcher.lock() {
++            if let Some(pending) = guard.take_pending_env_merge_blocking() {
++                apply_mode_dispatcher_env_merge(stack, pending);
++            }
++        }
++    }
++
+     let mut shannon_handled = false;
+     if let Some(ref dispatcher) = mode_dispatcher {
+         let mode = stack
+@@ -575,14 +586,11 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+     }
+     perf!("merge env", start_time, use_color);
+ 
+-    // Lazy alt-shell bootstrap: apply one-shot pending env without blocking.
+-    // Hosts that do not implement take_pending_env_merge are unchanged.
++    // Lazy alt-shell bootstrap: non-blocking one-shot env (if already ready).
+     if let Some(ref dispatcher) = mode_dispatcher {
+         if let Ok(mut guard) = dispatcher.lock() {
+             if let Some(pending) = guard.take_pending_env_merge() {
+-                for (key, value) in pending {
+-                    stack.add_env_var(key, Value::string(value, Span::unknown()));
+-                }
++                apply_mode_dispatcher_env_merge(&mut stack, pending);
+             }
+         }
+     }
+@@ -1346,6 +1354,27 @@ fn flush_engine_state_repl_buffer(
+     line_editor
+ }
+ 
++/// Apply one-shot alt-shell bootstrap env into the Nu stack.
++/// PATH/Path strings are split into lists (Nu external-command convention).
++fn apply_mode_dispatcher_env_merge(stack: &mut Stack, pending: HashMap<String, String>) {
++    let span = Span::unknown();
++    for (key, value) in pending {
++        if key.eq_ignore_ascii_case("PATH") {
++            let paths: Vec<Value> = std::env::split_paths(&value)
++                .map(|p| Value::string(p.to_string_lossy(), span))
++                .collect();
++            let path_key = if cfg!(windows) {
++                "Path".to_string()
++            } else {
++                "PATH".to_string()
++            };
++            stack.add_env_var(path_key, Value::list(paths, span));
++        } else {
++            stack.add_env_var(key, Value::string(value, span));
++        }
++    }
++}
++
+ fn switch_shannon_mode(engine_state: &EngineState, stack: &mut Stack) {
+     let current = stack
+         .get_env_var(engine_state, "SHANNON_MODE")
+-- 
+2.50.1 (Apple Git-155)
+
