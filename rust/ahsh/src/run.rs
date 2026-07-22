@@ -5,12 +5,11 @@ use crate::{
 use log::trace;
 #[cfg(feature = "plugin")]
 use nu_cli::read_plugin_file;
-use nu_cli::{EvaluateCommandsOpts, evaluate_commands, evaluate_file, evaluate_repl};
+use nu_cli::{evaluate_commands, evaluate_file, evaluate_repl, EvaluateCommandsOpts};
 use nu_config::ConfigFileKind;
 use nu_protocol::{
-    PipelineData, ShellError, Spanned,
     engine::{EngineState, Stack},
-    report_shell_error,
+    report_shell_error, PipelineData, ShellError, Spanned,
 };
 use nu_utils::perf;
 use nu_utils::time::Instant;
@@ -258,9 +257,7 @@ pub(crate) fn run_repl(
                     "{green}{bold}Startup Time:{reset}{fg} {:?}{reset}",
                     entire_start_time.elapsed()
                 );
-                eprintln!(
-                    "{green}{bold}Shift+Tab:{reset}{fg} Nushell ↔ zsh{reset}"
-                );
+                eprintln!("{green}{bold}Shift+Tab:{reset}{fg} Nushell ↔ zsh{reset}");
                 eprintln!();
             }
             BannerKind::Full => {
@@ -271,13 +268,13 @@ pub(crate) fn run_repl(
                 let reset = "\x1b[0m";
                 let fg = "\x1b[37m";
                 eprintln!(
-                    "{fg}Welcome to {green}{bold}Astrohacker Shell{reset}{fg}, based on the {green}Nu{reset}{fg} language, where all data is structured!{reset}"
+                    "{fg}Welcome to {green}{bold}Astrohacker Shell{reset}{fg}, based on the {green}nu{reset}{fg} language with {green}zsh{reset}{fg} mode{reset}"
                 );
                 eprintln!(
                     "{fg}Version: {green}{version}{fg} (nushell {green}{nu_version}{fg}){reset}"
                 );
                 eprintln!(
-                    "{fg}Press {green}{bold}Shift+Tab{reset}{fg} to toggle between Nushell and zsh.{reset}"
+                    "{fg}Press {green}{bold}Shift+Tab{reset}{fg} to toggle between nu and zsh.{reset}"
                 );
                 eprintln!(
                     "{green}{bold}Startup Time:{reset}{fg} {:?}{reset}",
