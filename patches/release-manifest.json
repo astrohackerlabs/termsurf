@@ -36,14 +36,15 @@
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "72b01f3e11a02c1a0abd6284cf97f6f37d96677f",
-      "branch": "issue-26071814115751-nushell",
-      "expected_head": "7c2654d3fe952e3b2b5a47686a5ae95174f0a2e1",
-      "expected_tree": "b90d455983a99948c2b442f19f96cc1f74bcf0f2",
+      "branch": "issue-26072212103788-exp1-lazy-zsh-startup",
+      "expected_head": "81696a9224d4c958b7798782b267e8325ac8e6cf",
+      "expected_tree": "3dd6e20580a70a258f820300e73dc8805c24fea6",
       "patch_directories": [
-        "patches/nushell/patches/issue-26071814115751"
+        "patches/nushell/patches/issue-26071814115751",
+        "patches/nushell/patches/issue-26072212103788"
       ],
-      "patch_count": 4,
-      "archive_sha256": "922c4dd881dfd7b42b2f5ed3b893d6414db0d2143207081c0d3ac5cdcb19001e",
+      "patch_count": 5,
+      "archive_sha256": "f030a7d2a66e9b64dc3048fc884b0014fc6b6b28b42c7d4654fb4d8fec84f4ba",
       "allowed_untracked": []
     },
     {

@@ -189,18 +189,10 @@ pub(crate) fn run_repl(
     trace!("run_repl");
     let start_time = nu_utils::time::Instant::now();
 
-    // Create the dispatcher early — the persistent zsh subprocess initializes
-    // via login (`zsh -l`) plus an explicit `.zshrc` source. Capture the
-    // resulting env vars to inject into nushell's stack before config loading.
-    let mut dispatcher = ahsh::dispatcher::ShannonDispatcher::new();
-    if parsed_nu_cli_args.no_config_file.is_none() {
-        for (key, value) in dispatcher.env_vars() {
-            stack.add_env_var(
-                key,
-                nu_protocol::Value::string(value, nu_protocol::Span::unknown()),
-            );
-        }
-    }
+    // Start zsh bootstrap in the background immediately; do not join before
+    // config, banner, or first prompt. Live Nu env merge happens later via
+    // ModeDispatcher::take_pending_env_merge each REPL iteration.
+    let dispatcher = ahsh::dispatcher::ShannonDispatcher::new();
 
     if parsed_nu_cli_args.no_config_file.is_none() {
         setup_config(

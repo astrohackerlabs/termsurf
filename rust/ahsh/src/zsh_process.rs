@@ -9,6 +9,24 @@ use crate::shell_engine::ShellEngine;
 const SENTINEL_START: &str = "==SHANNON_SENTINEL_START==";
 const SENTINEL_END: &str = "==SHANNON_SENTINEL_END==";
 
+/// Single bootstrap block: source interactive rc, clear prompt noise, trap INT.
+/// Ends with `true` so one sentinel + `printenv` captures the ready env.
+const BOOTSTRAP_COMMAND: &str = r#"
+export DISABLE_AUTO_TITLE=true
+export ZSH_DISABLE_COMPFIX=true
+if [[ -f ${ZDOTDIR:-$HOME}/.zshrc ]]; then
+  source ${ZDOTDIR:-$HOME}/.zshrc </dev/null >/dev/null 2>&1
+fi
+precmd_functions=()
+preexec_functions=()
+chpwd_functions=()
+PROMPT=
+RPROMPT=
+PS1=
+trap 'true' INT
+true
+"#;
+
 /// Persistent traditional-shell worker backed by zsh.
 ///
 /// Spawn strategy: login shell (`zsh -l`) so `.zshenv` / `.zprofile` / `.zlogin`
@@ -18,26 +36,49 @@ const SENTINEL_END: &str = "==SHANNON_SENTINEL_END==";
 /// Interactive login (`zsh -il`) is avoided: piped stdin still emits prompts and
 /// OSC sequences that corrupt the sentinel protocol. After sourcing `.zshrc`,
 /// prompt/preexec hooks that write terminal titles are cleared for the same reason.
+///
+/// Ready-state bootstrap uses **one** sentinel env dump (rc + trap + printenv).
 pub struct ZshProcess {
     _child: Child,
     stdin: ChildStdin,
     stdout_reader: BufReader<ChildStdout>,
     pending_state: Option<ShellState>,
+    /// Env captured from the single ready-state bootstrap dump.
+    bootstrap_env: HashMap<String, String>,
+    /// Number of sentinel env dumps performed (bootstrap + later commands).
+    env_dump_count: u32,
+    /// Env dumps performed during `new` / `try_new` only (must be 1).
+    bootstrap_env_dump_count: u32,
 }
 
 impl ZshProcess {
+    /// Spawn and bootstrap zsh. Panics on spawn failure (tests / legacy).
     pub fn new() -> Self {
+        Self::try_new().expect("failed to spawn or bootstrap zsh process")
+    }
+
+    /// Spawn login zsh and run the single ready-state bootstrap.
+    pub fn try_new() -> Result<Self, String> {
         let mut child = Command::new("zsh")
             .args(["-l"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("failed to spawn zsh process");
+            .map_err(|e| format!("failed to spawn zsh: {e}"))?;
 
-        let stdin = child.stdin.take().expect("failed to take zsh stdin");
-        let stdout = child.stdout.take().expect("failed to take zsh stdout");
-        let stderr = child.stderr.take().expect("failed to take zsh stderr");
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to take zsh stdin".to_string())?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to take zsh stdout".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "failed to take zsh stderr".to_string())?;
 
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
@@ -56,33 +97,27 @@ impl ZshProcess {
             stdin,
             stdout_reader: BufReader::new(stdout),
             pending_state: None,
+            bootstrap_env: HashMap::new(),
+            env_dump_count: 0,
+            bootstrap_env_dump_count: 0,
         };
 
-        // Load interactive-class config. Guard against common hang/noise sources:
-        // - stdin redirected so rc cannot consume the command pipe
-        // - DISABLE_AUTO_TITLE / clear precmd/preexec so OSC titles do not
-        //   prefix every subsequent stdout line (breaks sentinel matching)
-        // - ZSH_DISABLE_COMPFIX avoids interactive fixup prompts
-        zp.run_command(
-            r#"
-export DISABLE_AUTO_TITLE=true
-export ZSH_DISABLE_COMPFIX=true
-if [[ -f ${ZDOTDIR:-$HOME}/.zshrc ]]; then
-  source ${ZDOTDIR:-$HOME}/.zshrc </dev/null >/dev/null 2>&1
-fi
-precmd_functions=()
-preexec_functions=()
-chpwd_functions=()
-PROMPT=
-RPROMPT=
-PS1=
-"#,
-        );
+        // One blocking command: source rc, clear hooks, trap INT, dump env.
+        let boot = zp.run_command(BOOTSTRAP_COMMAND);
+        zp.bootstrap_env = boot.env;
+        zp.bootstrap_env_dump_count = zp.env_dump_count;
 
-        // Trap SIGINT so zsh doesn't die when the user presses Ctrl+C.
-        zp.run_command("trap 'true' INT");
+        Ok(zp)
+    }
 
-        zp
+    /// Env captured at ready state (single bootstrap dump).
+    pub fn bootstrap_env(&self) -> &HashMap<String, String> {
+        &self.bootstrap_env
+    }
+
+    /// How many env dumps ran during construction (contract: 1).
+    pub fn bootstrap_env_dump_count(&self) -> u32 {
+        self.bootstrap_env_dump_count
     }
 
     /// Capture all exported env vars by running a no-op command.
@@ -168,6 +203,8 @@ PS1=
                 }
             }
         }
+
+        self.env_dump_count = self.env_dump_count.saturating_add(1);
 
         let (env, cwd) = executor::parse_printenv_env(&sentinel_buf)
             .unwrap_or_else(|| (HashMap::new(), std::path::PathBuf::from("/")));
@@ -271,6 +308,20 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_uses_single_env_dump() {
+        let zp = ZshProcess::new();
+        assert_eq!(
+            zp.bootstrap_env_dump_count(),
+            1,
+            "ready-state bootstrap must use exactly one sentinel env dump"
+        );
+        assert!(
+            !zp.bootstrap_env().is_empty(),
+            "bootstrap env should be captured from that dump"
+        );
+    }
+
+    #[test]
     fn test_zsh_process_echo() {
         let mut zp = ZshProcess::new();
         let state = zp.run_command("echo hello");
@@ -338,8 +389,8 @@ mod tests {
 
     #[test]
     fn test_zsh_bootstrap_has_home_and_path() {
-        let mut zp = ZshProcess::new();
-        let env = zp.capture_env();
+        let zp = ZshProcess::new();
+        let env = zp.bootstrap_env();
         assert!(
             env.get("HOME").map(|h| !h.is_empty()).unwrap_or(false),
             "expected HOME from zsh login env"
@@ -354,14 +405,55 @@ mod tests {
     /// that includes brew when .zprofile runs brew shellenv.
     #[test]
     fn test_zsh_bootstrap_includes_login_path_entries() {
-        let mut zp = ZshProcess::new();
-        let env = zp.capture_env();
-        let path = env.get("PATH").cloned().unwrap_or_default();
+        let zp = ZshProcess::new();
+        let path = zp.bootstrap_env().get("PATH").cloned().unwrap_or_default();
         // On this product platform macOS, brew shellenv in .zprofile is common;
         // always require a non-empty multi-component PATH as a weaker bound.
         assert!(
             path.contains(':') && path.len() > 8,
             "expected multi-entry PATH from zsh login config, got {path:?}"
         );
+    }
+
+    #[test]
+    fn test_zsh_bootstrap_isolated_zshrc_marker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let home = dir.path();
+        std::fs::write(
+            home.join(".zshrc"),
+            "export AHSH_BOOTSTRAP_MARKER=from-isolated-zshrc\n",
+        )
+        .unwrap();
+        // Empty .zprofile so login is cheap and does not re-source rc oddly.
+        std::fs::write(home.join(".zprofile"), "").unwrap();
+
+        let prev_home = std::env::var_os("HOME");
+        let prev_zdot = std::env::var_os("ZDOTDIR");
+        // SAFETY: test-only env mutation for isolated zsh login; restored below.
+        unsafe {
+            std::env::set_var("HOME", home);
+            std::env::set_var("ZDOTDIR", home);
+        }
+        let zp = ZshProcess::new();
+        let marker = zp
+            .bootstrap_env()
+            .get("AHSH_BOOTSTRAP_MARKER")
+            .cloned();
+        unsafe {
+            match prev_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            match prev_zdot {
+                Some(v) => std::env::set_var("ZDOTDIR", v),
+                None => std::env::remove_var("ZDOTDIR"),
+            }
+        }
+        assert_eq!(
+            marker.as_deref(),
+            Some("from-isolated-zshrc"),
+            "bootstrap env must include vars from sourced .zshrc"
+        );
+        assert_eq!(zp.bootstrap_env_dump_count(), 1);
     }
 }
