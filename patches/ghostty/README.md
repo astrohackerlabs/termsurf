@@ -1,6 +1,21 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072211341927 Exp 1)
+## Active Add-on (Issue 26072209562907 Exp 1)
+
+- Product branch: `issue-26072209562907-exp1-hard-refresh`
+- Product HEAD: `f925d3bdde80911ebd4ab5ea3987105ca99cb816`
+- Product tree: `16fdbdc51c87fc18759cdf7404e0910cf9cac845`
+- Issue archive: `patches/ghostty/patches/issue-26072209562907/`
+- Patches: `0001` hard refresh Browse AppKit keys + NavigationAction allow-list
+  (`refresh_ignore_cache`): Shift+R / Cmd+Shift+R before bulk-forward;
+  soft Cmd+R unchanged; shared request_id for hard; classifier unit tests.
+- Patch SHA-256:
+  - 0001: `62519a9acb5627487de96265ed50faed030ee0f8d73ebb0b2bf0961bea705b1d`
+- Aggregate series: 45 patches; archive SHA-256
+  `a08e2b62ed06e6459a895cde6d99e3b5ef33a637c13a3ac2a6a43c33003f4191`
+- Scope: hard refresh contract on host compositor path; soft path unchanged.
+
+## Prior Add-on (Issue 26072211341927 Exp 1)
 
 - Product branch: `issue-26072211341927-exp1-product-xdg-termsurf`
 - Product HEAD: `d21ef7b498bee9e7a854b1a24bbf6a7a2456da40`

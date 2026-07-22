@@ -1,0 +1,39 @@
+From c12eb5f541f2cb639417eb2c58bcaed74a039833 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 14:11:11 -0500
+Subject: [PATCH] Add refresh_ignore_cache NavigationAction (BYPASSING_CACHE)
+
+Issue 26072209562907 Exp 1: hard refresh maps to ReloadType::BYPASSING_CACHE
+with durable LOG oracle reload_type=bypassing_cache.
+---
+ .../libtermsurf_chromium/ts_browser_main_parts.cc   | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index b85832c49f..f4fac52440 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -1338,7 +1338,20 @@ bool TsBrowserMainParts::NavigationAction(void* wc_handle,
+     if (!tab->tab_observer->has_committed_document()) {
+       return false;
+     }
++    // Soft refresh — durable oracle for tests/traces.
++    LOG(INFO) << "[termsurf-navigation-action] action=refresh "
++                 "reload_type=normal tab_handle="
++              << wc_handle;
+     controller.Reload(content::ReloadType::NORMAL, false);
++  } else if (action == "refresh_ignore_cache") {
++    if (!tab->tab_observer->has_committed_document()) {
++      return false;
++    }
++    // Hard refresh — durable oracle: only this branch uses BYPASSING_CACHE.
++    LOG(INFO) << "[termsurf-navigation-action] action=refresh_ignore_cache "
++                 "reload_type=bypassing_cache tab_handle="
++              << wc_handle;
++    controller.Reload(content::ReloadType::BYPASSING_CACHE, false);
+   } else {
+     return false;
+   }
+-- 
+2.50.1 (Apple Git-155)
+

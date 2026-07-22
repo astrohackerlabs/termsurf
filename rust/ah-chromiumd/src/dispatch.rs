@@ -192,9 +192,13 @@ fn navigation_action_contract(m: &proto::termsurf::NavigationAction) -> bool {
         && m.pane_id.is_empty()
         && match m.action.as_str() {
             "back" | "forward" => m.request_id == 0,
-            "refresh" => m.request_id != 0,
+            "refresh" | "refresh_ignore_cache" => m.request_id != 0,
             _ => false,
         }
+}
+
+fn is_refresh_action(action: &str) -> bool {
+    action == "refresh" || action == "refresh_ignore_cache"
 }
 
 fn clear_refresh_request(pending_request_id: &mut u64, armed: &mut bool) {
@@ -376,23 +380,24 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 let enabled = match m.action.as_str() {
                     "back" => t.can_go_back,
                     "forward" => t.can_go_forward,
-                    "refresh" => t.can_refresh,
+                    "refresh" | "refresh_ignore_cache" => t.can_refresh,
                     _ => false,
                 };
-                if (t.crashed && m.action != "refresh") || !enabled {
+                // Soft and hard refresh both allowed after renderer crash when can_refresh.
+                if (t.crashed && !is_refresh_action(&m.action)) || !enabled {
                     trace_pdf_input(format!(
                         "navigation-action tab={} pane={} action={} result=disabled",
                         m.tab_id, t.pane_id, m.action
                     ));
                     return;
                 }
-                if m.action == "refresh" {
+                if is_refresh_action(&m.action) {
                     t.pending_refresh_request_id = m.request_id;
                     t.refresh_request_armed = false;
                 }
                 let action = CString::new(m.action.as_str()).unwrap();
                 let accepted = unsafe { ffi::ts_navigation_action(t.handle, action.as_ptr()) };
-                if m.action == "refresh" && !accepted {
+                if is_refresh_action(&m.action) && !accepted {
                     clear_refresh_request(
                         &mut t.pending_refresh_request_id,
                         &mut t.refresh_request_armed,
@@ -902,11 +907,15 @@ mod navigation_contract_tests {
         let mut refresh = action(7, "", "refresh");
         refresh.request_id = 9;
         assert!(navigation_action_contract(&refresh));
+        let mut hard = action(7, "", "refresh_ignore_cache");
+        hard.request_id = 11;
+        assert!(navigation_action_contract(&hard));
         for invalid in [
             action(0, "", "back"),
             action(7, "pane-a", "back"),
             action(7, "", ""),
             action(7, "", "refresh"),
+            action(7, "", "refresh_ignore_cache"),
             action(7, "", "Back"),
         ] {
             assert!(!navigation_action_contract(&invalid));

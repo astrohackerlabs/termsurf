@@ -129,7 +129,8 @@ message Navigate {
 
 // TUI → GUI: tab_id=0, pane_id identifies the owning pane.
 // GUI → engine: tab_id identifies the native tab, pane_id is empty.
-// Legal actions are "back", "forward", and "refresh".
+// Legal actions are "back", "forward", "refresh", and "refresh_ignore_cache".
+// "refresh_ignore_cache" is hard reload (Chromium ReloadType::BYPASSING_CACHE).
 message NavigationAction {
   int64 tab_id = 1;
   string pane_id = 2;

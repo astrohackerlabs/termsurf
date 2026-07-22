@@ -730,10 +730,24 @@ fn local_forward_key(mode: &Mode, key: KeyEvent) -> bool {
         && key.code == KeyCode::Char(']')
 }
 
+/// Soft refresh: Super+R without Shift (Control|Browse).
 fn local_refresh_key(mode: &Mode, key: KeyEvent) -> bool {
     matches!(mode, Mode::Control | Mode::Browse)
         && key.modifiers.contains(KeyModifiers::SUPER)
+        && !key.modifiers.contains(KeyModifiers::SHIFT)
         && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+}
+
+/// Hard refresh: Shift+R (Super optional). Control|Browse when events reach ahweb.
+fn local_hard_refresh_key(mode: &Mode, key: KeyEvent) -> bool {
+    matches!(mode, Mode::Control | Mode::Browse)
+        && key.modifiers.contains(KeyModifiers::SHIFT)
+        && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
+}
+
+/// Toolbar hard refresh only when Shift is on the activating mouse-up.
+fn refresh_activate_is_hard(up_modifiers: KeyModifiers) -> bool {
+    up_modifiers.contains(KeyModifiers::SHIFT)
 }
 
 fn needs_event_polling(
@@ -887,6 +901,45 @@ fn dispatch_refresh(
     browser_conn: &Option<ipc::BrowserConnection>,
     state_trace: &mut Option<StateTrace>,
 ) -> bool {
+    dispatch_refresh_kind(
+        source,
+        state,
+        route,
+        compositor,
+        browser_conn,
+        state_trace,
+        ipc::RefreshKind::Soft,
+    )
+}
+
+fn dispatch_refresh_ignore_cache(
+    source: &str,
+    state: &RefreshControlState,
+    route: Option<&BackRoute>,
+    compositor: &Option<ipc::CompositorConnection>,
+    browser_conn: &Option<ipc::BrowserConnection>,
+    state_trace: &mut Option<StateTrace>,
+) -> bool {
+    dispatch_refresh_kind(
+        source,
+        state,
+        route,
+        compositor,
+        browser_conn,
+        state_trace,
+        ipc::RefreshKind::IgnoreCache,
+    )
+}
+
+fn dispatch_refresh_kind(
+    source: &str,
+    state: &RefreshControlState,
+    route: Option<&BackRoute>,
+    compositor: &Option<ipc::CompositorConnection>,
+    browser_conn: &Option<ipc::BrowserConnection>,
+    state_trace: &mut Option<StateTrace>,
+    kind: ipc::RefreshKind,
+) -> bool {
     let (sent, route_label, request_id, blocked_reason) =
         if !state.can_refresh || state.active_tab_id <= 0 {
             (false, "none", 0, Some("disabled"))
@@ -895,7 +948,12 @@ fn dispatch_refresh(
                 Some(BackRoute::Compositor(pane_id)) => {
                     let sent = compositor
                         .as_ref()
-                        .map(|conn| conn.send_refresh(pane_id))
+                        .map(|conn| match kind {
+                            ipc::RefreshKind::Soft => conn.send_refresh(pane_id),
+                            ipc::RefreshKind::IgnoreCache => {
+                                conn.send_refresh_ignore_cache(pane_id)
+                            }
+                        })
                         .unwrap_or(false);
                     (sent, "compositor", 0, None)
                 }
@@ -903,7 +961,10 @@ fn dispatch_refresh(
                     let request_id = browser_conn
                         .as_ref()
                         .filter(|conn| conn.tab_id == *tab_id && *tab_id == state.active_tab_id)
-                        .and_then(|conn| conn.send_refresh())
+                        .and_then(|conn| match kind {
+                            ipc::RefreshKind::Soft => conn.send_refresh(),
+                            ipc::RefreshKind::IgnoreCache => conn.send_refresh_ignore_cache(),
+                        })
                         .unwrap_or(0);
                     (request_id != 0, "direct-browser", request_id, None)
                 }
@@ -918,7 +979,7 @@ fn dispatch_refresh(
             "navigation_action_blocked"
         };
         let mut fields = vec![
-            ("action", "refresh".to_string()),
+            ("action", kind.action().to_string()),
             ("source", source.to_string()),
             ("route", route_label.to_string()),
             ("tab_id", state.active_tab_id.to_string()),
@@ -1765,6 +1826,18 @@ fn main() -> io::Result<()> {
                     );
                     continue;
                 }
+                // Hard before soft: Super+Shift+R is hard (Shift wins).
+                if local_hard_refresh_key(&mode, key) {
+                    dispatch_refresh_ignore_cache(
+                        "keyboard",
+                        &refresh_control,
+                        back_route.as_ref(),
+                        &compositor,
+                        &browser_conn,
+                        &mut state_trace,
+                    );
+                    continue;
+                }
                 if local_refresh_key(&mode, key) {
                     dispatch_refresh(
                         "keyboard",
@@ -2320,14 +2393,26 @@ fn main() -> io::Result<()> {
                         &mut state_trace,
                     );
                 } else if refresh_result.activate {
-                    dispatch_refresh(
-                        "mouse",
-                        &refresh_control,
-                        back_route.as_ref(),
-                        &compositor,
-                        &browser_conn,
-                        &mut state_trace,
-                    );
+                    // Hard only if Shift held on the activating mouse-up.
+                    if refresh_activate_is_hard(mouse.modifiers) {
+                        dispatch_refresh_ignore_cache(
+                            "mouse",
+                            &refresh_control,
+                            back_route.as_ref(),
+                            &compositor,
+                            &browser_conn,
+                            &mut state_trace,
+                        );
+                    } else {
+                        dispatch_refresh(
+                            "mouse",
+                            &refresh_control,
+                            back_route.as_ref(),
+                            &compositor,
+                            &browser_conn,
+                            &mut state_trace,
+                        );
+                    }
                 } else if back_hit
                     && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
                     && !back_actionable
@@ -4887,21 +4972,40 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::SUPER);
         let forward_key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::SUPER);
         let refresh_key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SUPER);
+        let hard_shift_r =
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT);
+        let hard_cmd_shift_r =
+            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SUPER | KeyModifiers::SHIFT);
         assert!(local_back_key(&Mode::Control, key));
         assert!(local_back_key(&Mode::Browse, key));
         assert!(local_forward_key(&Mode::Control, forward_key));
         assert!(local_forward_key(&Mode::Browse, forward_key));
         assert!(local_refresh_key(&Mode::Control, refresh_key));
         assert!(local_refresh_key(&Mode::Browse, refresh_key));
+        assert!(!local_hard_refresh_key(&Mode::Control, refresh_key));
+        assert!(local_hard_refresh_key(&Mode::Control, hard_shift_r));
+        assert!(local_hard_refresh_key(&Mode::Browse, hard_shift_r));
+        assert!(local_hard_refresh_key(&Mode::Control, hard_cmd_shift_r));
+        assert!(!local_refresh_key(&Mode::Control, hard_cmd_shift_r));
         for mode in [Mode::Edit, Mode::Command, Mode::Dialog, Mode::Auth] {
             assert!(!local_back_key(&mode, key));
             assert!(!local_forward_key(&mode, forward_key));
             assert!(!local_refresh_key(&mode, refresh_key));
+            assert!(!local_hard_refresh_key(&mode, hard_shift_r));
         }
         assert!(!local_back_key(
             &Mode::Control,
             KeyEvent::new(KeyCode::Char('['), KeyModifiers::CONTROL)
         ));
+
+        // Toolbar: hard only when Shift is on mouse-up (activate event).
+        assert!(!refresh_activate_is_hard(KeyModifiers::empty()));
+        assert!(refresh_activate_is_hard(KeyModifiers::SHIFT));
+        assert!(refresh_activate_is_hard(
+            KeyModifiers::SHIFT | KeyModifiers::SUPER
+        ));
+        // Down had Shift, up without → soft (function only sees up mods)
+        assert!(!refresh_activate_is_hard(KeyModifiers::CONTROL));
 
         let route = compositor_route();
         let state = enabled_back_state();

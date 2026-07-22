@@ -7,20 +7,34 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26072214390772 Exp 3):** base Electron Chromium
+- **Active pin (Issue 26072209562907 Exp 1):** base Electron Chromium
   **`150.0.7871.114`** + series through
   `issue-26071814115751/` (122), `issue-26072110403572/` (Space co-location),
-  and `issue-26072214390772/` (wheel synthesis + Mac phase route) — see
-  `patches/release-manifest.json` for exact counts/digests
-- Product branch: `issue-26072214390772-exp1-chrome-parity-wheel`
-- Product HEAD: `9732d253fc23538c05a339da0b8451d5ce218130`
+  `issue-26072214390772/` (wheel synthesis + Mac phase route), and
+  `issue-26072209562907/` (hard refresh `refresh_ignore_cache` /
+  `BYPASSING_CACHE`) — see `patches/release-manifest.json` for exact
+  counts/digests
+- Product branch: `150.0.7871.114-issue-26072209562907-exp1-hard-refresh`
+- Product HEAD: `c12eb5f541f2cb639417eb2c58bcaed74a039833`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26072214390772 Exp 3 / Mac wheel phase route (current tip)
+### Issue 26072209562907 Exp 1 / hard refresh BYPASSING_CACHE (current tip)
+
+| Field | Value |
+| --- | --- |
+| Product branch | `150.0.7871.114-issue-26072209562907-exp1-hard-refresh` |
+| Product HEAD | `c12eb5f541f2cb639417eb2c58bcaed74a039833` |
+| Product tree | `0734f3149013f235ef73a9c2b3b8e628ced449de` |
+| Add-on archive | `patches/chromium/patches/issue-26072209562907/` |
+| Patches | `0001` `refresh_ignore_cache` → `ReloadType::BYPASSING_CACHE` + LOG oracle |
+| Patch SHA-256 | 0001 `c3d170fb4dbd68e24e6154e0f4482c48dc7bdef02209ca475d07a3099badb45d` |
+| Scope | Soft `refresh` still `NORMAL` + `reload_type=normal`; hard only at `bypassing_cache` |
+
+### Issue 26072214390772 Exp 3 / Mac wheel phase route
 
 | Field | Value |
 | --- | --- |

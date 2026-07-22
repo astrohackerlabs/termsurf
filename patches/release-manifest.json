@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "f3c9a2b7262a989ba7e9408d00471fda8f788d16",
-      "branch": "issue-26072211341927-exp1-product-xdg-termsurf",
-      "expected_head": "d21ef7b498bee9e7a854b1a24bbf6a7a2456da40",
-      "expected_tree": "b07eb9f91c457e025a2877ba7895bb85953779a7",
+      "branch": "issue-26072209562907-exp1-hard-refresh",
+      "expected_head": "f925d3bdde80911ebd4ab5ea3987105ca99cb816",
+      "expected_tree": "16fdbdc51c87fc18759cdf7404e0910cf9cac845",
       "patch_directories": [
         "patches/ghostty/patches/issue-26071814115751",
         "patches/ghostty/patches/issue-26071818128343",
@@ -26,10 +26,11 @@
         "patches/ghostty/patches/issue-26072117006454",
         "patches/ghostty/patches/issue-26072120115614",
         "patches/ghostty/patches/issue-26072211054002",
-        "patches/ghostty/patches/issue-26072211341927"
+        "patches/ghostty/patches/issue-26072211341927",
+        "patches/ghostty/patches/issue-26072209562907"
       ],
-      "patch_count": 44,
-      "archive_sha256": "982e37855993c6a1ec595fcf0eb5262dbed6e74348d98d4858c69f7893ec1784",
+      "patch_count": 45,
+      "archive_sha256": "a08e2b62ed06e6459a895cde6d99e3b5ef33a637c13a3ac2a6a43c33003f4191",
       "allowed_untracked": []
     },
     {
@@ -64,16 +65,17 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "f405107495a07cb1bfcf687d4af8d91117098db6",
-      "branch": "issue-26072214390772-exp1-chrome-parity-wheel",
-      "expected_head": "9732d253fc23538c05a339da0b8451d5ce218130",
-      "expected_tree": "dc6774dde18c3022c9c81c79e664f9f7c5f1ecd8",
+      "branch": "150.0.7871.114-issue-26072209562907-exp1-hard-refresh",
+      "expected_head": "c12eb5f541f2cb639417eb2c58bcaed74a039833",
+      "expected_tree": "0734f3149013f235ef73a9c2b3b8e628ced449de",
       "patch_directories": [
         "patches/chromium/patches/issue-26071814115751",
         "patches/chromium/patches/issue-26072110403572",
-        "patches/chromium/patches/issue-26072214390772"
+        "patches/chromium/patches/issue-26072214390772",
+        "patches/chromium/patches/issue-26072209562907"
       ],
-      "patch_count": 126,
-      "archive_sha256": "d10b68064a4926c6efc98ccfaf5f701d57f25d55954503b14d2d4cc105ee781d",
+      "patch_count": 127,
+      "archive_sha256": "1a3dbca006594fe2d93c5c7352680303986fca1c4d020255be8e33a4eb707749",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

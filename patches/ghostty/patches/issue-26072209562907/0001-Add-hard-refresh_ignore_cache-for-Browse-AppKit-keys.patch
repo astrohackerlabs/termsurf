@@ -1,0 +1,234 @@
+From f925d3bdde80911ebd4ab5ea3987105ca99cb816 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 14:13:03 -0500
+Subject: [PATCH] Add hard refresh_ignore_cache for Browse AppKit keys
+
+Issue 26072209562907 Exp 1: classify Shift+R / Cmd+Shift+R as
+refresh_ignore_cache before Browse bulk-forward; allow-list and
+request_id hard NavigationAction like soft refresh; unit-test classifier.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 90 ++++++++++++++++---
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 49 ++++++++++
+ src/apprt/termsurf.zig                        | 10 ++-
+ 3 files changed, 132 insertions(+), 17 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 8619577e9..c1c52823e 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -1916,6 +1916,32 @@ extension Ghostty {
+         note:
+           "key_code=\(event.keyCode) modifiers=\(termSurfModifiers(event.modifierFlags)) focused=\(focused)"
+       )
++      // Hard refresh Shift+R (no Command): intercept before Browse bulk-forward.
++      // performKeyEquivalent only sees Command-bearing chords reliably.
++      if event.keyCode == 0x0F,
++        event.modifierFlags.contains(.shift),
++        !event.modifierFlags.contains(.command),
++        !event.modifierFlags.contains(.control),
++        !event.modifierFlags.contains(.option),
++        termSurfScriptHasActiveOverlay
++      {
++        let action = "refresh_ignore_cache"
++        let paneID = id.uuidString
++        let accepted: Bool = paneID.withCString { paneIDPointer in
++          action.withCString { actionPointer in
++            termsurf_navigation_action_for_pane(paneIDPointer, actionPointer) != 0
++          }
++        }
++        termsurfSemanticNavigationKeys.insert(event.keyCode)
++        termSurfLogGeometry(
++          event:
++            accepted
++            ? "key_down_browser_hard_refresh"
++            : "key_down_browser_hard_refresh_disabled",
++          note: "key_code=\(event.keyCode) action=\(action)"
++        )
++        return
++      }
+       // Exp 7: browse-chrome bindings stay on Ghostty (do not bulk-forward).
+       if !shouldSkipTermSurfKeyForwardForBrowseChrome(event),
+         forwardTermSurfKeyDown(event)
+@@ -2162,12 +2188,10 @@ extension Ghostty {
+         return false
+       }
+ 
+-      if (event.keyCode == 0x21 || event.keyCode == 0x1E || event.keyCode == 0x0F),
+-        isTermSurfBrowserNavigationKeyEquivalent(event),
++      // Soft Cmd+[ / Cmd+] / Cmd+R (no Shift) and hard Cmd+Shift+R.
++      if let action = termSurfBrowserNavigationAction(for: event),
+         termSurfScriptHasActiveOverlay
+       {
+-        let action =
+-          event.keyCode == 0x21 ? "back" : (event.keyCode == 0x1E ? "forward" : "refresh")
+         let paneID = id.uuidString
+         let accepted: Bool = paneID.withCString { paneIDPointer in
+           action.withCString { actionPointer in
+@@ -2606,21 +2630,59 @@ extension Ghostty {
+       return forwarded
+     }
+ 
++    /// Soft Cmd+[ / ] / R (no Shift) still uses this for performKeyEquivalent routing.
+     private func isTermSurfBrowserNavigationKeyEquivalent(_ event: NSEvent) -> Bool {
+-      guard event.modifierFlags.contains(.command),
+-        !event.modifierFlags.contains(.shift),
+-        !event.modifierFlags.contains(.control),
+-        !event.modifierFlags.contains(.option)
++      termSurfBrowserNavigationAction(for: event) != nil
++    }
++
++    /// Maps browser chrome key equivalents to NavigationAction strings.
++    /// Soft: Command + [ / ] / R without Shift.
++    /// Hard: Command+Shift+R (and bare Shift+R is handled in keyDown).
++    private func termSurfBrowserNavigationAction(for event: NSEvent) -> String? {
++      let flags = event.modifierFlags.intersection([.command, .shift, .control, .option])
++      // Hard: Cmd+Shift+R
++      if event.keyCode == 0x0F,
++        flags.contains(.command),
++        flags.contains(.shift),
++        !flags.contains(.control),
++        !flags.contains(.option)
++      {
++        return "refresh_ignore_cache"
++      }
++      // Soft: Cmd+key without Shift
++      guard flags.contains(.command),
++        !flags.contains(.shift),
++        !flags.contains(.control),
++        !flags.contains(.option)
+       else {
+-        return false
++        return nil
+       }
+-
+       switch event.keyCode {
+-      case 0x21, 0x1E, 0x1B, 0x0F:
+-        return true
+-      default:
+-        return false
++      case 0x21: return "back"
++      case 0x1E: return "forward"
++      case 0x0F: return "refresh"
++      default: return nil
++      }
++    }
++
++    /// Pure helper for tests: classify hard refresh key chords.
++    static func termSurfHardRefreshAction(
++      keyCode: UInt16,
++      command: Bool,
++      shift: Bool,
++      control: Bool,
++      option: Bool
++    ) -> String? {
++      if control || option { return nil }
++      // Shift+R (no Command)
++      if keyCode == 0x0F, shift, !command {
++        return "refresh_ignore_cache"
++      }
++      // Cmd+Shift+R
++      if keyCode == 0x0F, shift, command {
++        return "refresh_ignore_cache"
+       }
++      return nil
+     }
+ 
+     private func forwardTermSurfKeyEvent(_ event: NSEvent, type: String) -> Bool {
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index e276f748a..1127a3b51 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -45,6 +45,55 @@ struct SurfaceViewAppKitTests {
+         )
+     }
+ 
++    /// Issue 26072209562907 Exp 1: hard refresh key classification (R = 0x0F).
++    @Test func hardRefreshShiftRWithoutCommand() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: false,
++                shift: true,
++                control: false,
++                option: false
++            ) == "refresh_ignore_cache"
++        )
++    }
++
++    @Test func hardRefreshCmdShiftR() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: true,
++                shift: true,
++                control: false,
++                option: false
++            ) == "refresh_ignore_cache"
++        )
++    }
++
++    @Test func hardRefreshRejectsCmdRWithoutShift() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: true,
++                shift: false,
++                control: false,
++                option: false
++            ) == nil
++        )
++    }
++
++    @Test func hardRefreshRejectsControlChord() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: false,
++                shift: true,
++                control: true,
++                option: false
++            ) == nil
++        )
++    }
++
+     @Test func attachedWindowNeverChangesOverlayLifetime() {
+         #expect(
+             Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index bf7b8c067..9e9a0c575 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -2892,7 +2892,8 @@ fn handleNavigationAction(
+     const action = cString(action_req.*.action);
+     if (action_req.*.tab_id != 0 or action_req.*.request_id != 0 or pane_id.len == 0 or
+         (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
+-            !std.mem.eql(u8, action, "refresh")))
++            !std.mem.eql(u8, action, "refresh") and
++            !std.mem.eql(u8, action, "refresh_ignore_cache")))
+     {
+         log.warn(
+             "NavigationAction: invalid TUI request pane_id={s} tab_id={} action={s}",
+@@ -2914,7 +2915,8 @@ fn sendNavigationActionForPaneOwned(
+     required_tui_fd: ?std.posix.fd_t,
+ ) bool {
+     if (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
+-        !std.mem.eql(u8, action, "refresh"))
++        !std.mem.eql(u8, action, "refresh") and
++        !std.mem.eql(u8, action, "refresh_ignore_cache"))
+     {
+         log.warn("NavigationAction: invalid product action pane_id={s} action={s}", .{ pane_id, action });
+         return false;
+@@ -2989,7 +2991,9 @@ fn snapshotEnabledNavigationAction(
+         .browser_fd = servers[server_index].attached_fd,
+         .tab_id = pane.tab_id,
+     };
+-    if (std.mem.eql(u8, action, "refresh")) {
++    if (std.mem.eql(u8, action, "refresh") or
++        std.mem.eql(u8, action, "refresh_ignore_cache"))
++    {
+         snapshot.navigation_request_id = next_navigation_request_id;
+         next_navigation_request_id +%= 1;
+         if (next_navigation_request_id == 0) next_navigation_request_id = 1;
+-- 
+2.50.1 (Apple Git-155)
+

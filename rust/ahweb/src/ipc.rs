@@ -19,6 +19,32 @@ pub mod proto {
 use proto::term_surf_message::Msg;
 use proto::TermSurfMessage;
 
+/// Soft vs hard (ignore-cache) refresh for NavigationAction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefreshKind {
+    Soft,
+    IgnoreCache,
+}
+
+impl RefreshKind {
+    pub fn action(self) -> &'static str {
+        match self {
+            RefreshKind::Soft => "refresh",
+            RefreshKind::IgnoreCache => "refresh_ignore_cache",
+        }
+    }
+}
+
+/// Shared nonzero request-id allocator for all direct-engine refresh kinds.
+fn next_refresh_request_id() -> u64 {
+    static NEXT_REFRESH_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    let mut request_id = NEXT_REFRESH_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    if request_id == 0 {
+        request_id = NEXT_REFRESH_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    }
+    request_id
+}
+
 // --- Public API ---
 
 /// Messages received from the compositor.
@@ -315,13 +341,22 @@ impl CompositorConnection {
 
     /// Request semantic Refresh through the compositor-owned pane route.
     pub fn send_refresh(&self, pane_id: &str) -> bool {
+        self.send_refresh_kind(pane_id, RefreshKind::Soft)
+    }
+
+    /// Request hard refresh (ignore cache) through the compositor-owned pane route.
+    pub fn send_refresh_ignore_cache(&self, pane_id: &str) -> bool {
+        self.send_refresh_kind(pane_id, RefreshKind::IgnoreCache)
+    }
+
+    fn send_refresh_kind(&self, pane_id: &str, kind: RefreshKind) -> bool {
         if pane_id.is_empty() {
             return false;
         }
         self.send(Msg::NavigationAction(proto::NavigationAction {
             tab_id: 0,
             pane_id: pane_id.into(),
-            action: "refresh".into(),
+            action: kind.action().into(),
             request_id: 0,
         }));
         true
@@ -528,18 +563,23 @@ impl BrowserConnection {
 
     /// Request semantic Refresh directly from this connection's native tab.
     pub fn send_refresh(&self) -> Option<u64> {
+        self.send_refresh_kind(RefreshKind::Soft)
+    }
+
+    /// Request hard refresh (ignore cache) directly from this connection's native tab.
+    pub fn send_refresh_ignore_cache(&self) -> Option<u64> {
+        self.send_refresh_kind(RefreshKind::IgnoreCache)
+    }
+
+    fn send_refresh_kind(&self, kind: RefreshKind) -> Option<u64> {
         if self.tab_id <= 0 {
             return None;
         }
-        static NEXT_REFRESH_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
-        let mut request_id = NEXT_REFRESH_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        if request_id == 0 {
-            request_id = NEXT_REFRESH_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        }
+        let request_id = next_refresh_request_id();
         self.send(Msg::NavigationAction(proto::NavigationAction {
             tab_id: self.tab_id,
             pane_id: String::new(),
-            action: "refresh".into(),
+            action: kind.action().into(),
             request_id,
         }));
         Some(request_id)
@@ -866,6 +906,49 @@ mod tests {
             (42, "", "refresh")
         );
         assert_eq!(action.request_id, request_id);
+    }
+
+    #[test]
+    fn hard_refresh_compositor_and_direct_actions() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let compositor = compositor_connection(client);
+        assert!(compositor.send_refresh_ignore_cache("pane-hard"));
+        let message = decode_frame(&mut peer);
+        let Some(Msg::NavigationAction(action)) = message.msg else {
+            panic!("expected compositor hard Refresh");
+        };
+        assert_eq!(
+            (
+                action.tab_id,
+                action.pane_id.as_str(),
+                action.action.as_str(),
+                action.request_id
+            ),
+            (0, "pane-hard", "refresh_ignore_cache", 0)
+        );
+
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        let direct = BrowserConnection {
+            stream: Mutex::new(client),
+            tab_id: 7,
+        };
+        let id1 = direct.send_refresh().expect("soft id");
+        let id2 = direct.send_refresh_ignore_cache().expect("hard id");
+        assert_ne!(id1, 0);
+        assert_ne!(id2, 0);
+        assert_ne!(id1, id2);
+        let m1 = decode_frame(&mut peer);
+        let m2 = decode_frame(&mut peer);
+        let Some(Msg::NavigationAction(a1)) = m1.msg else {
+            panic!("soft");
+        };
+        let Some(Msg::NavigationAction(a2)) = m2.msg else {
+            panic!("hard");
+        };
+        assert_eq!(a1.action, "refresh");
+        assert_eq!(a2.action, "refresh_ignore_cache");
+        assert_eq!(a1.request_id, id1);
+        assert_eq!(a2.request_id, id2);
     }
 
     #[test]
