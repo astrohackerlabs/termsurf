@@ -64,15 +64,16 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "f405107495a07cb1bfcf687d4af8d91117098db6",
-      "branch": "issue-26072110403572-exp2-helper-space-colocation",
-      "expected_head": "180beaea2255171081b14ef28d77b4404a165230",
-      "expected_tree": "8417d71be8c7febb95feb03b79711f557a730dd8",
+      "branch": "issue-26072214390772-exp1-chrome-parity-wheel",
+      "expected_head": "9732d253fc23538c05a339da0b8451d5ce218130",
+      "expected_tree": "dc6774dde18c3022c9c81c79e664f9f7c5f1ecd8",
       "patch_directories": [
         "patches/chromium/patches/issue-26071814115751",
-        "patches/chromium/patches/issue-26072110403572"
+        "patches/chromium/patches/issue-26072110403572",
+        "patches/chromium/patches/issue-26072214390772"
       ],
-      "patch_count": 124,
-      "archive_sha256": "b71a6450a3fcd16bf45bfe55319eda120925fb648cb7f899e36c4a071efc4a33",
+      "patch_count": 126,
+      "archive_sha256": "d10b68064a4926c6efc98ccfaf5f701d57f25d55954503b14d2d4cc105ee781d",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

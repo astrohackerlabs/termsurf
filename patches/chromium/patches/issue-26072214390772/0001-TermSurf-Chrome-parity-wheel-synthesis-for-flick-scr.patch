@@ -1,0 +1,108 @@
+From a63469659677975a503baedd5741725d79b8d519 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 09:44:55 -0500
+Subject: [PATCH] TermSurf: Chrome-parity wheel synthesis for flick scroll
+
+Set wheel_ticks, event_action, kNoButton; mask AppKit/Blink phase
+bitflags. Fixes incomplete synthetic wheels that blocked fling.
+---
+ .../libtermsurf_chromium.h                    |  5 ++-
+ .../ts_browser_main_parts.cc                  | 37 +++++++++++++++++--
+ 2 files changed, 38 insertions(+), 4 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index a037fa5015..4c58266d6d 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -114,7 +114,10 @@ TS_EXPORT void ts_forward_mouse_move(ts_web_contents_t wc,
+                                      int y,
+                                      int modifiers);
+ 
+-/* phase/momentum_phase: 0=none, 1=began, 2=changed, 3=ended.
++/* phase / momentum_phase: AppKit NSEventPhase bitmasks (same layout as Blink
++   WebMouseWheelEvent::Phase): 0=none, began=1<<0, stationary=1<<1,
++   changed=1<<2, ended=1<<3, cancelled=1<<4, mayBegin=1<<5.
++   Host (TermSurf) forwards NSEvent.phase / momentumPhase raw values.
+    Synchronous — safe. */
+ TS_EXPORT void ts_forward_scroll_event(ts_web_contents_t wc,
+                                        int x,
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 059ce1d7e6..f61fd0c27d 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -67,9 +67,11 @@
+ #include "content/public/browser/context_factory.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++#include "third_party/blink/public/common/input/web_pointer_properties.h"
+ #include "third_party/blink/public/mojom/frame/find_in_page.mojom.h"
+ #include "third_party/blink/public/mojom/frame/user_activation_notification_type.mojom.h"
+ #include "third_party/blink/public/mojom/input/input_handler.mojom.h"
++#include "ui/events/event.h"
+ #include "ui/events/keycodes/dom/dom_code.h"
+ #include "ui/events/keycodes/dom/dom_key.h"
+ #include "ui/events/keycodes/keyboard_code_conversion.h"
+@@ -968,6 +970,20 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+     return;
+   }
+ 
++  // TermSurf host (AppKit) sends NSEvent.phase / momentumPhase raw bitmasks.
++  // blink::WebMouseWheelEvent::Phase uses the same bit layout as NSEventPhase:
++  //   none=0, began=1<<0, stationary=1<<1, changed=1<<2, ended=1<<3,
++  //   cancelled=1<<4, mayBegin=1<<5, blocked=1<<6 (Blink-only).
++  // Do not remap to a linear 0..3 enum — that breaks momentum/fling.
++  constexpr int kBlinkWheelPhaseMask =
++      blink::WebMouseWheelEvent::kPhaseBegan |
++      blink::WebMouseWheelEvent::kPhaseStationary |
++      blink::WebMouseWheelEvent::kPhaseChanged |
++      blink::WebMouseWheelEvent::kPhaseEnded |
++      blink::WebMouseWheelEvent::kPhaseCancelled |
++      blink::WebMouseWheelEvent::kPhaseMayBegin |
++      blink::WebMouseWheelEvent::kPhaseBlocked;
++
+   int web_modifiers = modifiers & 0xF;
+ 
+   blink::WebMouseWheelEvent wheel_event(blink::WebInputEvent::Type::kMouseWheel,
+@@ -975,14 +991,25 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+ 
+   wheel_event.SetPositionInWidget(gfx::PointF(x, y));
+   wheel_event.SetPositionInScreen(gfx::PointF(x, y));
++  wheel_event.button = blink::WebPointerProperties::Button::kNoButton;
+   wheel_event.delta_x = delta_x;
+   wheel_event.delta_y = delta_y;
+-  wheel_event.phase = static_cast<blink::WebMouseWheelEvent::Phase>(phase);
+-  wheel_event.momentum_phase =
+-      static_cast<blink::WebMouseWheelEvent::Phase>(momentum_phase);
++  // Match MakeWebMouseWheelEventFromUiEvent: ticks from pixel/line delta.
++  wheel_event.wheel_ticks_x =
++      delta_x / static_cast<float>(ui::MouseWheelEvent::kWheelDelta);
++  wheel_event.wheel_ticks_y =
++      delta_y / static_cast<float>(ui::MouseWheelEvent::kWheelDelta);
++  wheel_event.phase = static_cast<blink::WebMouseWheelEvent::Phase>(
++      phase & kBlinkWheelPhaseMask);
++  wheel_event.momentum_phase = static_cast<blink::WebMouseWheelEvent::Phase>(
++      momentum_phase & kBlinkWheelPhaseMask);
+   wheel_event.delta_units = precise
+                                 ? ui::ScrollGranularity::kScrollByPrecisePixel
+                                 : ui::ScrollGranularity::kScrollByLine;
++  // Default constructor leaves event_action = kPageZoom; set scroll intent.
++  wheel_event.event_action =
++      blink::WebMouseWheelEvent::GetPlatformSpecificDefaultEventAction(
++          wheel_event);
+ 
+   auto* web_contents = tab->shell->web_contents();
+   auto* view = web_contents->GetRenderWidgetHostView();
+@@ -999,6 +1026,10 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+               << " router=" << router << " coords=(" << x << ", " << y
+               << ") delta=(" << delta_x << ", " << delta_y
+               << ") phase=" << phase << " momentum_phase=" << momentum_phase
++              << " ticks=(" << wheel_event.wheel_ticks_x << ", "
++              << wheel_event.wheel_ticks_y << ")"
++              << " event_action="
++              << static_cast<int>(wheel_event.event_action)
+               << " precise=" << (precise ? 1 : 0) << " modifiers=" << modifiers;
+ 
+     LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, x, y);
+-- 
+2.50.1 (Apple Git-155)
+

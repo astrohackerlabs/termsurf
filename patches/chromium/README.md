@@ -7,20 +7,40 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26072110403572 Exp 2):** base Electron Chromium
+- **Active pin (Issue 26072214390772 Exp 3):** base Electron Chromium
   **`150.0.7871.114`** + series through
-  `patches/chromium/patches/issue-26071814115751/` (122) and
-  `issue-26072110403572/` (1 Space co-location patch) — **123** total
-- Product branch: `issue-26072110403572-exp2-helper-space-colocation`
-- Product HEAD: `180beaea2255171081b14ef28d77b4404a165230`
-- Product tree: `8417d71be8c7febb95feb03b79711f557a730dd8`
+  `issue-26071814115751/` (122), `issue-26072110403572/` (Space co-location),
+  and `issue-26072214390772/` (wheel synthesis + Mac phase route) — see
+  `patches/release-manifest.json` for exact counts/digests
+- Product branch: `issue-26072214390772-exp1-chrome-parity-wheel`
+- Product HEAD: `9732d253fc23538c05a339da0b8451d5ce218130`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26072110403572 Exp 2 / Space co-location (current tip)
+### Issue 26072214390772 Exp 3 / Mac wheel phase route (current tip)
+
+| Field | Value |
+| --- | --- |
+| Product branch | `issue-26072214390772-exp1-chrome-parity-wheel` |
+| Product HEAD | `9732d253fc23538c05a339da0b8451d5ce218130` |
+| Product tree | `dc6774dde18c3022c9c81c79e664f9f7c5f1ecd8` |
+| Add-on archive | `patches/chromium/patches/issue-26072214390772/` |
+| Patches | `0001` Exp 1 field fill; `0002` Exp 3 `RouteOrProcessWheelEvent` via `ts_wheel_route_mac.mm` |
+| Scope | `ForwardScrollEvent` → Mac RWHV phase-handler route (delayed phase-end) |
+
+### Issue 26072214390772 Exp 1 / Chrome-parity wheel
+
+| Field | Value |
+| --- | --- |
+| Product branch | `issue-26072214390772-exp1-chrome-parity-wheel` |
+| Product HEAD (Exp 1 tip) | `a63469659677975a503baedd5741725d79b8d519` |
+| Add-on archive | `patches/chromium/patches/issue-26072214390772/` |
+| Scope | `ForwardScrollEvent`: wheel_ticks, event_action, kNoButton, AppKit/Blink phase bitmasks |
+
+### Issue 26072110403572 Exp 2 / Space co-location
 
 | Field | Value |
 | --- | --- |

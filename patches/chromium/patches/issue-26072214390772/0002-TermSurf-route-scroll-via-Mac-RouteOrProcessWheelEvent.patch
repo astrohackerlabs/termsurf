@@ -1,0 +1,132 @@
+From 9732d253fc23538c05a339da0b8451d5ce218130 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 10:24:08 -0500
+Subject: [PATCH] TermSurf: route scroll via Mac RouteOrProcessWheelEvent
+
+Issue 26072214390772 Exp 3: delay physical phase-ended through
+RWHV-Mac phase handler instead of bare RouteMouseWheelEvent.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 ++
+ .../ts_browser_main_parts.cc                  | 23 ++++++++--------
+ .../libtermsurf_chromium/ts_wheel_route_mac.h | 27 +++++++++++++++++++
+ .../ts_wheel_route_mac.mm                     | 18 +++++++++++++
+ 4 files changed, 58 insertions(+), 12 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_wheel_route_mac.h
+ create mode 100644 content/libtermsurf_chromium/ts_wheel_route_mac.mm
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 8b9c47d736..85c114b8bd 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -97,6 +97,8 @@ shared_library("libtermsurf_chromium") {
+       "ts_compositor_bridge_mac.mm",
+       "ts_shell_window_mac.h",
+       "ts_shell_window_mac.mm",
++      "ts_wheel_route_mac.h",
++      "ts_wheel_route_mac.mm",
+     ]
+   }
+ 
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index f61fd0c27d..b85832c49f 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -64,6 +64,7 @@
+ #include "content/libtermsurf_chromium/ts_ca_layer_bridge_mac.h"
+ #include "content/libtermsurf_chromium/ts_compositor_bridge_mac.h"
+ #include "content/libtermsurf_chromium/ts_shell_window_mac.h"
++#include "content/libtermsurf_chromium/ts_wheel_route_mac.h"
+ #include "content/public/browser/context_factory.h"
+ #include "third_party/blink/public/common/input/web_mouse_event.h"
+ #include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
+@@ -1035,20 +1036,18 @@ void TsBrowserMainParts::ForwardScrollEvent(void* wc_handle,
+     LogIssue794InputFrames("[termsurf-pdf-input]", web_contents, x, y);
+   }
+ 
+-  if (view && router) {
+-    auto* root_view = static_cast<RenderWidgetHostViewBase*>(view);
+-    if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=input-router"
+-                << " root_view=" << root_view << " router=" << router;
+-    }
+-    ui::LatencyInfo latency;
+-    router->RouteMouseWheelEvent(root_view, &wheel_event, latency);
+-  } else if (view) {
++  // Issue 26072214390772 Exp 3: Prefer Mac RWHV phase-handler path so physical
++  // phase=ended is delayed (~100ms) until momentum begins — same as Chrome's
++  // RenderWidgetHostViewMac wheel entry. Bare RouteMouseWheelEvent bypasses
++  // mouse_wheel_phase_handler_ and can kill coast at the phase boundary.
++  // RouteWheelEventMac lives in .mm (cannot include RWHV-Mac headers from .cc).
++  if (view) {
+     if (Issue794InputTraceEnabled()) {
+-      LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=direct-fallback"
+-                << " reason=" << (router ? "missing-view" : "missing-router");
++      LOG(INFO) << "[termsurf-pdf-input] wheel-route "
++                << "route_mode=mac-route-or-process"
++                << " view=" << view << " router=" << router;
+     }
+-    view->GetRenderWidgetHost()->ForwardWheelEvent(wheel_event);
++    RouteWheelEventMac(view, wheel_event);
+   } else if (Issue794InputTraceEnabled()) {
+     LOG(INFO) << "[termsurf-pdf-input] wheel-route route_mode=drop"
+               << " reason=missing-view";
+diff --git a/content/libtermsurf_chromium/ts_wheel_route_mac.h b/content/libtermsurf_chromium/ts_wheel_route_mac.h
+new file mode 100644
+index 0000000000..a843159a65
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_wheel_route_mac.h
+@@ -0,0 +1,27 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_WHEEL_ROUTE_MAC_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_WHEEL_ROUTE_MAC_H_
++
++// C++ header: routes a WebMouseWheelEvent through Mac RWHV phase-handler path
++// (RouteOrProcessWheelEvent). Implementation is ObjC++ (.mm) so pure .cc files
++// do not include RenderWidgetHostViewMac.h / Cocoa.
++
++namespace blink {
++class WebMouseWheelEvent;
++}
++
++namespace content {
++
++class RenderWidgetHostView;
++
++// Prefer Chrome Mac delayed phase-end / momentum path. |view| must be the
++// product Mac RWHV (same cast pattern as compositor bridge).
++void RouteWheelEventMac(RenderWidgetHostView* view,
++                        const blink::WebMouseWheelEvent& wheel_event);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_WHEEL_ROUTE_MAC_H_
+diff --git a/content/libtermsurf_chromium/ts_wheel_route_mac.mm b/content/libtermsurf_chromium/ts_wheel_route_mac.mm
+new file mode 100644
+index 0000000000..89aea6482f
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_wheel_route_mac.mm
+@@ -0,0 +1,18 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#import "content/libtermsurf_chromium/ts_wheel_route_mac.h"
++
++#include "content/browser/renderer_host/render_widget_host_view_mac.h"
++#include "third_party/blink/public/common/input/web_mouse_wheel_event.h"
++
++namespace content {
++
++void RouteWheelEventMac(RenderWidgetHostView* view,
++                        const blink::WebMouseWheelEvent& wheel_event) {
++  auto* mac_view = static_cast<RenderWidgetHostViewMac*>(view);
++  mac_view->RouteOrProcessWheelEvent(wheel_event);
++}
++
++}  // namespace content
+-- 
+2.50.1 (Apple Git-155)
+
