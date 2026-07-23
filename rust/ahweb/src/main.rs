@@ -745,11 +745,6 @@ fn local_hard_refresh_key(mode: &Mode, key: KeyEvent) -> bool {
         && matches!(key.code, KeyCode::Char('r') | KeyCode::Char('R'))
 }
 
-/// Toolbar hard refresh only when Shift is on the activating mouse-up.
-fn refresh_activate_is_hard(up_modifiers: KeyModifiers) -> bool {
-    up_modifiers.contains(KeyModifiers::SHIFT)
-}
-
 fn needs_event_polling(
     page_loaded: bool,
     page_loaded_at: Option<Instant>,
@@ -1075,17 +1070,22 @@ fn resolve_dark_action(
     }
 }
 
+#[derive(Debug)]
 enum ViewportCommand {
     Height(u16),
     Reset,
 }
 
+#[derive(Debug)]
 enum CommandResult {
     Quit,
     Dark(DarkAction),
     Viewport(ViewportCommand),
     DevTools(String), // direction: "right", "down", "left", "up" (Issue 26030112000690).
-    Error(String),    // error message for command bar (Issue 26030112000690).
+    /// Soft / hard refresh from Control command bar (Issue 26072209562907 Exp 2).
+    RefreshSoft,
+    RefreshHard,
+    Error(String), // error message for command bar (Issue 26030112000690).
     None,
 }
 
@@ -1133,6 +1133,28 @@ const COMMANDS: &[Command] = &[
             Some("left" | "l") => CommandResult::DevTools("left".into()),
             Some("up" | "u") => CommandResult::DevTools("up".into()),
             Some(other) => CommandResult::Error(format!("Unknown direction: {}", other)),
+        },
+    },
+    Command {
+        // Issue 26072209562907 Exp 2/3: reliable soft/hard without Shift+mouse.
+        // `:r` soft alias (Exp 3); `:refresh hard` / `:rh` hard.
+        names: &["refresh", "r"],
+        exec: |args| match args.first().copied() {
+            None => CommandResult::RefreshSoft,
+            Some("hard" | "h" | "ignore-cache") => CommandResult::RefreshHard,
+            Some(other) => CommandResult::Error(format!(
+                "Unknown: {other} (Usage: refresh | refresh hard | r | rh)"
+            )),
+        },
+    },
+    Command {
+        // Issue 26072209562907 Exp 3: `:rh` → hard refresh (ignore cache).
+        names: &["rh"],
+        exec: |args| match args.first().copied() {
+            None => CommandResult::RefreshHard,
+            Some(other) => CommandResult::Error(format!(
+                "Unknown: {other} (Usage: rh — hard refresh; or refresh hard)"
+            )),
         },
     },
 ];
@@ -2272,6 +2294,48 @@ fn main() -> io::Result<()> {
                                         viewport_height_override = None;
                                     }
                                 },
+                                CommandResult::RefreshSoft => {
+                                    let sent = dispatch_refresh(
+                                        "command",
+                                        &refresh_control,
+                                        back_route.as_ref(),
+                                        &compositor,
+                                        &browser_conn,
+                                        &mut state_trace,
+                                    );
+                                    if !sent {
+                                        command_error = Some(
+                                            if !refresh_control.can_refresh
+                                                || refresh_control.active_tab_id <= 0
+                                            {
+                                                "Refresh is unavailable".into()
+                                            } else {
+                                                "Refresh failed (no route)".into()
+                                            },
+                                        );
+                                    }
+                                }
+                                CommandResult::RefreshHard => {
+                                    let sent = dispatch_refresh_ignore_cache(
+                                        "command",
+                                        &refresh_control,
+                                        back_route.as_ref(),
+                                        &compositor,
+                                        &browser_conn,
+                                        &mut state_trace,
+                                    );
+                                    if !sent {
+                                        command_error = Some(
+                                            if !refresh_control.can_refresh
+                                                || refresh_control.active_tab_id <= 0
+                                            {
+                                                "Hard refresh is unavailable".into()
+                                            } else {
+                                                "Hard refresh failed (no route)".into()
+                                            },
+                                        );
+                                    }
+                                }
                                 CommandResult::Error(msg) => {
                                     command_error = Some(msg);
                                 }
@@ -2393,26 +2457,17 @@ fn main() -> io::Result<()> {
                         &mut state_trace,
                     );
                 } else if refresh_result.activate {
-                    // Hard only if Shift held on the activating mouse-up.
-                    if refresh_activate_is_hard(mouse.modifiers) {
-                        dispatch_refresh_ignore_cache(
-                            "mouse",
-                            &refresh_control,
-                            back_route.as_ref(),
-                            &compositor,
-                            &browser_conn,
-                            &mut state_trace,
-                        );
-                    } else {
-                        dispatch_refresh(
-                            "mouse",
-                            &refresh_control,
-                            back_route.as_ref(),
-                            &compositor,
-                            &browser_conn,
-                            &mut state_trace,
-                        );
-                    }
+                    // Toolbar is always soft. Terminal Shift+mouse is not reported
+                    // to the TUI (Ghostty mouse-shift-capture); hard refresh is
+                    // keyboard + `:refresh hard` (Issue 26072209562907 Exp 2).
+                    dispatch_refresh(
+                        "mouse",
+                        &refresh_control,
+                        back_route.as_ref(),
+                        &compositor,
+                        &browser_conn,
+                        &mut state_trace,
+                    );
                 } else if back_hit
                     && matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left))
                     && !back_actionable
@@ -4038,6 +4093,44 @@ mod tests {
     }
 
     #[test]
+    fn refresh_command_soft_and_hard_dispatch() {
+        // Issue 26072209562907 Exp 2 — real dispatch() entry, not reimplemented.
+        assert!(matches!(dispatch("refresh"), CommandResult::RefreshSoft));
+        assert!(matches!(
+            dispatch("refresh hard"),
+            CommandResult::RefreshHard
+        ));
+        assert!(matches!(dispatch("refresh h"), CommandResult::RefreshHard));
+        assert!(matches!(
+            dispatch("refresh ignore-cache"),
+            CommandResult::RefreshHard
+        ));
+        match dispatch("refresh soft") {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("Usage: refresh | refresh hard"),
+                    "{msg}"
+                );
+            }
+            other => panic!("expected usage error, got {other:?}"),
+        }
+        assert!(matches!(dispatch("refres"), CommandResult::None));
+    }
+
+    #[test]
+    fn refresh_command_short_aliases_r_and_rh() {
+        // Issue 26072209562907 Exp 3 — :r soft, :rh hard via real dispatch().
+        assert!(matches!(dispatch("r"), CommandResult::RefreshSoft));
+        assert!(matches!(dispatch("rh"), CommandResult::RefreshHard));
+        // :r hard still maps through refresh family alias.
+        assert!(matches!(dispatch("r hard"), CommandResult::RefreshHard));
+        match dispatch("rh x") {
+            CommandResult::Error(msg) => assert!(msg.contains("Usage: rh"), "{msg}"),
+            other => panic!("expected usage error, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_macos_interface_style() {
         assert_eq!(parse_macos_interface_style_dark("Dark\n"), Some(true));
         assert_eq!(parse_macos_interface_style_dark("dark"), Some(true));
@@ -4998,14 +5091,12 @@ mod tests {
             KeyEvent::new(KeyCode::Char('['), KeyModifiers::CONTROL)
         ));
 
-        // Toolbar: hard only when Shift is on mouse-up (activate event).
-        assert!(!refresh_activate_is_hard(KeyModifiers::empty()));
-        assert!(refresh_activate_is_hard(KeyModifiers::SHIFT));
-        assert!(refresh_activate_is_hard(
-            KeyModifiers::SHIFT | KeyModifiers::SUPER
+        // Toolbar no longer hard-refreshes via Shift (Exp 2); hard is keyboard
+        // + command bar only. Soft Super+R still soft.
+        assert!(local_refresh_key(
+            &Mode::Control,
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SUPER)
         ));
-        // Down had Shift, up without → soft (function only sees up mods)
-        assert!(!refresh_activate_is_hard(KeyModifiers::CONTROL));
 
         let route = compositor_route();
         let state = enabled_back_state();
