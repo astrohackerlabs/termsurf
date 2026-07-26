@@ -121,7 +121,7 @@ Top-level contents:
 - `legal/third_party/` (Chromium credits/LICENSE
   copyrights, Nushell/Reedline LICENSE copies)
 - `ahweb`, `ahsh`
-- `ahcalc/` (payload: `dist/ahcalc`, `dist/browser/`, `public/`)
+- `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ah-chromiumd/`
 
 Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
