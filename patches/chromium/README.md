@@ -7,22 +7,35 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26072209562907 Exp 1):** base Electron Chromium
-  **`150.0.7871.114`** + series through
-  `issue-26071814115751/` (122), `issue-26072110403572/` (Space co-location),
-  `issue-26072214390772/` (wheel synthesis + Mac phase route), and
-  `issue-26072209562907/` (hard refresh `refresh_ignore_cache` /
-  `BYPASSING_CACHE`) — see `patches/release-manifest.json` for exact
-  counts/digests
-- Product branch: `150.0.7871.114-issue-26072209562907-exp1-hard-refresh`
-- Product HEAD: `c12eb5f541f2cb639417eb2c58bcaed74a039833`
+- **Active pin (Issue 26072616587256 Exp 1):** Electron stable Chromium
+  **`150.0.7871.129`** (Electron **v43.2.0** chrome field) + cumulative
+  product series in `issue-26072616587256/` (**127** format-patches from
+  prior multi-dir series rebased cleanly onto `.129`) — see
+  `patches/release-manifest.json` for digests
+- Product branch: `150.0.7871.129-issue-26072616587256-exp1-electron-pin`
+- Product HEAD: `7a0d9de374a26dfa3bfda534443e96c4ab707e67`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26072209562907 Exp 1 / hard refresh BYPASSING_CACHE (current tip)
+### Issue 26072616587256 Exp 1 / Electron pin 150.0.7871.129 (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Policy | Electron **v43.2.0** stable Chromium (chrome field) |
+| Product branch | `150.0.7871.129-issue-26072616587256-exp1-electron-pin` |
+| Product HEAD | `7a0d9de374a26dfa3bfda534443e96c4ab707e67` |
+| Product tree | `9c6ae32ff888da73fe5c29027403b6b8788acc51` |
+| Archive | `patches/chromium/patches/issue-26072616587256/` (127 format-patches) |
+| Archive aggregate SHA-256 | `299a342ffb462d5c395f0ad265c9d5cd0be96f93c40ef525dcb789e7535f747c` |
+| Reconstruction | **Pass** — clean-base `git am` TREE_MATCH equal to product tree |
+| Build status | **Green** — `scripts/build.sh chromium-fork` + `ah-chromiumd` (2026-07-26) |
+| Method | `git rebase --onto 150.0.7871.129 f405107495…` of product tip; **0 conflicts** |
+
+### Issue 26072209562907 Exp 1 / hard refresh BYPASSING_CACHE (historical tip on .114)
 
 | Field | Value |
 | --- | --- |
@@ -33,6 +46,7 @@ branch notes that are safe to commit.
 | Patches | `0001` `refresh_ignore_cache` → `ReloadType::BYPASSING_CACHE` + LOG oracle |
 | Patch SHA-256 | 0001 `c3d170fb4dbd68e24e6154e0f4482c48dc7bdef02209ca475d07a3099badb45d` |
 | Scope | Soft `refresh` still `NORMAL` + `reload_type=normal`; hard only at `bypassing_cache` |
+| Status | Superseded as **active pin** by Issue 26072616587256 Exp 1 (`.129`) |
 
 ### Issue 26072214390772 Exp 3 / Mac wheel phase route
 

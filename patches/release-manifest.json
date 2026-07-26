@@ -64,18 +64,15 @@
     {
       "name": "chromium",
       "checkout": "forks/chromium/src",
-      "base": "f405107495a07cb1bfcf687d4af8d91117098db6",
-      "branch": "150.0.7871.114-issue-26072209562907-exp1-hard-refresh",
-      "expected_head": "c12eb5f541f2cb639417eb2c58bcaed74a039833",
-      "expected_tree": "0734f3149013f235ef73a9c2b3b8e628ced449de",
+      "base": "e69b30bba288603e514cffb4c79c359cac68e923",
+      "branch": "150.0.7871.129-issue-26072616587256-exp1-electron-pin",
+      "expected_head": "7a0d9de374a26dfa3bfda534443e96c4ab707e67",
+      "expected_tree": "9c6ae32ff888da73fe5c29027403b6b8788acc51",
       "patch_directories": [
-        "patches/chromium/patches/issue-26071814115751",
-        "patches/chromium/patches/issue-26072110403572",
-        "patches/chromium/patches/issue-26072214390772",
-        "patches/chromium/patches/issue-26072209562907"
+        "patches/chromium/patches/issue-26072616587256"
       ],
       "patch_count": 127,
-      "archive_sha256": "1a3dbca006594fe2d93c5c7352680303986fca1c4d020255be8e33a4eb707749",
+      "archive_sha256": "299a342ffb462d5c395f0ad265c9d5cd0be96f93c40ef525dcb789e7535f747c",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",
