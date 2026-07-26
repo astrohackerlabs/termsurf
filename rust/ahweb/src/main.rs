@@ -571,6 +571,47 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
         && y < rect.y.saturating_add(rect.height)
 }
 
+/// Inner text area of a rounded chrome block (URL bar, viewport frame).
+fn chrome_inner_rect(area: Rect) -> Rect {
+    Block::default().borders(Borders::ALL).inner(area)
+}
+
+/// Map a mouse column to a URL editor cursor column (edtui Index2.col).
+/// Uses the **inner** URL rect so borders do not steal columns; clamps to `[0, url.len()]`.
+fn url_click_cursor_col(url: &str, url_inner: Rect, mouse_col: u16) -> usize {
+    let len = url.len();
+    if url_inner.width == 0 {
+        return 0;
+    }
+    if mouse_col <= url_inner.x {
+        return 0;
+    }
+    let offset = usize::from(mouse_col.saturating_sub(url_inner.x));
+    offset.min(len)
+}
+
+/// Control-mode URL bar click: Edit + Insert with cursor under the click.
+fn enter_url_insert_from_click(
+    editor_state: &mut EditorState,
+    editor_url: &mut String,
+    url: &str,
+    mode: &mut Mode,
+    url_rect: Rect,
+    mouse_col: u16,
+) {
+    if *editor_url != url {
+        *editor_state = EditorState::new(Lines::from(url));
+        editor_state.set_clipboard(UrlClipboard::new());
+        *editor_url = url.to_string();
+    }
+    *mode = Mode::Edit;
+    editor_state.mode = EditorMode::Insert;
+    editor_state.selection = None;
+    let inner = chrome_inner_rect(url_rect);
+    let col = url_click_cursor_col(url, inner, mouse_col);
+    editor_state.cursor = edtui::Index2::new(0, col);
+}
+
 fn update_back_mouse(
     state: &mut BackControlState,
     rect: Rect,
@@ -2358,9 +2399,48 @@ fn main() -> io::Result<()> {
                 let back_hit = rect_contains(back_rect, mouse.column, mouse.row);
                 let forward_hit = rect_contains(forward_rect, mouse.column, mouse.row);
                 let refresh_hit = rect_contains(refresh_rect, mouse.column, mouse.row);
+                let url_hit = rect_contains(url_rect, mouse.column, mouse.row);
                 let back_actionable = back_control.actionable(back_route.as_ref());
                 let forward_actionable = forward_control.actionable(back_route.as_ref());
                 let refresh_actionable = refresh_control.actionable(back_route.as_ref());
+                // Control + click URL bar → Edit + Insert at click (not nav buttons).
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                    && matches!(mode, Mode::Control)
+                    && !is_devtools
+                    && url_hit
+                    && !back_hit
+                    && !forward_hit
+                    && !refresh_hit
+                {
+                    enter_url_insert_from_click(
+                        &mut editor_state,
+                        &mut editor_url,
+                        &url,
+                        &mut mode,
+                        url_rect,
+                        mouse.column,
+                    );
+                    back_control.clear_interaction();
+                    forward_control.clear_interaction();
+                    refresh_control.clear_interaction();
+                    if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
+                        conn.send_mode_changed(pid, false);
+                    }
+                    if let Some(trace) = state_trace.as_mut() {
+                        let inner = chrome_inner_rect(url_rect);
+                        let col = url_click_cursor_col(&url, inner, mouse.column);
+                        trace.write(
+                            "url_click_insert",
+                            &[
+                                ("column", mouse.column.to_string()),
+                                ("row", mouse.row.to_string()),
+                                ("cursor_col", col.to_string()),
+                                ("url_len", url.len().to_string()),
+                            ],
+                        );
+                    }
+                    continue;
+                }
                 if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                     if back_hit {
                         forward_control.clear_interaction();
@@ -3622,13 +3702,13 @@ fn chrome_border_type() -> BorderType {
     BorderType::Rounded
 }
 
-fn nav_button_colors(actionable: bool, hovered: bool, pressed: bool) -> (Color, Color, Color) {
+/// Nav chrome colors: disabled / pressed / idle only.
+/// Pointer hover is tracked for hit-testing but must not change paint (flicker).
+fn nav_button_colors(actionable: bool, pressed: bool) -> (Color, Color, Color) {
     if !actionable {
         (DIM, BG, BORDER)
     } else if pressed {
         (BG, CYAN, CYAN)
-    } else if hovered {
-        (FG, SELECTION, CYAN)
     } else {
         (FG, BG, CYAN)
     }
@@ -3641,9 +3721,8 @@ fn render_back_button(
     route_available: bool,
 ) {
     let actionable = state.can_go_back && state.active_tab_id > 0 && route_available;
-    let hovered = actionable && state.hovered;
     let pressed = actionable && state.pressed.is_some();
-    let (fg, bg, border) = nav_button_colors(actionable, hovered, pressed);
+    let (fg, bg, border) = nav_button_colors(actionable, pressed);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(chrome_border_type())
@@ -3663,9 +3742,8 @@ fn render_forward_button(
     route_available: bool,
 ) {
     let actionable = state.can_go_forward && state.active_tab_id > 0 && route_available;
-    let hovered = actionable && state.hovered;
     let pressed = actionable && state.pressed.is_some();
-    let (fg, bg, border) = nav_button_colors(actionable, hovered, pressed);
+    let (fg, bg, border) = nav_button_colors(actionable, pressed);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(chrome_border_type())
@@ -3687,9 +3765,8 @@ fn render_refresh_button(
     route_available: bool,
 ) {
     let actionable = state.can_refresh && state.active_tab_id > 0 && route_available;
-    let hovered = actionable && state.hovered;
     let pressed = actionable && state.pressed.is_some();
-    let (fg, bg, border) = nav_button_colors(actionable, hovered, pressed);
+    let (fg, bg, border) = nav_button_colors(actionable, pressed);
     let symbol = refresh_symbol(animation, now);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -4388,7 +4465,7 @@ mod tests {
     }
 
     #[test]
-    fn back_button_buffer_styles_cover_disabled_normal_hover_and_pressed() {
+    fn back_button_buffer_styles_cover_disabled_normal_hover_noop_and_pressed() {
         let route = compositor_route();
         let mut disabled_state = enabled_back_state();
         disabled_state.can_go_back = false;
@@ -4419,14 +4496,14 @@ mod tests {
         assert_eq!(normal.buffer[(normal.back.x, normal.back.y)].fg, CYAN);
         assert_eq!(normal.buffer[(normal.back.x, normal.back.y)].symbol(), "╭");
 
+        // Hover must not change paint vs idle (no SELECTION fill).
         let mut hover_state = enabled_back_state();
         hover_state.hovered = true;
         let hover = render_probe_with_back(Mode::Control, 80, 18, None, hover_state, true);
         let (x, y) = find_cell(&hover.buffer, BACK_SYMBOL);
         assert_eq!(hover.buffer[(x, y)].fg, FG);
-        assert_eq!(hover.buffer[(x, y)].bg, SELECTION);
+        assert_eq!(hover.buffer[(x, y)].bg, BG);
         assert_eq!(hover.buffer[(hover.back.x, hover.back.y)].fg, CYAN);
-        // Hover is fill/color only — same rounded corner as idle.
         assert_eq!(hover.buffer[(hover.back.x, hover.back.y)].symbol(), "╭");
 
         let mut pressed_state = enabled_back_state();
@@ -4450,7 +4527,7 @@ mod tests {
     }
 
     #[test]
-    fn forward_button_buffer_styles_cover_independent_disabled_hover_and_pressed() {
+    fn forward_button_buffer_styles_cover_disabled_hover_noop_and_pressed() {
         let route = compositor_route();
         let disabled = render_probe_with_navigation(
             Mode::Control,
@@ -4492,7 +4569,7 @@ mod tests {
         );
         let (x, y) = find_cell(&hover.buffer, FORWARD_SYMBOL);
         assert_eq!(hover.buffer[(x, y)].fg, FG);
-        assert_eq!(hover.buffer[(x, y)].bg, SELECTION);
+        assert_eq!(hover.buffer[(x, y)].bg, BG);
         assert_eq!(
             hover.buffer[(hover.forward.x, hover.forward.y)].symbol(),
             "╭"
@@ -4833,6 +4910,70 @@ mod tests {
         assert_eq!(narrow.forward, Rect::new(2, 0, 2, 3));
         assert_eq!(narrow.refresh, Rect::new(4, 0, 1, 3));
         assert_eq!(narrow.url, Rect::new(5, 0, 1, 3));
+    }
+
+    #[test]
+    fn url_click_cursor_col_clamps_to_url_line_bounds() {
+        // Outer chrome: x=10,width=20 → inner x=11,width=18 (1-cell borders).
+        let outer = Rect::new(10, 0, 20, 3);
+        let inner = chrome_inner_rect(outer);
+        assert_eq!(inner.x, 11);
+        assert_eq!(inner.width, 18);
+
+        let url = "https://example.com/path";
+        assert_eq!(url.len(), 24);
+        // Left of / on inner → 0
+        assert_eq!(url_click_cursor_col(url, inner, 0), 0);
+        assert_eq!(url_click_cursor_col(url, inner, inner.x), 0);
+        // First text cell
+        assert_eq!(url_click_cursor_col(url, inner, inner.x + 1), 1);
+        // Mid-string (offset 10)
+        assert_eq!(url_click_cursor_col(url, inner, inner.x + 10), 10);
+        // Past end of URL but inside bar
+        assert_eq!(
+            url_click_cursor_col(url, inner, inner.x + 100),
+            url.len()
+        );
+        // Empty URL
+        assert_eq!(url_click_cursor_col("", inner, inner.x + 5), 0);
+    }
+
+    #[test]
+    fn enter_url_insert_from_click_sets_edit_insert_and_cursor() {
+        let url = "https://astrohacker.com/welcome";
+        let outer = Rect::new(0, 0, 40, 3);
+        let mut editor_state = EditorState::new(Lines::from("stale"));
+        editor_state.set_clipboard(UrlClipboard::new());
+        let mut editor_url = "stale".to_string();
+        let mut mode = Mode::Control;
+        // Click at first character of inner (offset 0 from first text cell is col 0 at x=inner.x
+        // Using mouse_col = inner.x + 7 → col 7
+        let inner = chrome_inner_rect(outer);
+        let mouse_col = inner.x + 7;
+        enter_url_insert_from_click(
+            &mut editor_state,
+            &mut editor_url,
+            url,
+            &mut mode,
+            outer,
+            mouse_col,
+        );
+        assert!(matches!(mode, Mode::Edit));
+        assert!(matches!(editor_state.mode, EditorMode::Insert));
+        assert_eq!(editor_url, url);
+        assert_eq!(editor_state.cursor.row, 0);
+        assert_eq!(editor_state.cursor.col, 7);
+        assert!(editor_state.selection.is_none());
+        // Same URL again: still repositions cursor
+        enter_url_insert_from_click(
+            &mut editor_state,
+            &mut editor_url,
+            url,
+            &mut mode,
+            outer,
+            inner.x + 3,
+        );
+        assert_eq!(editor_state.cursor.col, 3);
     }
 
     #[test]
