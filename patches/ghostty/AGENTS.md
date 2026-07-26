@@ -37,8 +37,8 @@ Obey the hub **Fork change contract** in full:
 ## Fork-specific hazards
 
 - Do not commit Ghostty source or build outputs to the Astrohacker repo.
-- Release builds need Zig **0.15.2** (`build.zig.zon` minimum). Prefer
-  `/opt/homebrew/opt/zig@0.15/bin` on PATH when system Zig is 0.16+.
+- Release builds need Zig **0.16.0** (`build.zig.zon` minimum on current
+  product pin / upstream main). Ensure `zig version` is 0.16.x on PATH.
 
 ## Learn more
 

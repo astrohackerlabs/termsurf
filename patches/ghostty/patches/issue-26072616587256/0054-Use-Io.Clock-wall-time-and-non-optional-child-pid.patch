@@ -1,0 +1,44 @@
+From 06292dee7ef4a68a75fff6bc9d5809490d23f1a4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:57:03 -0500
+Subject: [PATCH 54/55] Use Io.Clock wall time and non-optional child pid
+
+---
+ src/apprt/termsurf.zig | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index f213983a6..c473a0401 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -758,7 +758,8 @@ fn browserStartupTraceEnabled() bool {
+ }
+ 
+ fn wallMs() i64 {
+-    return std.time.milliTimestamp();
++    const ts = std.Io.Clock.Timestamp.now(global.io(), .real);
++    return @divFloor(@as(i64, @intCast(ts.raw.nanoseconds)), std.time.ns_per_ms);
+ }
+ 
+ fn traceBrowserStartup(
+@@ -1598,7 +1599,7 @@ fn fillQueryDevtoolsReply(
+     state_mutex.lockUncancelable(global.io());
+     defer state_mutex.unlock(global.io());
+ 
+-    const now_ms = std.time.milliTimestamp();
++    const now_ms = wallMs();
+     const reservation_timeout_ms = devtoolsReservationTimeoutMs();
+     expireDevtoolsReservations(now_ms, reservation_timeout_ms);
+ 
+@@ -4587,7 +4588,7 @@ fn spawnBrowserProcess(
+         );
+     }
+     var result: BrowserSpawnResult = .{
+-        .pid = child.id,
++        .pid = child_pid,
+         .render_control_port = render_control_port,
+     };
+     if (render_control_port != 0) {
+-- 
+2.50.1 (Apple Git-155)
+

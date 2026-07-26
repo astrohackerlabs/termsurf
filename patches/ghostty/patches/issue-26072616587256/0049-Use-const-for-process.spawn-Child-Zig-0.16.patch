@@ -1,0 +1,25 @@
+From 29fca246784c9895e484babe899a8c703868dcb1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:52:35 -0500
+Subject: [PATCH 49/55] Use const for process.spawn Child (Zig 0.16)
+
+---
+ src/apprt/termsurf.zig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index d6a5b30a4..9ea32830a 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4476,7 +4476,7 @@ fn spawnBrowserProcess(
+     // Historical WebKit (Surfari) DYLD_FRAMEWORK_PATH injection removed with
+     // the shipped WebKit product engine. Absolute-path helpers must set their
+     // own runtime env if needed.
+-    var child = std.process.spawn(global.io(), .{
++    const child = std.process.spawn(global.io(), .{
+         .argv = argv,
+         .stdin = .ignore,
+         .stdout = .inherit,
+-- 
+2.50.1 (Apple Git-155)
+

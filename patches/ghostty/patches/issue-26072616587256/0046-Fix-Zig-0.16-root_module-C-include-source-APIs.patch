@@ -1,0 +1,37 @@
+From e1ea55a020a4058eaec5edc4cfeba21bcac0b006 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:47:48 -0500
+Subject: [PATCH 46/55] Fix Zig 0.16 root_module C include/source APIs
+
+Product TermSurf C deps must attach via Compile.root_module after the
+upstream Zig 0.16 port; step.addIncludePath/addCSource no longer exist.
+---
+ src/build/SharedDeps.zig | 9 +++++----
+ 1 file changed, 5 insertions(+), 4 deletions(-)
+
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index 386fc0b92..344e41418 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -479,13 +479,14 @@ pub fn add(
+         else
+             &.{},
+     });
+-    step.addIncludePath(b.path("src/protobuf"));
+-    step.addIncludePath(b.path("../../rust/render-channel"));
+-    step.addCSourceFiles(.{ .files = &.{
++    // Zig 0.16: C includes/sources hang off root_module (not Compile step).
++    step.root_module.addIncludePath(b.path("src/protobuf"));
++    step.root_module.addIncludePath(b.path("../../rust/render-channel"));
++    step.root_module.addCSourceFiles(.{ .files = &.{
+         "src/protobuf/protobuf-c.c",
+         "src/protobuf/termsurf.pb-c.c",
+     } });
+-    step.addCSourceFile(.{
++    step.root_module.addCSourceFile(.{
+         .file = b.path("../../rust/render-channel/termsurf_render_channel.c"),
+         .flags = &.{"-std=c99"},
+     });
+-- 
+2.50.1 (Apple Git-155)
+

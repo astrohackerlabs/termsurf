@@ -1,6 +1,34 @@
 # Ghostty Patches
 
-## Active Add-on (Issue 26072209562907 Exp 1)
+## Active Pin (Issue 26072616587256 Exp 3)
+
+- **Upstream policy:** latest commit on **`main`**
+- **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
+- **Product branch:** `issue-26072616587256-exp3-ghostty-zig16-runtime`
+- **Product HEAD:** `f1155b9c8218cebe04b444dde04fea520bd35eda`
+- **Product tree:** `cc3920b55eb2a809d40703a7fcc21486e807a7d9`
+- **Issue archive (cumulative):** `patches/ghostty/patches/issue-26072616587256/`
+- **Patches:** **55** (Exp 2 series + Exp 3 Zig 0.16 runtime harden)
+- **Archive SHA-256:**
+  `ba2577c7859b4b0607409c37587e77daa0abe61c2498116c7cfeea705c2a2e33`
+- **Toolchain:** Zig **0.16.0**
+- **Verification:** TREE_MATCH; Release `ahterm`; `+version`; TermSurf Zig
+  tests; `ensureSocketInEnv` unit proof
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 3 hardens Zig 0.16 TermSurf runtime — `TERMSURF_SOCKET` in
+  `defaultTermioEnv`, EINTR retries, Darwin `sun_len`, test hygiene. Historical
+  multi-issue patch directories remain on disk as history only.
+
+## Prior Active Pin (Issue 26072616587256 Exp 2)
+
+- Product branch: `issue-26072616587256-exp2-ghostty-main`
+- Product HEAD: `06292dee7ef4a68a75fff6bc9d5809490d23f1a4`
+- Product tree: `18ed260dbffd5dd2b2aea3fb2fbadcf1d4b4a8e8`
+- Patches: 54; archive SHA-256
+  `50f6b23d23670e23952c8375f3c7e1f21a659e92c40999202164a6be7e04211d`
+- Scope: main tip pin + initial Zig 0.16 port; runtime gaps closed in Exp 3.
+
+## Prior Active Add-on (Issue 26072209562907 Exp 1)
 
 - Product branch: `issue-26072209562907-exp1-hard-refresh`
 - Product HEAD: `f925d3bdde80911ebd4ab5ea3987105ca99cb816`
@@ -14,6 +42,7 @@
 - Aggregate series: 45 patches; archive SHA-256
   `a08e2b62ed06e6459a895cde6d99e3b5ef33a637c13a3ac2a6a43c33003f4191`
 - Scope: hard refresh contract on host compositor path; soft path unchanged.
+  Superseded as release pin by Issue 26072616587256 Exp 2.
 
 ## Prior Add-on (Issue 26072211341927 Exp 1)
 
@@ -381,22 +410,11 @@
 Ghostty fork work is tracked here as patch archives against the ignored local
 clone at `forks/ghostty`.
 
-## Current State (Issue 26071814115751)
+## Current State (Issue 26072616587256 Exp 2)
 
-- **Upstream policy:** latest commit on **`main`**
-- **Upstream base:** `f3c9a2b7262a989ba7e9408d00471fda8f788d16`
-- **Product branch:** `issue-26071814115751-ghostty`
-- **Product HEAD:** `fc25ec02822f9449914e6a95aeefb5bae2e9b28f`
-- **Product tree:** `7f1a24c180d9e935537b08106c0fb093020c8520`
-- **Archive:** `patches/ghostty/patches/issue-26071814115751/` (17 patches)
-- **Archive aggregate SHA-256:**
-  `9467410e92c14a96cb30fb0592f7b2bf839d69551b549e49768e742aa96d45c8`
-- **Verification:** **TREE_MATCH Pass**; `scripts/build.sh ahterm --release`
-  green with Zig 0.15.2 (Exp 6 implementer)
-- **Release authority:** `patches/release-manifest.json` ghostty entry
+See **Active Pin** at top of this file. Release authority:
+`patches/release-manifest.json` ghostty entry. Toolchain: Zig **0.16.0**.
 
-Build note: tip requires Zig **0.15.2** (`build.zig.zon` minimum). Prefer
-`/opt/homebrew/opt/zig@0.15/bin` on PATH when system Zig is 0.16+.
 
 ## Prior Active Add-on (Issue 26071813061732)
 
