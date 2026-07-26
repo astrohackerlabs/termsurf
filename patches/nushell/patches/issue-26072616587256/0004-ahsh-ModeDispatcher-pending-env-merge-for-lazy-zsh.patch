@@ -1,0 +1,59 @@
+From 1a461c1cb4835848a21db709330503b5d5b9b88e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 07:18:59 -0500
+Subject: [PATCH 4/7] ahsh: ModeDispatcher pending env merge for lazy zsh
+
+Add defaulted take_pending_env_merge and apply it once per REPL
+iteration so hosts can inject async login env without blocking
+the first prompt.
+---
+ crates/nu-cli/src/mode_dispatcher.rs |  9 +++++++++
+ crates/nu-cli/src/repl.rs            | 12 ++++++++++++
+ 2 files changed, 21 insertions(+)
+
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+index 7ebb75b95..5ee7cdc03 100644
+--- a/crates/nu-cli/src/mode_dispatcher.rs
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -26,6 +26,15 @@ pub trait ModeDispatcher: Send {
+         env_vars: HashMap<String, String>,
+         cwd: PathBuf,
+     ) -> ModeResult;
++
++    /// One-shot env merge for the live Nu stack while still in `nu` mode.
++    ///
++    /// Hosts that bootstrap an alternate shell asynchronously (e.g. lazy zsh)
++    /// return captured login env exactly once when ready. Default: no merge.
++    /// The REPL must not block waiting for readiness inside this call.
++    fn take_pending_env_merge(&mut self) -> Option<HashMap<String, String>> {
++        None
++    }
+ }
+ 
+ /// Result of a mode dispatch execution.
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 29d84c10d..45141c173 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -563,6 +563,18 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+     }
+     perf!("merge env", start_time, use_color);
+ 
++    // Lazy alt-shell bootstrap: apply one-shot pending env without blocking.
++    // Hosts that do not implement take_pending_env_merge are unchanged.
++    if let Some(ref dispatcher) = mode_dispatcher {
++        if let Ok(mut guard) = dispatcher.lock() {
++            if let Some(pending) = guard.take_pending_env_merge() {
++                for (key, value) in pending {
++                    stack.add_env_var(key, Value::string(value, Span::unknown()));
++                }
++            }
++        }
++    }
++
+     start_time = Instant::now();
+     engine_state.reset_signals();
+     perf!("reset signals", start_time, use_color);
+-- 
+2.50.1 (Apple Git-155)
+

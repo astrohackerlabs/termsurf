@@ -629,13 +629,15 @@ pub fn complete(engine_reference: Arc<EngineState>, file_path: &str, location: &
         });
 
     if let Ok(location) = location.as_int() {
+        // Reedline/Nu tip: Completer::complete returns CompletionResult
+        // (Fresh/Stale/Pending), not a bare suggestion iterator.
         let results = completer.complete(
             &String::from_utf8_lossy(&file)[..location as usize],
             location as usize,
         );
         print!("{{\"completions\": [");
         let mut first = true;
-        for result in results {
+        for result in results.suggestions() {
             if !first {
                 print!(", ")
             } else {

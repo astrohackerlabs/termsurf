@@ -5,40 +5,41 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26072213251282 Exp 2)
+## Current State (Issue 26072616587256 Exp 4)
 
 - Upstream repository: `https://github.com/nushell/nushell`
-- Upstream base commit (main tip): `72b01f3e11a02c1a0abd6284cf97f6f37d96677f`
+- Upstream base commit (main tip): `bcadaea5c8b19d9fd3bea4089c40449a3802c1e2`
 - Workspace version: `0.114.2`
-- Product branch: `issue-26072213251282-exp2-path-union`
-- Product HEAD: `6f21c94658801c99c6018ec24f25084198ced1c5`
-- Product tree: `ed4c9aa90eee6f4e76ce69289db9e182264e2ea7`
+- Product branch: `issue-26072616587256-exp4-nushell-main`
+- Product HEAD: `1c21baed491ef31588fb693eef9bf6f0b903135b`
+- Product tree: `ff13c12bdaab31a58998d135c5f01da33dc4f0d5`
 - Local fork working tree: `forks/nushell`
-- Issue archives (cumulative):
-  - `patches/nushell/patches/issue-26071814115751/` (4 patches)
-  - `patches/nushell/patches/issue-26072212103788/` (1 patch)
-  - `patches/nushell/patches/issue-26072213251282/` (2 patches: barrier + PATH union)
+- Issue archive (cumulative, release authority):
+  - `patches/nushell/patches/issue-26072616587256/` (**7** patches)
 - Archive aggregate SHA-256:
-  `b55825886efa3819fe066600e409c22923d818b05f05be98a45d1956e8cee177`
+  `1cd6f8358ca9f30aa5ae49b8a322e3890c44529b7c0dca162da68a4d80ed0479`
 - Reedline path pin: sibling `forks/reedline` at tip
-  `f776f5079e49d075c071660ae0f9b040b3ff909b` (`0.49.0`)
+  `7eb9bf219456202052aaa976842e9e790b88ed85` (`0.49.0`)
+- Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
 
 ## Patch Contents
 
-- Shannon ModeDispatcher, zsh mode cycle, reedline pin, lock refresh
+- Shannon ModeDispatcher, zsh mode cycle, reedline path pin, lock refresh
 - Lazy env merge (non-blocking + blocking barrier)
-- **Exp 2:** `alt_shell_env` Nu-first PATH union + scalar Nu-wins smart merge
+- Nu-first PATH union for alt-shell env merge
 
 ## Apply (clean base)
 
 ```sh
-BASE=72b01f3e11a02c1a0abd6284cf97f6f37d96677f
-git -C forks/nushell worktree add -b issue-26072213251282-exp2-path-union \
-  /tmp/astrohacker-nushell-pin "$BASE"
+BASE=bcadaea5c8b19d9fd3bea4089c40449a3802c1e2
+git -C forks/nushell worktree add /tmp/astrohacker-nushell-pin "$BASE"
 git -C /tmp/astrohacker-nushell-pin am \
-  "$PWD/patches/nushell/patches/issue-26071814115751/"*.patch
-git -C /tmp/astrohacker-nushell-pin am \
-  "$PWD/patches/nushell/patches/issue-26072212103788/"*.patch
-git -C /tmp/astrohacker-nushell-pin am \
-  "$PWD/patches/nushell/patches/issue-26072213251282/"*.patch
+  "$PWD/patches/nushell/patches/issue-26072616587256/"*.patch
 ```
+
+## Prior State (Issue 26072213251282 Exp 2)
+
+- Base `72b01f3e11a02c1a0abd6284cf97f6f37d96677f`; HEAD
+  `6f21c94658801c99c6018ec24f25084198ced1c5`; multi-dir archives under
+  `issue-26071814115751`, `issue-26072212103788`, `issue-26072213251282`
+  (historical; release authority moved to cumulative Exp 4 archive).
