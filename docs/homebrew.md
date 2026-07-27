@@ -20,6 +20,7 @@ ahterm
 ahweb
 ahsh
 ahcalc
+ahhelp
 ah-chromiumd
 <!-- /released-wrappers -->
 
@@ -28,6 +29,7 @@ paths in the release tarball besides bare CLI binaries):
 
 <!-- released-payload-roots -->
 ahcalc
+ahhelp
 ah-chromiumd
 <!-- /released-payload-roots -->
 
@@ -37,6 +39,7 @@ ah-chromiumd
 | `ahsh` | Astrohacker Shell |
 | `ahweb` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
+| `ahhelp` | TermSurf product help cheatsheet (full-pane web UI) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
 
@@ -102,12 +105,15 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, engine helpers
+- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
   or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
+- ahhelp package payload →
+  `/opt/homebrew/opt/astrohacker-terminal-ahhelp/` (when installed as artifact)
+  or under Caskroom stage `ahhelp/` (binary links `ahhelp/dist/ahhelp`)
 
 ## Release tarball contract
 
@@ -122,6 +128,7 @@ Top-level contents:
   copyrights, Nushell/Reedline LICENSE copies)
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
+- `ahhelp/` (payload: `dist/ahhelp`, `build/client/` SPA, `public/`)
 - `ah-chromiumd/`
 
 Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
@@ -280,9 +287,9 @@ normal operator interface.
    - First-party product crate package versions under the monorepo root  track the
      Homebrew release version. The canonical command rewrites and commits those
      manifests before building so `CARGO_PKG_VERSION` matches the cask. It also
-     rewrites `bun/ahcalc/package.json` `"version"` and
-     `bun/ahcalc/app/cli/embedded-version.ts` to the same X.Y.Z so the ahcalc
-     compile-time stamp matches the cask and the post-build tree stays clean.
+     rewrites `bun/ahcalc` and `bun/ahhelp` `package.json` `"version"` and
+     their `app/cli/embedded-version.ts` stamps to the same X.Y.Z so
+     compile-time stamps match the cask and the post-build tree stays clean.
      Do not leave those packages stuck at a placeholder such as `0.1.0` across
      releases. Do not rewrite package versions under `forks/`.
    - `TERMSURF_VERSION=<version>` is the `ahterm` app/helper version input.
@@ -299,6 +306,7 @@ normal operator interface.
      | `ahweb --version` | `Astrohacker Web <version>` |
      | `ahsh --version` | `Astrohacker Shell <version>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
+     | `ahhelp --version` | `Astrohacker Help <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be

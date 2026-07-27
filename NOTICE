@@ -19,8 +19,10 @@ wrapper|ahterm|ghostty|MIT
 wrapper|ahweb|first-party|MIT
 wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
+wrapper|ahhelp|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
 payload|ahcalc|first-party|MIT
+payload|ahhelp|first-party|MIT
 payload|ah-chromiumd|chromium|BSD-3-Clause
 pointer|third_party/chromium/LICENSE
 pointer|third_party/chromium/about_credits.html
@@ -43,6 +45,16 @@ under the MIT License in LICENSE (Copyright (c) 2026 Astrohacker Inc.). The
 distributed binary is produced with the Bun toolchain and embeds third-party
 runtime components under their respective licenses as used by Bun/Remix at
 build time; Astrohacker first-party source remains MIT as above.
+
+================================================================================
+## first-party — ahhelp
+
+Astrohacker-owned product code for ahhelp (TermSurf product help cheatsheet
+app, including the compiled product binary and package static assets) is
+licensed under the MIT License in LICENSE (Copyright (c) 2026 Astrohacker Inc.).
+The distributed binary is produced with the Bun toolchain and embeds
+third-party runtime components under their respective licenses as used by Bun
+at build time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
 ## ghostty — ahterm

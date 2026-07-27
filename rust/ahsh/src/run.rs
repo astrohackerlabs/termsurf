@@ -250,6 +250,8 @@ pub(crate) fn run_repl(
             BannerKind::None => {}
             BannerKind::Short => {
                 let green = "\x1b[32m";
+                // Nu default `shape_external: cyan` (first-token external commands).
+                let cmd = crate::banner_hints::SHAPE_EXTERNAL_ANSI;
                 let bold = "\x1b[1m";
                 let reset = "\x1b[0m";
                 let fg = "\x1b[37m";
@@ -258,12 +260,23 @@ pub(crate) fn run_repl(
                     entire_start_time.elapsed()
                 );
                 eprintln!("{green}{bold}Shift+Tab:{reset}{fg} Nushell ↔ zsh{reset}");
+                eprintln!(
+                    "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
+                );
+                eprintln!(
+                    "{fg}Type {cmd}ahhelp{reset}{fg} for quick help.{reset}"
+                );
+                eprintln!(
+                    "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
+                );
                 eprintln!();
             }
             BannerKind::Full => {
                 let version = env!("CARGO_PKG_VERSION");
                 let nu_version = env!("NUSHELL_VERSION");
                 let green = "\x1b[32m";
+                // Nu default `shape_external: cyan` (first-token external commands).
+                let cmd = crate::banner_hints::SHAPE_EXTERNAL_ANSI;
                 let bold = "\x1b[1m";
                 let reset = "\x1b[0m";
                 let fg = "\x1b[37m";
@@ -275,6 +288,22 @@ pub(crate) fn run_repl(
                 );
                 eprintln!(
                     "{fg}Press {green}{bold}Shift+Tab{reset}{fg} to toggle between nu and zsh.{reset}"
+                );
+                // Product suite discovery (Issue 26072710436325).
+                // Command names match Nu syntax: shape_external → cyan (not green).
+                eprintln!(
+                    "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
+                );
+                eprintln!(
+                    "{fg}Type {cmd}ahhelp{reset}{fg} for quick help.{reset}"
+                );
+                eprintln!(
+                    "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
+                );
+                debug_assert_eq!(
+                    crate::banner_hints::PRODUCT_HINT_LINES.len(),
+                    3,
+                    "keep banner_hints::PRODUCT_HINT_LINES in sync with eprintln lines above"
                 );
                 eprintln!(
                     "{green}{bold}Startup Time:{reset}{fg} {:?}{reset}",
