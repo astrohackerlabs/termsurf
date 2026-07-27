@@ -194,6 +194,8 @@ enum LoopEvent {
 const BACK_SYMBOL: &str = "←";
 const FORWARD_SYMBOL: &str = "→";
 const REFRESH_IDLE_SYMBOL: &str = "\u{E348}";
+/// Top-right quit chrome (Issue 26072709578702). Prefer ×; layout may squeeze width.
+const QUIT_SYMBOL: &str = "×";
 const REFRESH_ANIMATION_FRAMES: [&str; 4] = ["⟳", "↻", "↺", "⟲"];
 const ENABLE_ANY_MOUSE_MOTION: &str = "\x1b[?1003h";
 const DISABLE_ANY_MOUSE_MOTION: &str = "\x1b[?1003l";
@@ -529,6 +531,7 @@ struct BackMouseResult {
 
 type ForwardMouseResult = BackMouseResult;
 type RefreshMouseResult = BackMouseResult;
+type QuitMouseResult = BackMouseResult;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct BackVisualState {
@@ -536,6 +539,34 @@ struct BackVisualState {
     hovered: bool,
     pressed: bool,
 }
+
+/// Always-actionable quit control (process exit), left of no history gate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct QuitControlState {
+    hovered: bool,
+    pressed: bool,
+}
+
+impl QuitControlState {
+    fn clear_interaction(&mut self) {
+        self.hovered = false;
+        self.pressed = false;
+    }
+
+    fn actionable(&self) -> bool {
+        true
+    }
+}
+
+fn quit_visual_state(state: &QuitControlState) -> BackVisualState {
+    BackVisualState {
+        actionable: true,
+        hovered: state.hovered,
+        pressed: state.pressed,
+    }
+}
+
+
 
 fn back_visual_state(state: &BackControlState, route: Option<&BackRoute>) -> BackVisualState {
     let actionable = state.actionable(route);
@@ -754,6 +785,44 @@ fn update_refresh_mouse(
     }
 
     RefreshMouseResult {
+        changed: before != *state,
+        activate,
+    }
+}
+
+/// Mouse press/release for the top-right quit control.
+/// Activate means process quit (same as `q` / Ctrl+C / `:quit`).
+fn update_quit_mouse(
+    state: &mut QuitControlState,
+    rect: Rect,
+    mouse: MouseEvent,
+) -> QuitMouseResult {
+    let before = state.clone();
+    let hit = rect_contains(rect, mouse.column, mouse.row);
+    let actionable_hit = hit && state.actionable();
+    let mut activate = false;
+
+    match mouse.kind {
+        MouseEventKind::Moved | MouseEventKind::Drag(MouseButton::Left) => {
+            state.hovered = actionable_hit;
+            if state.pressed && !actionable_hit {
+                state.pressed = false;
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            state.hovered = actionable_hit;
+            state.pressed = actionable_hit;
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let was_pressed = state.pressed;
+            state.pressed = false;
+            state.hovered = actionable_hit;
+            activate = actionable_hit && was_pressed;
+        }
+        _ => {}
+    }
+
+    QuitMouseResult {
         changed: before != *state,
         activate,
     }
@@ -1538,10 +1607,12 @@ fn main() -> io::Result<()> {
     let mut back_control = BackControlState::default();
     let mut forward_control = ForwardControlState::default();
     let mut refresh_control = RefreshControlState::default();
+    let mut quit_control = QuitControlState::default();
     let mut refresh_animation = RefreshAnimation::default();
     let mut last_back_visual: Option<BackVisualState> = None;
     let mut last_forward_visual: Option<BackVisualState> = None;
     let mut last_refresh_visual: Option<BackVisualState> = None;
+    let mut last_quit_visual: Option<BackVisualState> = None;
 
     // Event loop.
     loop {
@@ -1549,6 +1620,7 @@ fn main() -> io::Result<()> {
         let mut back_rect = Rect::default();
         let mut forward_rect = Rect::default();
         let mut refresh_rect = Rect::default();
+        let mut quit_rect = Rect::default();
         let mut url_rect = Rect::default();
         let mut frame_area = Rect::default();
         let browser_label = browser_display_label(&browser);
@@ -1566,6 +1638,7 @@ fn main() -> io::Result<()> {
         let back_visual = back_visual_state(&back_control, back_route.as_ref());
         let forward_visual = forward_visual_state(&forward_control, back_route.as_ref());
         let refresh_visual = refresh_visual_state(&refresh_control, back_route.as_ref());
+        let quit_visual = quit_visual_state(&quit_control);
         let navigation_visual_changed = last_back_visual
             .map(|previous| previous != back_visual)
             .unwrap_or(false)
@@ -1574,6 +1647,9 @@ fn main() -> io::Result<()> {
                 .unwrap_or(false)
             || last_refresh_visual
                 .map(|previous| previous != refresh_visual)
+                .unwrap_or(false)
+            || last_quit_visual
+                .map(|previous| previous != quit_visual)
                 .unwrap_or(false);
         if navigation_visual_changed {
             // Ghostty can retain style-only cell damage beneath a browser
@@ -1625,6 +1701,7 @@ fn main() -> io::Result<()> {
                 &back_control,
                 &forward_control,
                 &refresh_control,
+                &quit_control,
                 &refresh_animation,
                 now,
                 back_route.is_some(),
@@ -1633,11 +1710,13 @@ fn main() -> io::Result<()> {
             back_rect = geometry.back;
             forward_rect = geometry.forward;
             refresh_rect = geometry.refresh;
+            quit_rect = geometry.quit;
             url_rect = geometry.url;
         })?;
         last_back_visual = Some(back_visual);
         last_forward_visual = Some(forward_visual);
         last_refresh_visual = Some(refresh_visual);
+        last_quit_visual = Some(quit_visual);
         if let Some(trace) = state_trace.as_mut() {
             let latest_console = console_log.last();
             let latest_console_summary = latest_console
@@ -2399,6 +2478,7 @@ fn main() -> io::Result<()> {
                 let back_hit = rect_contains(back_rect, mouse.column, mouse.row);
                 let forward_hit = rect_contains(forward_rect, mouse.column, mouse.row);
                 let refresh_hit = rect_contains(refresh_rect, mouse.column, mouse.row);
+                let quit_hit = rect_contains(quit_rect, mouse.column, mouse.row);
                 let url_hit = rect_contains(url_rect, mouse.column, mouse.row);
                 let back_actionable = back_control.actionable(back_route.as_ref());
                 let forward_actionable = forward_control.actionable(back_route.as_ref());
@@ -2411,6 +2491,7 @@ fn main() -> io::Result<()> {
                     && !back_hit
                     && !forward_hit
                     && !refresh_hit
+                    && !quit_hit
                 {
                     enter_url_insert_from_click(
                         &mut editor_state,
@@ -2423,6 +2504,7 @@ fn main() -> io::Result<()> {
                     back_control.clear_interaction();
                     forward_control.clear_interaction();
                     refresh_control.clear_interaction();
+                    quit_control.clear_interaction();
                     if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
                         conn.send_mode_changed(pid, false);
                     }
@@ -2445,12 +2527,19 @@ fn main() -> io::Result<()> {
                     if back_hit {
                         forward_control.clear_interaction();
                         refresh_control.clear_interaction();
+                        quit_control.clear_interaction();
                     } else if forward_hit {
                         back_control.clear_interaction();
                         refresh_control.clear_interaction();
+                        quit_control.clear_interaction();
                     } else if refresh_hit {
                         back_control.clear_interaction();
                         forward_control.clear_interaction();
+                        quit_control.clear_interaction();
+                    } else if quit_hit {
+                        back_control.clear_interaction();
+                        forward_control.clear_interaction();
+                        refresh_control.clear_interaction();
                     }
                 }
                 let back_result =
@@ -2467,6 +2556,7 @@ fn main() -> io::Result<()> {
                     back_route.as_ref(),
                     mouse,
                 );
+                let quit_result = update_quit_mouse(&mut quit_control, quit_rect, mouse);
                 if back_result.changed {
                     if let Some(trace) = state_trace.as_mut() {
                         trace.write(
@@ -2518,7 +2608,10 @@ fn main() -> io::Result<()> {
                         );
                     }
                 }
-                if back_result.activate {
+                if quit_result.activate {
+                    // Same process quit as Ctrl+C / :quit / q (not tab-close).
+                    break;
+                } else if back_result.activate {
                     dispatch_back(
                         "mouse",
                         &back_control,
@@ -3118,6 +3211,7 @@ struct BrowserLayout {
     back_area: Rect,
     forward_area: Rect,
     refresh_area: Rect,
+    quit_area: Rect,
     viewport_area: Rect,
     url_area: Rect,
     status_area: Rect,
@@ -3144,10 +3238,14 @@ fn browser_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserL
     };
 
     let top = layout[0];
-    let nav_budget = top.width.saturating_sub(1).min(15);
-    let back_width = nav_budget.saturating_add(2) / 3;
-    let forward_width = nav_budget.saturating_add(1) / 3;
-    let refresh_width = nav_budget / 3;
+    // Four equal chrome controls: back, forward, refresh (left) + quit (right).
+    // Same max cell budget as the old three-button row (5 each → 20), leave ≥1
+    // for the URL when possible.
+    let chrome_budget = top.width.saturating_sub(1).min(20);
+    let back_width = chrome_budget.saturating_add(3) / 4;
+    let forward_width = chrome_budget.saturating_add(2) / 4;
+    let refresh_width = chrome_budget.saturating_add(1) / 4;
+    let quit_width = chrome_budget / 4;
     let back_area = Rect::new(top.x, top.y, back_width, top.height);
     let forward_area = Rect::new(
         top.x.saturating_add(back_width),
@@ -3163,13 +3261,22 @@ fn browser_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserL
         refresh_width,
         top.height,
     );
-    let chrome_width = back_width
+    let left_chrome = back_width
         .saturating_add(forward_width)
         .saturating_add(refresh_width);
-    let url_area = Rect::new(
-        top.x.saturating_add(chrome_width),
+    let quit_area = Rect::new(
+        top.x
+            .saturating_add(top.width.saturating_sub(quit_width)),
         top.y,
-        top.width.saturating_sub(chrome_width),
+        quit_width,
+        top.height,
+    );
+    let url_area = Rect::new(
+        top.x.saturating_add(left_chrome),
+        top.y,
+        top.width
+            .saturating_sub(left_chrome)
+            .saturating_sub(quit_width),
         top.height,
     );
 
@@ -3177,6 +3284,7 @@ fn browser_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserL
         back_area,
         forward_area,
         refresh_area,
+        quit_area,
         url_area,
         status_area: layout[1],
         viewport_area: layout[2],
@@ -3193,6 +3301,7 @@ struct UiGeometry {
     back: Rect,
     forward: Rect,
     refresh: Rect,
+    quit: Rect,
     url: Rect,
 }
 
@@ -3222,6 +3331,7 @@ fn ui(
     back_control: &BackControlState,
     forward_control: &ForwardControlState,
     refresh_control: &RefreshControlState,
+    quit_control: &QuitControlState,
     refresh_animation: &RefreshAnimation,
     now: Instant,
     back_route_available: bool,
@@ -3237,6 +3347,7 @@ fn ui(
     let back_area = layout.back_area;
     let forward_area = layout.forward_area;
     let refresh_area = layout.refresh_area;
+    let quit_area = layout.quit_area;
     let url_area = layout.url_area;
     let status_area = layout.status_area;
 
@@ -3260,6 +3371,7 @@ fn ui(
         now,
         back_route_available,
     );
+    render_quit_button(frame, quit_area, quit_control);
 
     // URL bar / Command bar (Issue 26022712000659).
     if *mode == Mode::Command {
@@ -3692,6 +3804,7 @@ fn ui(
         back: back_area,
         forward: forward_area,
         refresh: refresh_area,
+        quit: quit_area,
         url: url_area,
     }
 }
@@ -3780,6 +3893,25 @@ fn render_refresh_button(
     frame.render_widget(button, area);
 }
 
+fn render_quit_button(frame: &mut Frame, area: Rect, state: &QuitControlState) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let actionable = state.actionable();
+    let pressed = actionable && state.pressed;
+    let (fg, bg, border) = nav_button_colors(actionable, pressed);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(chrome_border_type())
+        .border_style(Style::default().fg(border).bg(bg))
+        .style(Style::default().fg(fg).bg(bg));
+    let button = Paragraph::new(QUIT_SYMBOL)
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(fg).bg(bg))
+        .block(block);
+    frame.render_widget(button, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3817,6 +3949,7 @@ mod tests {
         back: Rect,
         forward: Rect,
         refresh: Rect,
+        quit: Rect,
         url: Rect,
         capture: String,
         buffer: Buffer,
@@ -3880,6 +4013,7 @@ mod tests {
         let mut back = Rect::default();
         let mut forward = Rect::default();
         let mut refresh = Rect::default();
+        let mut quit = Rect::default();
         let mut url = Rect::default();
 
         terminal
@@ -3909,6 +4043,7 @@ mod tests {
                     &back_control,
                     &forward_control,
                     &refresh_control,
+                    &QuitControlState::default(),
                     &refresh_animation,
                     now,
                     route_available,
@@ -3917,6 +4052,7 @@ mod tests {
                 back = geometry.back;
                 forward = geometry.forward;
                 refresh = geometry.refresh;
+                quit = geometry.quit;
                 url = geometry.url;
             })
             .unwrap();
@@ -3926,6 +4062,7 @@ mod tests {
             back,
             forward,
             refresh,
+            quit,
             url,
             capture: numbered_buffer_capture(terminal.backend().buffer()),
             buffer: terminal.backend().buffer().clone(),
@@ -3941,6 +4078,7 @@ mod tests {
         let mut back = Rect::default();
         let mut forward = Rect::default();
         let mut refresh = Rect::default();
+        let mut quit = Rect::default();
         let mut url = Rect::default();
         let loading_log = vec![
             (LoadingStage::ConnectingToGui, StageStatus::Done),
@@ -3975,6 +4113,7 @@ mod tests {
                     &BackControlState::default(),
                     &ForwardControlState::default(),
                     &RefreshControlState::default(),
+                    &QuitControlState::default(),
                     &RefreshAnimation::default(),
                     Instant::now(),
                     false,
@@ -3983,6 +4122,7 @@ mod tests {
                 back = geometry.back;
                 forward = geometry.forward;
                 refresh = geometry.refresh;
+                quit = geometry.quit;
                 url = geometry.url;
             })
             .unwrap();
@@ -3992,6 +4132,7 @@ mod tests {
             back,
             forward,
             refresh,
+            quit,
             url,
             capture: numbered_buffer_capture(terminal.backend().buffer()),
             buffer: terminal.backend().buffer().clone(),
@@ -4415,19 +4556,26 @@ mod tests {
             let (back_x, back_y) = find_cell(&rendered.buffer, BACK_SYMBOL);
             let (forward_x, forward_y) = find_cell(&rendered.buffer, FORWARD_SYMBOL);
             let (refresh_x, refresh_y) = find_cell(&rendered.buffer, REFRESH_IDLE_SYMBOL);
+            let (quit_x, quit_y) = find_cell(&rendered.buffer, QUIT_SYMBOL);
             assert!(
-                back_x < forward_x && forward_x < refresh_x && refresh_x < rendered.url.x,
+                back_x < forward_x
+                    && forward_x < refresh_x
+                    && refresh_x < rendered.url.x
+                    && rendered.url.right() == rendered.quit.x
+                    && quit_x >= rendered.quit.x,
                 "{}",
                 rendered.capture
             );
             assert!(back_y >= rendered.back.y && back_y < rendered.back.bottom());
             assert!(forward_y >= rendered.forward.y && forward_y < rendered.forward.bottom());
             assert!(refresh_y >= rendered.refresh.y && refresh_y < rendered.refresh.bottom());
+            assert!(quit_y >= rendered.quit.y && quit_y < rendered.quit.bottom());
             assert_eq!(refresh_x, rendered.refresh.x + rendered.refresh.width / 2);
             assert_eq!(refresh_y, rendered.refresh.y + rendered.refresh.height / 2);
             assert_eq!(rendered.back.right(), rendered.forward.x);
             assert_eq!(rendered.forward.right(), rendered.refresh.x);
             assert_eq!(rendered.refresh.right(), rendered.url.x);
+            assert_eq!(rendered.url.right(), rendered.quit.x);
             let mut back_text = String::new();
             for y in rendered.back.y..rendered.back.bottom() {
                 for x in rendered.back.x..rendered.back.right() {
@@ -4865,51 +5013,176 @@ mod tests {
     }
 
     #[test]
-    fn navigation_and_url_geometry_is_exact_at_normal_narrow_and_degenerate_widths() {
-        for (width, back_width, forward_width, refresh_width, url_width) in [
-            (0, 0, 0, 0, 0),
-            (1, 0, 0, 0, 1),
-            (2, 1, 0, 0, 1),
-            (3, 1, 1, 0, 1),
-            (4, 1, 1, 1, 1),
-            (5, 2, 1, 1, 1),
-            (6, 2, 2, 1, 1),
-            (7, 2, 2, 2, 1),
-            (8, 3, 2, 2, 1),
-            (9, 3, 3, 2, 1),
-            (10, 3, 3, 3, 1),
-            (11, 4, 3, 3, 1),
-            (12, 4, 4, 3, 1),
-            (13, 4, 4, 4, 1),
-            (14, 5, 4, 4, 1),
-            (15, 5, 5, 4, 1),
-            (16, 5, 5, 5, 1),
-            (17, 5, 5, 5, 2),
-            (80, 5, 5, 5, 65),
-        ] {
-            let layout = browser_layout(Rect::new(0, 0, width, 18), None);
-            assert_eq!(layout.back_area.width, back_width, "width={width}");
-            assert_eq!(layout.forward_area.width, forward_width, "width={width}");
-            assert_eq!(layout.refresh_area.width, refresh_width, "width={width}");
-            assert_eq!(layout.url_area.width, url_width, "width={width}");
-            assert_eq!(layout.back_area.right(), layout.forward_area.x);
-            assert_eq!(layout.forward_area.right(), layout.refresh_area.x);
-            assert_eq!(layout.refresh_area.right(), layout.url_area.x);
+    fn navigation_url_and_quit_geometry_invariants_hold_across_widths() {
+        for width in 0..=120u16 {
+            let area = Rect::new(0, 0, width, 18);
+            let layout = browser_layout(area, None);
+            let top = Rect::new(0, 0, width, 3);
+            assert_eq!(layout.back_area.x, top.x, "width={width}");
+            if width > 0 {
+                assert_eq!(
+                    layout.quit_area.right(),
+                    top.right(),
+                    "quit right-aligned width={width}"
+                );
+            }
+            // Quit matches the equal chrome slice of the four-button budget.
+            let chrome_budget = width.saturating_sub(1).min(20);
+            assert_eq!(
+                layout.quit_area.width,
+                chrome_budget / 4,
+                "quit same unit as chrome budget width={width}"
+            );
+            assert_eq!(
+                layout.back_area.right(),
+                layout.forward_area.x,
+                "width={width}"
+            );
+            assert_eq!(
+                layout.forward_area.right(),
+                layout.refresh_area.x,
+                "width={width}"
+            );
+            assert_eq!(
+                layout.refresh_area.right(),
+                layout.url_area.x,
+                "width={width}"
+            );
+            assert_eq!(
+                layout.url_area.right(),
+                layout.quit_area.x,
+                "url ends at quit width={width}"
+            );
             assert_eq!(
                 layout.back_area.width
                     + layout.forward_area.width
                     + layout.refresh_area.width
-                    + layout.url_area.width,
+                    + layout.url_area.width
+                    + layout.quit_area.width,
                 width,
                 "width={width}"
             );
+            // On wide rows, all four chrome buttons share the same width.
+            if width >= 21 {
+                assert_eq!(
+                    layout.back_area.width, layout.quit_area.width,
+                    "back==quit width={width}"
+                );
+                assert_eq!(
+                    layout.forward_area.width, layout.quit_area.width,
+                    "forward==quit width={width}"
+                );
+                assert_eq!(
+                    layout.refresh_area.width, layout.quit_area.width,
+                    "refresh==quit width={width}"
+                );
+            }
         }
 
+        // Spot-check typical 80-col: four chrome cells of 5, url 60.
+        let wide = browser_layout(Rect::new(0, 0, 80, 18), None);
+        assert_eq!(wide.back_area.width, 5);
+        assert_eq!(wide.forward_area.width, 5);
+        assert_eq!(wide.refresh_area.width, 5);
+        assert_eq!(wide.quit_area, Rect::new(75, 0, 5, 3));
+        assert_eq!(wide.url_area, Rect::new(15, 0, 60, 3));
+
+        // width=6: chrome_budget=5 → widths (2,1,1,1) + url=1
         let narrow = render_probe_with_back(Mode::Control, 6, 7, None, enabled_back_state(), true);
         assert_eq!(narrow.back, Rect::new(0, 0, 2, 3));
-        assert_eq!(narrow.forward, Rect::new(2, 0, 2, 3));
-        assert_eq!(narrow.refresh, Rect::new(4, 0, 1, 3));
-        assert_eq!(narrow.url, Rect::new(5, 0, 1, 3));
+        assert_eq!(narrow.forward, Rect::new(2, 0, 1, 3));
+        assert_eq!(narrow.refresh, Rect::new(3, 0, 1, 3));
+        assert_eq!(narrow.url, Rect::new(4, 0, 1, 3));
+        assert_eq!(narrow.quit, Rect::new(5, 0, 1, 3));
+    }
+
+    #[test]
+    fn quit_mouse_activate_requests_process_quit_not_tab_close() {
+        let rect = Rect::new(70, 0, 3, 3);
+        let mut state = QuitControlState::default();
+        assert!(state.actionable());
+        assert!(
+            !update_quit_mouse(
+                &mut state,
+                rect,
+                test_mouse(MouseEventKind::Down(MouseButton::Left), 71, 1),
+            )
+            .activate
+        );
+        assert!(state.pressed);
+        let up = update_quit_mouse(
+            &mut state,
+            rect,
+            test_mouse(MouseEventKind::Up(MouseButton::Left), 71, 1),
+        );
+        assert!(up.activate, "completed click must signal process quit");
+        assert!(!state.pressed);
+
+        // Leave-release cancels.
+        update_quit_mouse(
+            &mut state,
+            rect,
+            test_mouse(MouseEventKind::Down(MouseButton::Left), 71, 1),
+        );
+        assert!(
+            !update_quit_mouse(
+                &mut state,
+                rect,
+                test_mouse(MouseEventKind::Up(MouseButton::Left), 10, 1),
+            )
+            .activate
+        );
+        assert!(!state.pressed);
+
+        // :quit command remains process quit (not tab-close).
+        assert!(matches!(
+            (COMMANDS
+                .iter()
+                .find(|c| c.names.contains(&"quit"))
+                .unwrap()
+                .exec)(&[]),
+            CommandResult::Quit
+        ));
+    }
+
+    #[test]
+    fn quit_button_paints_idle_and_pressed_without_hover_wash() {
+        let area = Rect::new(0, 0, 5, 3);
+        let backend = TestBackend::new(5, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let idle = QuitControlState::default();
+        terminal
+            .draw(|frame| render_quit_button(frame, area, &idle))
+            .unwrap();
+        let idle_buf = terminal.backend().buffer().clone();
+        let (x, y) = find_cell(&idle_buf, QUIT_SYMBOL);
+        let idle_style = idle_buf[(x, y)].style();
+
+        let mut hover = QuitControlState {
+            hovered: true,
+            pressed: false,
+        };
+        terminal
+            .draw(|frame| render_quit_button(frame, area, &hover))
+            .unwrap();
+        let hover_buf = terminal.backend().buffer().clone();
+        let hover_style = hover_buf[(x, y)].style();
+        assert_eq!(
+            idle_style, hover_style,
+            "hover must not change quit paint"
+        );
+
+        hover.pressed = true;
+        terminal
+            .draw(|frame| render_quit_button(frame, area, &hover))
+            .unwrap();
+        let pressed_buf = terminal.backend().buffer().clone();
+        let pressed_style = pressed_buf[(x, y)].style();
+        assert_ne!(
+            idle_style.bg, pressed_style.bg,
+            "pressed must change fill"
+        );
     }
 
     #[test]
