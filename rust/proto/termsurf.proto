@@ -72,6 +72,10 @@ message TermSurfMessage {
     // Renderer crash recovery (Chromium → TUI / automation harness)
     RendererCrashed renderer_crashed = 39;
 
+    // Host-mediated file chooser (engine parks listener; ahterm owns NSOpenPanel)
+    FileChooserRequest file_chooser_request = 48;
+    FileChooserReply file_chooser_reply = 49;
+
     // Generic render surface metadata (engine → GUI)
     RenderSurface render_surface = 43;
 
@@ -280,6 +284,23 @@ message JavaScriptDialogReply {
   uint64 request_id = 2;
   bool accepted = 3;
   string prompt_text = 4;
+}
+
+// Engine → host: park FileSelectListener; host shows NSOpenPanel.
+message FileChooserRequest {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  string mode = 3;            // "open" | "open_multiple"
+  repeated string accept = 4; // optional MIME/extensions from the page
+  string origin_url = 5;
+}
+
+// Host → engine: absolute paths or cancel (accepted=false).
+message FileChooserReply {
+  int64 tab_id = 1;
+  uint64 request_id = 2;
+  bool accepted = 3;
+  repeated string paths = 4;
 }
 
 message ConsoleMessage {

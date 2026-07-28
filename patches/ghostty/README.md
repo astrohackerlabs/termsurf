@@ -1,23 +1,33 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26072616587256 Exp 3)
+## Active Pin (Issue 26072810194224 file chooser host)
 
-- **Upstream policy:** latest commit on **`main`**
+- **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
-- **Product branch:** `issue-26072616587256-exp3-ghostty-zig16-runtime`
-- **Product HEAD:** `f1155b9c8218cebe04b444dde04fea520bd35eda`
-- **Product tree:** `cc3920b55eb2a809d40703a7fcc21486e807a7d9`
-- **Issue archive (cumulative):** `patches/ghostty/patches/issue-26072616587256/`
-- **Patches:** **55** (Exp 2 series + Exp 3 Zig 0.16 runtime harden)
+- **Product branch:** `issue-26072810194224-exp4-directory-upload`
+- **Product HEAD:** `e606b3d13a0e1105be0dd800268041fa767ea4e1`
+- **Product tree:** `5892dbb057f6448b228026611c6526efe4a12da3`
+- **Issue archives:** `issue-26072616587256/` (**55**) +
+  `issue-26072810194224/` (**2** host file-chooser panels)
+- **Patches:** **57** total
 - **Archive SHA-256:**
-  `ba2577c7859b4b0607409c37587e77daa0abe61c2498116c7cfeea705c2a2e33`
+  `6c2b91635722475eb954368dfe0867c801eb62f07d7aae9fe106f9edc2a2c66d`
 - **Toolchain:** Zig **0.16.0**
-- **Verification:** TREE_MATCH; Release `ahterm`; `+version`; TermSurf Zig
-  tests; `ensureSocketInEnv` unit proof
+- **Verification:** `ensure_fork` already-applied TREE_MATCH (2026-07-28);
+  host `NSOpenPanel` open + folder modes
 - **Release authority:** `patches/release-manifest.json` ghostty entry
-- **Scope:** Exp 3 hardens Zig 0.16 TermSurf runtime — `TERMSURF_SOCKET` in
-  `defaultTermioEnv`, EINTR retries, Darwin `sun_len`, test hygiene. Historical
-  multi-issue patch directories remain on disk as history only.
+- **Scope:** Zig 0.16 TermSurf runtime harden **plus** host-mediated file
+  chooser (`termsurf_request_file_chooser` / folder-only panel).
+
+## Prior Active Pin (Issue 26072616587256 Exp 3)
+
+- Product branch: `issue-26072616587256-exp3-ghostty-zig16-runtime`
+- Product HEAD: `f1155b9c8218cebe04b444dde04fea520bd35eda`
+- Product tree: `cc3920b55eb2a809d40703a7fcc21486e807a7d9`
+- Patches: 55; archive SHA-256
+  `ba2577c7859b4b0607409c37587e77daa0abe61c2498116c7cfeea705c2a2e33`
+- Scope: Zig 0.16 TermSurf runtime — parent of active pin (first of two
+  `patch_directories`).
 
 ## Prior Active Pin (Issue 26072616587256 Exp 2)
 

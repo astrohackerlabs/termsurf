@@ -1,0 +1,66 @@
+From 97cfecba2a04fc64e22f81c8bf9e36c7ea20dbdd Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 28 Jul 2026 05:35:17 -0500
+Subject: [PATCH] Interactive file chooser for ordinary uploads
+
+When auto-select is unset, use ShellFileSelectHelper
+(ui::SelectFileDialog / NSOpenPanel) instead of canceling.
+Issue 26072810194224 Exp 1.
+---
+ content/libtermsurf_chromium/ts_file_select_helper.cc     | 5 ++++-
+ .../libtermsurf_chromium/ts_javascript_dialog_manager.cc  | 8 +++++++-
+ 2 files changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 6b2cf6e142..84d39ba077 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -102,12 +102,15 @@ bool IsValidUploadFixturePath(const base::FilePath& path,
+ bool MaybeRunTsFileChooser(RenderFrameHost* render_frame_host,
+                            scoped_refptr<FileSelectListener> listener,
+                            const blink::mojom::FileChooserParams& params) {
++  // Returns false when the auto-select switch is absent so the caller can run
++  // an interactive ShellFileSelectHelper dialog (product file picker).
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+   if (!command_line->HasSwitch(kTermSurfFileUploadAutoSelectSwitch)) {
++    LogChooserRequest("interactive-fallback", params);
+     return false;
+   }
+ 
+-  LogChooserRequest("request", params);
++  LogChooserRequest("auto-select-request", params);
+ 
+   const char* reason = nullptr;
+   if (!IsOrdinaryReadOnlyUpload(params, &reason)) {
+diff --git a/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+index 13677c2bb1..c4b49fcb29 100644
+--- a/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
++++ b/content/libtermsurf_chromium/ts_javascript_dialog_manager.cc
+@@ -14,6 +14,7 @@
+ #include "content/public/browser/file_select_listener.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/shell/browser/shell_file_select_helper.h"
+ #include "url/gurl.h"
+ 
+ namespace content {
+@@ -190,10 +191,15 @@ void TsShellPlatformDelegate::RunFileChooser(
+     RenderFrameHost* render_frame_host,
+     scoped_refptr<FileSelectListener> listener,
+     const blink::mojom::FileChooserParams& params) {
++  // 1) Automation: --termsurf-file-upload-auto-select=/path (Issue 799).
+   if (MaybeRunTsFileChooser(render_frame_host, listener, params)) {
+     return;
+   }
+-  ShellPlatformDelegate::RunFileChooser(render_frame_host, std::move(listener),
++  // 2) Product: interactive system file dialog via content_shell helper
++  // (ui::SelectFileDialog / NSOpenPanel on macOS). Base ShellPlatformDelegate
++  // always cancels on desktop — do not fall through to that.
++  // Issue 26072810194224 Exp 1.
++  ShellFileSelectHelper::RunFileChooser(render_frame_host, std::move(listener),
+                                         params);
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -106,6 +106,14 @@ extern "C" {
         prompt_text: *const c_char,
     ) -> bool;
 
+    pub fn ts_reply_file_chooser(
+        wc: TsWebContents,
+        request_id: c_ulonglong,
+        accepted: bool,
+        paths: *const *const c_char,
+        path_count: usize,
+    ) -> bool;
+
     pub fn ts_reply_http_auth(
         wc: TsWebContents,
         request_id: c_ulonglong,
@@ -165,6 +173,21 @@ extern "C" {
                 *const c_char,
                 *const c_char,
                 *const c_char,
+                *mut c_void,
+            ),
+        >,
+        user_data: *mut c_void,
+    );
+
+    pub fn ts_set_on_file_chooser_request(
+        cb: Option<
+            unsafe extern "C" fn(
+                TsWebContents,
+                c_ulonglong,
+                *const c_char,
+                *const c_char,
+                *const *const c_char,
+                usize,
                 *mut c_void,
             ),
         >,

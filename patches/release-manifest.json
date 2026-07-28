@@ -6,14 +6,15 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "2de5e7d38e1354759211722a8687c0815d2cf02c",
-      "branch": "issue-26072616587256-exp3-ghostty-zig16-runtime",
-      "expected_head": "f1155b9c8218cebe04b444dde04fea520bd35eda",
-      "expected_tree": "cc3920b55eb2a809d40703a7fcc21486e807a7d9",
+      "branch": "issue-26072810194224-exp4-directory-upload",
+      "expected_head": "e606b3d13a0e1105be0dd800268041fa767ea4e1",
+      "expected_tree": "5892dbb057f6448b228026611c6526efe4a12da3",
       "patch_directories": [
-        "patches/ghostty/patches/issue-26072616587256"
+        "patches/ghostty/patches/issue-26072616587256",
+        "patches/ghostty/patches/issue-26072810194224"
       ],
-      "patch_count": 55,
-      "archive_sha256": "ba2577c7859b4b0607409c37587e77daa0abe61c2498116c7cfeea705c2a2e33",
+      "patch_count": 57,
+      "archive_sha256": "6c2b91635722475eb954368dfe0867c801eb62f07d7aae9fe106f9edc2a2c66d",
       "allowed_untracked": []
     },
     {
@@ -46,14 +47,15 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "e69b30bba288603e514cffb4c79c359cac68e923",
-      "branch": "150.0.7871.129-issue-26072616587256-exp1-electron-pin",
-      "expected_head": "7a0d9de374a26dfa3bfda534443e96c4ab707e67",
-      "expected_tree": "9c6ae32ff888da73fe5c29027403b6b8788acc51",
+      "branch": "150.0.7871.129-issue-26072810194224-exp5-off-ui-folder-enumerate",
+      "expected_head": "8bb8dfd999b096a91d708e0488303ce6b1c0f1f1",
+      "expected_tree": "b365c026e8a5dcedc2cbd9f8a3c5703b69d939a8",
       "patch_directories": [
-        "patches/chromium/patches/issue-26072616587256"
+        "patches/chromium/patches/issue-26072616587256",
+        "patches/chromium/patches/issue-26072810194224"
       ],
-      "patch_count": 127,
-      "archive_sha256": "299a342ffb462d5c395f0ad265c9d5cd0be96f93c40ef525dcb789e7535f747c",
+      "patch_count": 132,
+      "archive_sha256": "84c02c4dce3f9bc11161769139c7d1466a1e8b5c2127f4ee2ef86615b0f1343a",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

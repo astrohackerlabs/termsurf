@@ -7,20 +7,38 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26072616587256 Exp 1):** Electron stable Chromium
-  **`150.0.7871.129`** (Electron **v43.2.0** chrome field) + cumulative
-  product series in `issue-26072616587256/` (**127** format-patches from
-  prior multi-dir series rebased cleanly onto `.129`) — see
-  `patches/release-manifest.json` for digests
-- Product branch: `150.0.7871.129-issue-26072616587256-exp1-electron-pin`
-- Product HEAD: `7a0d9de374a26dfa3bfda534443e96c4ab707e67`
+- **Active pin (Issue 26072810194224 Exp 5):** Electron Chromium
+  **`150.0.7871.129`** + cumulative **127** patches from
+  `issue-26072616587256/` **plus** **5** file-chooser patches from
+  `issue-26072810194224/` (**132** total) — see
+  `patches/release-manifest.json`
+- Product branch:
+  `150.0.7871.129-issue-26072810194224-exp5-off-ui-folder-enumerate`
+- Product HEAD: `8bb8dfd999b096a91d708e0488303ce6b1c0f1f1`
+- Product tree: `b365c026e8a5dcedc2cbd9f8a3c5703b69d939a8`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26072616587256 Exp 1 / Electron pin 150.0.7871.129 (current tip)
+### Issue 26072810194224 Exp 5 / host file chooser (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `7a0d9de374` (Issue 26072616587256 Exp 1 Electron pin) |
+| Product branch | `150.0.7871.129-issue-26072810194224-exp5-off-ui-folder-enumerate` |
+| Product HEAD | `8bb8dfd999b096a91d708e0488303ce6b1c0f1f1` |
+| Product tree | `b365c026e8a5dcedc2cbd9f8a3c5703b69d939a8` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) |
+| Patch count | **132** |
+| Archive aggregate SHA-256 | `84c02c4dce3f9bc11161769139c7d1466a1e8b5c2127f4ee2ef86615b0f1343a` |
+| Reconstruction | **Pass** — `ensure_fork` already-applied TREE_MATCH (2026-07-28) |
+| Build status | **Green** — `chromium-fork` + `ah-chromiumd` (Exp 5) |
+| Scope | Host-mediated open/multi/folder; off-UI MayBlock enumerate; not drag/save download |
+
+### Issue 26072616587256 Exp 1 / Electron pin 150.0.7871.129 (parent series)
 
 | Field | Value |
 | --- | --- |
@@ -31,9 +49,7 @@ branch notes that are safe to commit.
 | Product tree | `9c6ae32ff888da73fe5c29027403b6b8788acc51` |
 | Archive | `patches/chromium/patches/issue-26072616587256/` (127 format-patches) |
 | Archive aggregate SHA-256 | `299a342ffb462d5c395f0ad265c9d5cd0be96f93c40ef525dcb789e7535f747c` |
-| Reconstruction | **Pass** — clean-base `git am` TREE_MATCH equal to product tree |
-| Build status | **Green** — `scripts/build.sh chromium-fork` + `ah-chromiumd` (2026-07-26) |
-| Method | `git rebase --onto 150.0.7871.129 f405107495…` of product tip; **0 conflicts** |
+| Status | **Parent of active pin** (still first of two `patch_directories`) |
 
 ### Issue 26072209562907 Exp 1 / hard refresh BYPASSING_CACHE (historical tip on .114)
 

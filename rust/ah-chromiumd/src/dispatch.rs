@@ -616,6 +616,52 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 );
             }
         }
+        Msg::FileChooserReply(m) => {
+            if let Some(t) = find_by_tab_id(m.tab_id) {
+                let path_cstrings: Vec<CString> = m
+                    .paths
+                    .iter()
+                    .map(|p| CString::new(p.as_str()).unwrap_or_else(|_| CString::new("").unwrap()))
+                    .collect();
+                let path_ptrs: Vec<*const std::os::raw::c_char> =
+                    path_cstrings.iter().map(|c| c.as_ptr()).collect();
+                let ok = unsafe {
+                    ffi::ts_reply_file_chooser(
+                        t.handle,
+                        m.request_id,
+                        m.accepted,
+                        if path_ptrs.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            path_ptrs.as_ptr()
+                        },
+                        path_ptrs.len(),
+                    )
+                };
+                eprintln!(
+                    "[termsurf-file-chooser] reply tab_id={} request_id={} accepted={} paths={} ok={}",
+                    m.tab_id,
+                    m.request_id,
+                    m.accepted,
+                    m.paths.len(),
+                    ok
+                );
+                trace_pdf_input(format!(
+                    "file-chooser-reply tab={} pane={} request_id={} accepted={} paths={} ok={}",
+                    m.tab_id,
+                    t.pane_id,
+                    m.request_id,
+                    m.accepted,
+                    m.paths.len(),
+                    ok
+                ));
+            } else {
+                eprintln!(
+                    "[termsurf-file-chooser] reply-missing-tab tab_id={} request_id={}",
+                    m.tab_id, m.request_id
+                );
+            }
+        }
         Msg::HttpAuthReply(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {
                 let username =
@@ -1078,6 +1124,81 @@ pub unsafe extern "C" fn on_javascript_dialog_request(
                 origin_url,
                 message,
                 default_prompt_text,
+            },
+        )),
+    };
+    crate::ipc::send(&msg);
+}
+
+pub unsafe extern "C" fn on_file_chooser_request(
+    wc: TsWebContents,
+    request_id: u64,
+    mode: *const std::os::raw::c_char,
+    origin_url: *const std::os::raw::c_char,
+    accept: *const *const std::os::raw::c_char,
+    accept_count: usize,
+    _user_data: *mut c_void,
+) {
+    let Some(t) = find_by_handle(wc) else {
+        eprintln!(
+            "[termsurf-file-chooser] request-missing-tab request_id={}",
+            request_id
+        );
+        return;
+    };
+    let mode = if mode.is_null() {
+        "open".to_string()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(mode) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let origin_url = if origin_url.is_null() {
+        String::new()
+    } else {
+        unsafe { std::ffi::CStr::from_ptr(origin_url) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let mut accept_list = Vec::new();
+    if !accept.is_null() && accept_count > 0 {
+        let slice = unsafe { std::slice::from_raw_parts(accept, accept_count) };
+        for ptr in slice {
+            if ptr.is_null() {
+                continue;
+            }
+            accept_list.push(
+                unsafe { std::ffi::CStr::from_ptr(*ptr) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+    }
+    eprintln!(
+        "[termsurf-file-chooser] request tab_id={} request_id={} mode={} origin={} accept={}",
+        t.tab_id,
+        request_id,
+        mode,
+        origin_url,
+        accept_list.len()
+    );
+    trace_pdf_input(format!(
+        "file-chooser-request tab={} pane={} request_id={} mode={} origin={} accept={}",
+        t.tab_id,
+        t.pane_id,
+        request_id,
+        mode,
+        origin_url,
+        accept_list.len()
+    ));
+    let msg = TermSurfMessage {
+        msg: Some(Msg::FileChooserRequest(
+            proto::termsurf::FileChooserRequest {
+                tab_id: t.tab_id,
+                request_id,
+                mode,
+                accept: accept_list,
+                origin_url,
             },
         )),
     };

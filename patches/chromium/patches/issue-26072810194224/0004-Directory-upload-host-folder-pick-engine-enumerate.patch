@@ -1,0 +1,323 @@
+From 531a8713254be3fb69ad2237acfe95946f1a8ea8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 28 Jul 2026 06:35:48 -0500
+Subject: [PATCH] Directory upload: host folder pick + engine enumerate
+
+kUploadFolder parks and requests upload_folder mode; host returns one
+directory path; engine enumerates regular files (skip symlinks) with
+relative display names. Auto-select of a directory uses the same walk.
+---
+ .../ts_file_select_helper.cc                  | 194 +++++++++++++++++-
+ .../ts_file_select_helper.h                   |  16 +-
+ 2 files changed, 192 insertions(+), 18 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 89715590b1..be6e802c97 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -14,7 +14,9 @@
+ 
+ #include "base/command_line.h"
+ #include "base/containers/span.h"
++#include "base/files/file_enumerator.h"
+ #include "base/files/file_path.h"
++#include "base/files/file_util.h"
+ #include "base/logging.h"
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -29,6 +31,10 @@ namespace {
+ constexpr char kTermSurfFileUploadAutoSelectSwitch[] =
+     "termsurf-file-upload-auto-select";
+ 
++// Soft safety bound for directory walks (document in Exp 4).
++constexpr size_t kMaxUploadFolderFiles = 10'000;
++constexpr int kMaxUploadFolderDepth = 64;
++
+ const char* FileChooserModeName(blink::mojom::FileChooserParams::Mode mode) {
+   switch (mode) {
+     case blink::mojom::FileChooserParams::Mode::kOpen:
+@@ -48,6 +54,8 @@ const char* FileChooserModeWire(blink::mojom::FileChooserParams::Mode mode) {
+   switch (mode) {
+     case blink::mojom::FileChooserParams::Mode::kOpenMultiple:
+       return "open_multiple";
++    case blink::mojom::FileChooserParams::Mode::kUploadFolder:
++      return "upload_folder";
+     case blink::mojom::FileChooserParams::Mode::kOpen:
+     default:
+       return "open";
+@@ -63,10 +71,12 @@ void LogChooserRequest(const char* event,
+             << " open_writable=" << (params.open_writable ? 1 : 0);
+ }
+ 
+-bool IsOrdinaryReadOnlyUpload(const blink::mojom::FileChooserParams& params,
+-                              const char** reason) {
++// Ordinary file open/multi or folder upload (Exp 3 + Exp 4).
++bool IsHostMediatedChooserMode(const blink::mojom::FileChooserParams& params,
++                               const char** reason) {
+   if (params.mode != blink::mojom::FileChooserParams::Mode::kOpen &&
+-      params.mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple) {
++      params.mode != blink::mojom::FileChooserParams::Mode::kOpenMultiple &&
++      params.mode != blink::mojom::FileChooserParams::Mode::kUploadFolder) {
+     *reason = "unsupported-mode";
+     return false;
+   }
+@@ -81,9 +91,9 @@ bool IsOrdinaryReadOnlyUpload(const blink::mojom::FileChooserParams& params,
+   return true;
+ }
+ 
+-bool IsValidUploadFixturePath(const base::FilePath& path,
+-                              int64_t* size,
+-                              const char** reason) {
++bool IsRegularFileAbsolute(const base::FilePath& path,
++                           int64_t* size,
++                           const char** reason) {
+   if (path.empty()) {
+     *reason = "empty-path";
+     return false;
+@@ -113,6 +123,133 @@ bool IsValidUploadFixturePath(const base::FilePath& path,
+   return true;
+ }
+ 
++bool IsDirectoryAbsolute(const base::FilePath& path, const char** reason) {
++  if (path.empty()) {
++    *reason = "empty-path";
++    return false;
++  }
++  if (!path.IsAbsolute()) {
++    *reason = "relative-path";
++    return false;
++  }
++  struct stat stat_info;
++  if (lstat(path.value().c_str(), &stat_info) != 0) {
++    *reason = "missing-path";
++    return false;
++  }
++  if (S_ISLNK(stat_info.st_mode)) {
++    *reason = "symlink";
++    return false;
++  }
++  if (!S_ISDIR(stat_info.st_mode)) {
++    *reason = "not-directory";
++    return false;
++  }
++  return true;
++}
++
++int PathDepthUnderBase(const base::FilePath& base_dir,
++                       const base::FilePath& path) {
++  base::FilePath relative;
++  if (!base_dir.AppendRelativePath(path, &relative)) {
++    return 0;
++  }
++  int depth = 0;
++  for (const auto& component : relative.GetComponents()) {
++    if (component != base::FilePath::kCurrentDirectory &&
++        component != base::FilePath::kParentDirectory) {
++      ++depth;
++    }
++  }
++  return depth;
++}
++
++// Enumerate regular files under |base_dir|. Skips symlinks. Caps count/depth.
++// Display names are paths relative to |base_dir| (for webkitRelativePath).
++bool EnumerateUploadFolder(
++    const base::FilePath& base_dir,
++    std::vector<blink::mojom::FileChooserFileInfoPtr>* out_files,
++    const char** reason) {
++  out_files->clear();
++  if (!IsDirectoryAbsolute(base_dir, reason)) {
++    return false;
++  }
++
++  base::FileEnumerator enumerator(
++      base::FilePath(base_dir), /*recursive=*/true,
++      base::FileEnumerator::FILES | base::FileEnumerator::DIRECTORIES |
++          base::FileEnumerator::SHOW_SYM_LINKS);
++
++  for (base::FilePath path = enumerator.Next(); !path.empty();
++       path = enumerator.Next()) {
++    struct stat stat_info;
++    if (lstat(path.value().c_str(), &stat_info) != 0) {
++      continue;
++    }
++    // Skip any symlink (file or directory).
++    if (S_ISLNK(stat_info.st_mode)) {
++      continue;
++    }
++    if (S_ISDIR(stat_info.st_mode)) {
++      // Do not emit directory entries; recursion is handled by enumerator.
++      // Depth bound: skip descending further by not following into deep trees
++      // — FileEnumerator has already entered; filter files by depth instead.
++      continue;
++    }
++    if (!S_ISREG(stat_info.st_mode)) {
++      continue;
++    }
++
++    const int depth = PathDepthUnderBase(base_dir, path);
++    if (depth > kMaxUploadFolderDepth) {
++      LOG(WARNING) << "[termsurf-file-upload] skip deep path depth=" << depth
++                   << " path=" << path.AsUTF8Unsafe();
++      continue;
++    }
++
++    base::FilePath relative;
++    std::u16string display_name;
++    if (base_dir.AppendRelativePath(path, &relative) && !relative.empty()) {
++      display_name = relative.AsUTF16Unsafe();
++      // webkitRelativePath uses POSIX-style separators in the page.
++      base::ReplaceChars(display_name, u"\\", u"/", &display_name);
++    } else {
++      display_name = path.BaseName().AsUTF16Unsafe();
++    }
++
++    out_files->push_back(blink::mojom::FileChooserFileInfo::NewNativeFile(
++        blink::mojom::NativeFileInfo::New(path, display_name,
++                                         std::vector<std::u16string>())));
++
++    if (out_files->size() >= kMaxUploadFolderFiles) {
++      LOG(WARNING) << "[termsurf-file-upload] folder-enumerate hit max files="
++                   << kMaxUploadFolderFiles << " base="
++                   << base_dir.AsUTF8Unsafe();
++      break;
++    }
++  }
++
++  LOG(INFO) << "[termsurf-file-upload] folder-enumerated count="
++            << out_files->size() << " base=" << base_dir.AsUTF8Unsafe();
++  return true;
++}
++
++void CompleteWithUploadFolder(
++    scoped_refptr<FileSelectListener> listener,
++    const base::FilePath& base_dir) {
++  const char* reason = nullptr;
++  std::vector<blink::mojom::FileChooserFileInfoPtr> files;
++  if (!EnumerateUploadFolder(base_dir, &files, &reason)) {
++    LOG(WARNING) << "[termsurf-file-upload] folder-enumerate failed reason="
++                 << reason << " base=" << base_dir.AsUTF8Unsafe();
++    listener->FileSelectionCanceled();
++    return;
++  }
++  // Empty directory is a successful selection with zero files (Chrome-like).
++  listener->FileSelected(std::move(files), base_dir,
++                         blink::mojom::FileChooserParams::Mode::kUploadFolder);
++}
++
+ struct PendingFileChooser {
+   PendingFileChooser(uint64_t request_id,
+                      scoped_refptr<FileSelectListener> listener,
+@@ -157,7 +294,7 @@ bool TryAutoSelect(RenderFrameHost* render_frame_host,
+   LogChooserRequest("auto-select-request", params);
+ 
+   const char* reason = nullptr;
+-  if (!IsOrdinaryReadOnlyUpload(params, &reason)) {
++  if (!IsHostMediatedChooserMode(params, &reason)) {
+     LOG(WARNING) << "[termsurf-file-upload] cancelled reason=" << reason;
+     listener->FileSelectionCanceled();
+     return true;
+@@ -165,8 +302,23 @@ bool TryAutoSelect(RenderFrameHost* render_frame_host,
+ 
+   base::FilePath selected_path =
+       command_line->GetSwitchValuePath(kTermSurfFileUploadAutoSelectSwitch);
++
++  if (params.mode == blink::mojom::FileChooserParams::Mode::kUploadFolder) {
++    if (!IsDirectoryAbsolute(selected_path, &reason)) {
++      LOG(WARNING) << "[termsurf-file-upload] cancelled reason=" << reason
++                   << " path=" << selected_path.AsUTF8Unsafe();
++      listener->FileSelectionCanceled();
++      return true;
++    }
++    LOG(INFO) << "[termsurf-file-upload] auto-selected-folder path="
++              << selected_path.AsUTF8Unsafe()
++              << " frame=" << render_frame_host;
++    CompleteWithUploadFolder(std::move(listener), selected_path);
++    return true;
++  }
++
+   int64_t selected_size = 0;
+-  if (!IsValidUploadFixturePath(selected_path, &selected_size, &reason)) {
++  if (!IsRegularFileAbsolute(selected_path, &selected_size, &reason)) {
+     LOG(WARNING) << "[termsurf-file-upload] cancelled reason=" << reason
+                  << " path=" << selected_path.AsUTF8Unsafe();
+     listener->FileSelectionCanceled();
+@@ -192,7 +344,7 @@ bool TryHostMediatedChooser(RenderFrameHost* render_frame_host,
+                             scoped_refptr<FileSelectListener> listener,
+                             const blink::mojom::FileChooserParams& params) {
+   const char* reason = nullptr;
+-  if (!IsOrdinaryReadOnlyUpload(params, &reason)) {
++  if (!IsHostMediatedChooserMode(params, &reason)) {
+     return false;
+   }
+ 
+@@ -283,6 +435,26 @@ bool TsReplyFileChooser(WebContents* web_contents,
+       // SAFETY: caller provides |path_count| entries for |paths|.
+       UNSAFE_BUFFERS(base::span(paths, path_count));
+ 
++  if (mode == blink::mojom::FileChooserParams::Mode::kUploadFolder) {
++    // Host returns a single directory path; engine enumerates.
++    const char* first = nullptr;
++    for (const char* path_cstr : path_span) {
++      if (path_cstr && path_cstr[0] != '\0') {
++        first = path_cstr;
++        break;
++      }
++    }
++    if (!first) {
++      listener->FileSelectionCanceled();
++      return true;
++    }
++    base::FilePath dir = base::FilePath::FromUTF8Unsafe(first);
++    LOG(INFO) << "[termsurf-file-upload] host-mediated folder request_id="
++              << stored_request_id << " dir=" << dir.AsUTF8Unsafe();
++    CompleteWithUploadFolder(std::move(listener), dir);
++    return true;
++  }
++
+   std::vector<blink::mojom::FileChooserFileInfoPtr> chooser_files;
+   chooser_files.reserve(path_count);
+   for (const char* path_cstr : path_span) {
+@@ -322,10 +494,10 @@ bool RunTsFileChooser(RenderFrameHost* render_frame_host,
+     return true;
+   }
+ 
+-  // 2) Product open/upload: park listener + host FileChooserRequest.
++  // 2) Product open/multi/folder: park listener + host FileChooserRequest.
+   //    Do not call ui::SelectFileDialog / in-engine NSOpenPanel (Exp 2 Fail).
+   const char* reason = nullptr;
+-  if (IsOrdinaryReadOnlyUpload(params, &reason)) {
++  if (IsHostMediatedChooserMode(params, &reason)) {
+     return TryHostMediatedChooser(render_frame_host, std::move(listener),
+                                   params);
+   }
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+index 9cb66cf7f8..66dd2b3681 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.h
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -22,13 +22,15 @@ class WebContents;
+ 
+ // Handles file chooser requests for TermSurf Chromium.
+ //
+-// 1) If --termsurf-file-upload-auto-select=/abs/path is set, selects that file
+-//    (automation / Issue 799) entirely in-engine — no host panel.
+-// 2) Otherwise, for ordinary open/upload modes, parks the FileSelectListener
+-//    and emits a host FileChooserRequest via C callback. The host (ahterm)
+-//    presents NSOpenPanel; ts_reply_file_chooser completes the listener with
+-//    absolute paths or cancel. Product path must not use in-engine
+-//    ui::SelectFileDialog (Exp 2 Fail: helper Dock / stuck sheet).
++// 1) If --termsurf-file-upload-auto-select=/abs/path is set:
++//    - regular file + open/open_multiple → select that file (engine-local);
++//    - directory + kUploadFolder → enumerate under that dir (engine-local).
++// 2) Otherwise, for open / open_multiple / kUploadFolder, parks the
++//    FileSelectListener and emits a host FileChooserRequest. The host
++//    (ahterm) presents NSOpenPanel (files or folder-only by mode). On reply,
++//    open modes apply path list; upload_folder enumerates the directory
++//    (skip symlinks; relative display names; max 10000 files / depth 64).
++//    Product path must not use in-engine ui::SelectFileDialog (Exp 2 Fail).
+ // 3) Other modes cancel cleanly.
+ //
+ // Always completes |listener|; returns true so the platform delegate must not
+-- 
+2.50.1 (Apple Git-155)
+
