@@ -23,6 +23,9 @@ use edtui::{
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
+/// Last-resort open URL when CLI has no URL and Hello homepage is empty.
+const DEFAULT_HOMEPAGE_URL: &str = "https://astrohacker.com/";
+
 // Tokyo Night palette.
 const BG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
 const FG: Color = Color::Rgb(0xc0, 0xca, 0xf5);
@@ -566,8 +569,6 @@ fn quit_visual_state(state: &QuitControlState) -> BackVisualState {
     }
 }
 
-
-
 fn back_visual_state(state: &BackControlState, route: Option<&BackRoute>) -> BackVisualState {
     let actionable = state.actionable(route);
     BackVisualState {
@@ -1045,37 +1046,36 @@ fn dispatch_refresh_kind(
     state_trace: &mut Option<StateTrace>,
     kind: ipc::RefreshKind,
 ) -> bool {
-    let (sent, route_label, request_id, blocked_reason) =
-        if !state.can_refresh || state.active_tab_id <= 0 {
-            (false, "none", 0, Some("disabled"))
-        } else {
-            match route {
-                Some(BackRoute::Compositor(pane_id)) => {
-                    let sent = compositor
-                        .as_ref()
-                        .map(|conn| match kind {
-                            ipc::RefreshKind::Soft => conn.send_refresh(pane_id),
-                            ipc::RefreshKind::IgnoreCache => {
-                                conn.send_refresh_ignore_cache(pane_id)
-                            }
-                        })
-                        .unwrap_or(false);
-                    (sent, "compositor", 0, None)
-                }
-                Some(BackRoute::Direct(tab_id)) => {
-                    let request_id = browser_conn
-                        .as_ref()
-                        .filter(|conn| conn.tab_id == *tab_id && *tab_id == state.active_tab_id)
-                        .and_then(|conn| match kind {
-                            ipc::RefreshKind::Soft => conn.send_refresh(),
-                            ipc::RefreshKind::IgnoreCache => conn.send_refresh_ignore_cache(),
-                        })
-                        .unwrap_or(0);
-                    (request_id != 0, "direct-browser", request_id, None)
-                }
-                None => (false, "none", 0, Some("unavailable")),
+    let (sent, route_label, request_id, blocked_reason) = if !state.can_refresh
+        || state.active_tab_id <= 0
+    {
+        (false, "none", 0, Some("disabled"))
+    } else {
+        match route {
+            Some(BackRoute::Compositor(pane_id)) => {
+                let sent = compositor
+                    .as_ref()
+                    .map(|conn| match kind {
+                        ipc::RefreshKind::Soft => conn.send_refresh(pane_id),
+                        ipc::RefreshKind::IgnoreCache => conn.send_refresh_ignore_cache(pane_id),
+                    })
+                    .unwrap_or(false);
+                (sent, "compositor", 0, None)
             }
-        };
+            Some(BackRoute::Direct(tab_id)) => {
+                let request_id = browser_conn
+                    .as_ref()
+                    .filter(|conn| conn.tab_id == *tab_id && *tab_id == state.active_tab_id)
+                    .and_then(|conn| match kind {
+                        ipc::RefreshKind::Soft => conn.send_refresh(),
+                        ipc::RefreshKind::IgnoreCache => conn.send_refresh_ignore_cache(),
+                    })
+                    .unwrap_or(0);
+                (request_id != 0, "direct-browser", request_id, None)
+            }
+            None => (false, "none", 0, Some("unavailable")),
+        }
+    };
 
     if let Some(trace) = state_trace.as_mut() {
         let event = if sent {
@@ -1463,7 +1463,7 @@ fn main() -> io::Result<()> {
         None => cli.url.unwrap_or_else(|| {
             hello_homepage
                 .filter(|hp| !hp.is_empty())
-                .unwrap_or_else(|| "https://astrohacker.com/welcome".to_string())
+                .unwrap_or_else(|| DEFAULT_HOMEPAGE_URL.to_string())
         }),
     };
     let mut inspected_tab_id: i64 = if let Some(id) = raw_url.strip_prefix("devtools://") {
@@ -3265,8 +3265,7 @@ fn browser_layout(area: Rect, viewport_height_override: Option<u16>) -> BrowserL
         .saturating_add(forward_width)
         .saturating_add(refresh_width);
     let quit_area = Rect::new(
-        top.x
-            .saturating_add(top.width.saturating_sub(quit_width)),
+        top.x.saturating_add(top.width.saturating_sub(quit_width)),
         top.y,
         quit_width,
         top.height,
@@ -4325,10 +4324,7 @@ mod tests {
         ));
         match dispatch("refresh soft") {
             CommandResult::Error(msg) => {
-                assert!(
-                    msg.contains("Usage: refresh | refresh hard"),
-                    "{msg}"
-                );
+                assert!(msg.contains("Usage: refresh | refresh hard"), "{msg}");
             }
             other => panic!("expected usage error, got {other:?}"),
         }
@@ -5168,10 +5164,7 @@ mod tests {
             .unwrap();
         let hover_buf = terminal.backend().buffer().clone();
         let hover_style = hover_buf[(x, y)].style();
-        assert_eq!(
-            idle_style, hover_style,
-            "hover must not change quit paint"
-        );
+        assert_eq!(idle_style, hover_style, "hover must not change quit paint");
 
         hover.pressed = true;
         terminal
@@ -5179,10 +5172,7 @@ mod tests {
             .unwrap();
         let pressed_buf = terminal.backend().buffer().clone();
         let pressed_style = pressed_buf[(x, y)].style();
-        assert_ne!(
-            idle_style.bg, pressed_style.bg,
-            "pressed must change fill"
-        );
+        assert_ne!(idle_style.bg, pressed_style.bg, "pressed must change fill");
     }
 
     #[test]
@@ -5203,17 +5193,14 @@ mod tests {
         // Mid-string (offset 10)
         assert_eq!(url_click_cursor_col(url, inner, inner.x + 10), 10);
         // Past end of URL but inside bar
-        assert_eq!(
-            url_click_cursor_col(url, inner, inner.x + 100),
-            url.len()
-        );
+        assert_eq!(url_click_cursor_col(url, inner, inner.x + 100), url.len());
         // Empty URL
         assert_eq!(url_click_cursor_col("", inner, inner.x + 5), 0);
     }
 
     #[test]
     fn enter_url_insert_from_click_sets_edit_insert_and_cursor() {
-        let url = "https://astrohacker.com/welcome";
+        let url = DEFAULT_HOMEPAGE_URL;
         let outer = Rect::new(0, 0, 40, 3);
         let mut editor_state = EditorState::new(Lines::from("stale"));
         editor_state.set_clipboard(UrlClipboard::new());
@@ -5479,10 +5466,11 @@ mod tests {
         let key = KeyEvent::new(KeyCode::Char('['), KeyModifiers::SUPER);
         let forward_key = KeyEvent::new(KeyCode::Char(']'), KeyModifiers::SUPER);
         let refresh_key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SUPER);
-        let hard_shift_r =
-            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT);
-        let hard_cmd_shift_r =
-            KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SUPER | KeyModifiers::SHIFT);
+        let hard_shift_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::SHIFT);
+        let hard_cmd_shift_r = KeyEvent::new(
+            KeyCode::Char('R'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+        );
         assert!(local_back_key(&Mode::Control, key));
         assert!(local_back_key(&Mode::Browse, key));
         assert!(local_forward_key(&Mode::Control, forward_key));
