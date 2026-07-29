@@ -3110,12 +3110,36 @@ fn is_version_arg(arg: String) -> bool {
     arg == "--version" || arg == "-V"
 }
 
+/// Expand a bare TCP port to `http://localhost:<port>` (Issue 26072812482260).
+///
+/// `trimmed` must already be whitespace-trimmed. Matches only when every byte is
+/// an ASCII digit and the value parses as `u16` in `1..=65535`. Result uses the
+/// parsed port (canonical decimal). Returns `None` for non-matches so callers
+/// continue normal resolution.
+fn expand_port_shortcut(trimmed: &str) -> Option<String> {
+    if trimmed.is_empty() || !trimmed.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let port: u16 = trimmed.parse().ok()?;
+    if (1..=65535).contains(&port) {
+        Some(format!("http://localhost:{port}"))
+    } else {
+        None
+    }
+}
+
 /// Resolve bare input to a URL or file:// path (Issue 26030112000693).
 ///
 /// Returns `None` if the input is not recognizable as a URL, file, or command.
 /// Callers should show an error for `None`.
 fn resolve_input(input: &str) -> Option<String> {
     let trimmed = input.trim();
+
+    // Step 0: Bare port → http://localhost:<port> (Issue 26072812482260).
+    // Shared by CLI open and URL-bar navigate.
+    if let Some(url) = expand_port_shortcut(trimmed) {
+        return Some(url);
+    }
 
     // Step 1: Has a scheme — use as-is.
     if trimmed.contains("://") {
@@ -5585,5 +5609,75 @@ mod tests {
             true,
             now,
         ));
+    }
+
+    /// Issue 26072812482260: bare port → http://localhost via shared resolve_input.
+    #[test]
+    fn resolve_input_bare_port_expands_to_localhost_http() {
+        let cases = [
+            ("3456", "http://localhost:3456"),
+            ("1", "http://localhost:1"),
+            ("65535", "http://localhost:65535"),
+            ("8080", "http://localhost:8080"),
+            ("03456", "http://localhost:3456"), // leading zeros → parsed port
+            ("  8080  ", "http://localhost:8080"), // outer trim
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                resolve_input(input).as_deref(),
+                Some(want),
+                "input {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_input_rejects_invalid_bare_ports_without_localhost_rewrite() {
+        // Not rewritten to localhost; bare junk stays unresolvable (None).
+        for input in ["0", "65536", "80a", "", "   ", "12 34", "+80", "-1"] {
+            assert_eq!(
+                resolve_input(input),
+                None,
+                "invalid bare port/token {input:?} must not expand to localhost"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_input_non_port_forms_unchanged() {
+        assert_eq!(
+            resolve_input("https://example.com/path").as_deref(),
+            Some("https://example.com/path")
+        );
+        assert_eq!(
+            resolve_input("localhost:3456").as_deref(),
+            Some("http://localhost:3456")
+        );
+        assert_eq!(
+            resolve_input("example.com").as_deref(),
+            Some("https://example.com")
+        );
+        // host:port non-localhost still https-prefixed (existing rule)
+        assert_eq!(
+            resolve_input("example.com:443").as_deref(),
+            Some("https://example.com:443")
+        );
+    }
+
+    #[test]
+    fn expand_port_shortcut_matches_resolve_input_port_contract() {
+        assert_eq!(
+            expand_port_shortcut("3456").as_deref(),
+            Some("http://localhost:3456")
+        );
+        assert_eq!(expand_port_shortcut("0"), None);
+        assert_eq!(expand_port_shortcut("65536"), None);
+        assert_eq!(expand_port_shortcut("80a"), None);
+        assert_eq!(expand_port_shortcut(""), None);
+        // Leading zeros: parse path only on pure digits
+        assert_eq!(
+            expand_port_shortcut("03456").as_deref(),
+            Some("http://localhost:3456")
+        );
     }
 }
