@@ -7,22 +7,66 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26072810194224 Exp 5):** Electron Chromium
-  **`150.0.7871.129`** + cumulative **127** patches from
-  `issue-26072616587256/` **plus** **5** file-chooser patches from
-  `issue-26072810194224/` (**132** total) — see
+- **Active pin (Issue 26073010145867 Exp 3):** Electron Chromium
+  **`150.0.7871.129`** + **127** + **5** file-chooser + **3** drag-freeze
+  (`issue-26073010145867/`) = **135** total — see
   `patches/release-manifest.json`
 - Product branch:
-  `150.0.7871.129-issue-26072810194224-exp5-off-ui-folder-enumerate`
-- Product HEAD: `8bb8dfd999b096a91d708e0488303ce6b1c0f1f1`
-- Product tree: `b365c026e8a5dcedc2cbd9f8a3c5703b69d939a8`
+  `150.0.7871.129-issue-26073010145867-exp3-buildable-drag-suppress`
+- Product HEAD: `c9bcf6210561d152816c4f940be2b46ba53c5273`
+- Product tree: `f4daaeaddac5b9a3e4ae90ecfe4dca44ab54f3e8`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26072810194224 Exp 5 / host file chooser (current tip)
+### Issue 26073010145867 Exp 3 / buildable drag suppress (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `f05c80951f` (Exp 2 unbuildable suppress) |
+| Product branch | `150.0.7871.129-issue-26073010145867-exp3-buildable-drag-suppress` |
+| Product HEAD | `c9bcf6210561d152816c4f940be2b46ba53c5273` |
+| Product tree | `f4daaeaddac5b9a3e4ae90ecfe4dca44ab54f3e8` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (3) |
+| Patch count | **135** |
+| Archive aggregate SHA-256 | `2ad62ca665375d4e966a4e35130dbef5b5b325fa521bdec6df4ee647e239502b` |
+| Scope | Suppress-only `StartDragging` (no dead code); `chromium-fork` **green** |
+| Build | **Pass** — `scripts/build.sh chromium-fork` + `ah-chromiumd --release` (2026-07-30) |
+
+### Issue 26073010145867 Exp 2 / unconditional drag suppress (Fail — unbuildable)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `182ebbac73` (Issue 26073010145867 Exp 1 always-hidden) |
+| Product branch | `150.0.7871.129-issue-26073010145867-exp2-unconditional-drag-suppress` |
+| Product HEAD | `f05c80951f94cd0bfa0e8d1216f91048a3f93b3e` |
+| Product tree | `96c2a7ff258fbcc4d1d107f1927f1c90f5b535dc` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (2) |
+| Patch count | **134** |
+| Archive aggregate SHA-256 | `67a6c4352d30365ac3a0da8da2b6e32b8f8409945e392b899aae7ae521bc0eea` |
+| Scope | Unconditional `SystemDragEnded` + return (left dead stock body) |
+| Status | **Fail** — `-Werror,-Wunreachable-code`; superseded by Exp 3 |
+
+### Issue 26073010145867 Exp 1 / always-hidden product engine (parent tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `8bb8dfd999` (Issue 26072810194224 Exp 5 file chooser) |
+| Product branch | `150.0.7871.129-issue-26073010145867-exp1-always-hidden-product-engine` |
+| Product HEAD | `182ebbac7331d7bf84889f71f64c297cfdbf591b` |
+| Product tree | `fb6c4d4b8898a3bc2c2a4d555864cde221fa33c2` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (1) |
+| Patch count | **133** |
+| Archive aggregate SHA-256 | `16e66907ba151286ff47d03529e5e42c86c1a0081647f04fcfedd34835d61217` |
+| Scope | Unconditional embed-hidden Content Shell mac; remove `switches::kHidden` |
+| Status | Parent of Exp 2 |
+
+### Issue 26072810194224 Exp 5 / host file chooser (parent tip)
 
 | Field | Value |
 | --- | --- |
@@ -37,6 +81,7 @@ branch notes that are safe to commit.
 | Reconstruction | **Pass** — `ensure_fork` already-applied TREE_MATCH (2026-07-28) |
 | Build status | **Green** — `chromium-fork` + `ah-chromiumd` (Exp 5) |
 | Scope | Host-mediated open/multi/folder; off-UI MayBlock enumerate; not drag/save download |
+| Status | Parent of active pin (Issue 26073010145867 Exp 1) |
 
 ### Issue 26072616587256 Exp 1 / Electron pin 150.0.7871.129 (parent series)
 

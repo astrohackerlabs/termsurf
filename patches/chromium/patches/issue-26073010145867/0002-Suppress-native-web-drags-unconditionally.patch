@@ -1,0 +1,38 @@
+From f05c80951f94cd0bfa0e8d1216f91048a3f93b3e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 06:00:01 -0500
+Subject: [PATCH] Suppress native web drags unconditionally
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Embed Chromium cannot finish AppKit drag.
+SystemDragEnded clears Blink; return early.
+No --hidden gate — product is always embed
+(Issue 26073010145867 Exp 2).
+---
+ content/browser/web_contents/web_contents_view_mac.mm | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 08375a1f3a..24c3776523 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -216,6 +216,14 @@ void SetReadWritePermissionsForFile(base::File& file) {
+   if (drag_source_start_rwh_) {
+     return;
+   }
++
++  // TermSurf product Chromium is always an embed helper (CALayerHost in the
++  // host process). Native AppKit drag sessions cannot complete in that
++  // topology; clear Blink drag-source state instead of starting NSDragging
++  // (Issue 26073010145867 Exp 2; restores 780 freeze fix without --hidden).
++  web_contents_->SystemDragEnded(source_rwh);
++  return;
++
+   url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
+   // By allowing nested tasks, the code below also allows Close(),
+   // which would deallocate |this|.  The same problem can occur while
+-- 
+2.50.1 (Apple Git-155)
+

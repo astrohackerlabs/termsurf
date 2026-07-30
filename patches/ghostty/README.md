@@ -1,23 +1,32 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26072810194224 file chooser host)
+## Active Pin (Issue 26073010145867 Exp 1 always-hidden)
 
 - **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
+- **Product branch:** `issue-26073010145867-exp1-always-hidden-product-engine`
+- **Product HEAD:** `61c9a2e3f2e1d681d52126d7ec179543ecb03eff`
+- **Product tree:** `f0484a7ae5fec3b08aeb29420cd129a4f294f251`
+- **Issue archives:** `issue-26072616587256/` (**55**) +
+  `issue-26072810194224/` (**2**) + `issue-26073010145867/` (**1**)
+- **Patches:** **58** total
+- **Archive SHA-256:**
+  `431deb1992bc212d6c93c93820f129711d21c40160396c04a66b265e5df65407`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** prior file-chooser host + stop passing `--hidden` on engine spawn
+  (always embed product).
+
+## Prior Active Pin (Issue 26072810194224 file chooser host)
+
 - **Product branch:** `issue-26072810194224-exp4-directory-upload`
 - **Product HEAD:** `e606b3d13a0e1105be0dd800268041fa767ea4e1`
 - **Product tree:** `5892dbb057f6448b228026611c6526efe4a12da3`
-- **Issue archives:** `issue-26072616587256/` (**55**) +
-  `issue-26072810194224/` (**2** host file-chooser panels)
 - **Patches:** **57** total
 - **Archive SHA-256:**
   `6c2b91635722475eb954368dfe0867c801eb62f07d7aae9fe106f9edc2a2c66d`
-- **Toolchain:** Zig **0.16.0**
-- **Verification:** `ensure_fork` already-applied TREE_MATCH (2026-07-28);
-  host `NSOpenPanel` open + folder modes
-- **Release authority:** `patches/release-manifest.json` ghostty entry
 - **Scope:** Zig 0.16 TermSurf runtime harden **plus** host-mediated file
-  chooser (`termsurf_request_file_chooser` / folder-only panel).
+  chooser. Parent of always-hidden Exp 1.
 
 ## Prior Active Pin (Issue 26072616587256 Exp 3)
 
