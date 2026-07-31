@@ -1574,6 +1574,8 @@ fn main() -> io::Result<()> {
     let mut last_viewport = Rect::default();
     let mut loading_bar_active = false;
     let mut loading_bar_start: Option<Instant> = None;
+    // Download progress owns the surface bar while active (Issue 26073112048720 Exp 3).
+    let mut download_bar_active = false;
     const LOADING_TIMEOUT: Duration = Duration::from_secs(30);
     let mut page_title = String::new();
     let mut target_url = String::new();
@@ -2771,6 +2773,10 @@ fn main() -> io::Result<()> {
                         } else if matches!(state.as_str(), "done" | "error") {
                             refresh_animation.complete(tab_id, navigation_request_id, now);
                         }
+                        // Page-load progress does not override an active download bar.
+                        if download_bar_active {
+                            continue;
+                        }
                         let mut stdout = io::stdout();
                         let _ = match state.as_str() {
                             "loading" => {
@@ -2806,6 +2812,48 @@ fn main() -> io::Result<()> {
                             "error" => {
                                 loading_bar_active = false;
                                 loading_bar_start = None;
+                                write!(stdout, "\x1b]9;4;2\x1b\\")
+                            }
+                            _ => Ok(()),
+                        };
+                        let _ = stdout.flush();
+                    }
+                    ipc::CompositorMessage::DownloadProgress {
+                        tab_id,
+                        state,
+                        received_bytes,
+                        total_bytes,
+                    } => {
+                        // Download progress wins over page-load bar (Exp 3).
+                        if tab_id != 0 && tab_id != current_tab_id {
+                            continue;
+                        }
+                        let mut stdout = io::stdout();
+                        let _ = match state.as_str() {
+                            "active" => {
+                                download_bar_active = true;
+                                loading_bar_active = false;
+                                loading_bar_start = None;
+                                if total_bytes > 0 {
+                                    let pct = ((received_bytes.min(total_bytes) as f64
+                                        / total_bytes as f64)
+                                        * 100.0)
+                                        .round()
+                                        .clamp(0.0, 100.0)
+                                        as u8;
+                                    // OSC 9;4;1;N — ConEmu determinate progress.
+                                    write!(stdout, "\x1b]9;4;1;{}\x1b\\", pct)
+                                } else {
+                                    // OSC 9;4;3 — indeterminate bounce.
+                                    write!(stdout, "\x1b]9;4;3\x1b\\")
+                                }
+                            }
+                            "done" | "cancelled" => {
+                                download_bar_active = false;
+                                write!(stdout, "\x1b]9;4;0\x1b\\")
+                            }
+                            "error" => {
+                                download_bar_active = false;
                                 write!(stdout, "\x1b]9;4;2\x1b\\")
                             }
                             _ => Ok(()),

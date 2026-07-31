@@ -1,21 +1,74 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26073010145867 Exp 1 always-hidden)
+## Active Pin (Issue 26073112048720 Exp 3 download progress bar)
 
 - **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
+- **Product branch:** `issue-26073112048720-exp3-download-progress-bar`
+- **Product HEAD:** `1f07d98fef134c8e559d9491900cfd90c879298f`
+- **Product tree:** `272d1f9655514572d3758fac6d97f63c2787d19d`
+- **Issue archives:** prior + `issue-26073112048720/` (**1**)
+- **Patches:** **63** total
+- **Archive SHA-256:**
+  `e9c29a3274e7b3ce37ec866dbd08aac46f068004f9a816cd8dc4a890b0a5c8b6`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** forward `DownloadProgress` engine messages to bound TUI for OSC
+  surface progress bar.
+
+## Prior Active Pin (Issue 26073012595926 Exp 1 no silent path truncate)
+
+- **Product branch:** `issue-26073012595926-exp1-no-silent-path-truncate`
+- **Product HEAD:** `39cd6ad1316f3e3fe2d9885354e27334d592d12d`
+- **Product tree:** `924b4ea089ea168d3ce2ed6fdfe8385f40753ed0`
+- **Patches:** **62** total
+- **Archive SHA-256:**
+  `03fca79b5d3f0b549c41cc47bd9e89b214283ac39d394205d55e4d978a3dc092`
+- **Scope:** heap multi-file path lists; parent of download-progress Exp 3.
+
+## Prior Active Pin (Issue 26073012571498 Exp 1 chooser-drag hardening)
+
+- **Product branch:** `issue-26073012571498-exp1-chooser-drag-hardening`
+- **Product HEAD:** `1e7600484e4b01819c8067104a5d71c5f05f4bfb`
+- **Product tree:** `4b8c5aa8cc6705424824769fbad9cbc70375e411`
+- **Patches:** **61** total
+- **Archive SHA-256:**
+  `6ae59aba7d3bc5d94f869ac7670e086421bbacf56dd6f392a690db709eef6c72`
+- **Scope:** multi-engine chooser identity + disconnect clear + overlay
+  contains. Parent of multi-file-cap Exp 1.
+
+## Prior Active Pin (Issue 26072811532404 Exp 4 Finder drag-hover)
+
+- **Product branch:** `issue-26072811532404-exp4-finder-drag-hover-highlight`
+- **Product HEAD:** `809bc55dc757dac6b751e0b9c9f1d2b0175b1139`
+- **Product tree:** `4fd442b1f0911cef808bedba0f3454674aa69377`
+- **Patches:** **60** total
+- **Archive SHA-256:**
+  `44b828ca25e3301d22c16e3c6f6bf4fef140a9bc8c0dc5aecba9d251d8af4581`
+- **Scope:** stream Finder drag enter/over/leave/drop phases. Parent of
+  hardening Exp 1.
+
+## Prior Active Pin (Issue 26072811532404 Exp 1 Finder drag-upload)
+
+- **Product branch:** `issue-26072811532404-exp1-finder-drag-upload`
+- **Product HEAD:** `82feeaaae22d0bf4a635205d529099d2966a4179`
+- **Product tree:** `c498e710933142977d67f3603dd77e8b8fe46298`
+- **Patches:** **59** total
+- **Archive SHA-256:**
+  `a6f4f1c4c9c5084f27fc3ccf63658a0f1f81aa15fe8e68802f3e956b4a3bf3dc`
+- **Scope:** host overlay drop-only → `ExternalFileDrop` (no hover stream).
+  Parent of Exp 4 hover.
+
+## Prior Active Pin (Issue 26073010145867 Exp 1 always-hidden)
+
 - **Product branch:** `issue-26073010145867-exp1-always-hidden-product-engine`
 - **Product HEAD:** `61c9a2e3f2e1d681d52126d7ec179543ecb03eff`
 - **Product tree:** `f0484a7ae5fec3b08aeb29420cd129a4f294f251`
-- **Issue archives:** `issue-26072616587256/` (**55**) +
-  `issue-26072810194224/` (**2**) + `issue-26073010145867/` (**1**)
 - **Patches:** **58** total
 - **Archive SHA-256:**
   `431deb1992bc212d6c93c93820f129711d21c40160396c04a66b265e5df65407`
-- **Toolchain:** Zig **0.16.0**
-- **Release authority:** `patches/release-manifest.json` ghostty entry
 - **Scope:** prior file-chooser host + stop passing `--hidden` on engine spawn
-  (always embed product).
+  (always embed product). Parent of Finder drag-upload Exp 1.
 
 ## Prior Active Pin (Issue 26072810194224 file chooser host)
 

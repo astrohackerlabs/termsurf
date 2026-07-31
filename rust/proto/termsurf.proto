@@ -76,6 +76,12 @@ message TermSurfMessage {
     FileChooserRequest file_chooser_request = 48;
     FileChooserReply file_chooser_reply = 49;
 
+    // Host → engine: Finder/OS file drop onto browser surface (upload).
+    ExternalFileDrop external_file_drop = 50;
+
+    // Engine → GUI → TUI: download progress for pane surface progress bar.
+    DownloadProgress download_progress = 51;
+
     // Generic render surface metadata (engine → GUI)
     RenderSurface render_surface = 43;
 
@@ -255,6 +261,15 @@ message LoadingState {
   uint64 navigation_request_id = 4; // nonzero only for a correlated Refresh
 }
 
+// Chromium download lifecycle → pane progress bar (Issue 26073112048720 Exp 3).
+// total_bytes == 0 means unknown size → indeterminate surface progress.
+message DownloadProgress {
+  int64 tab_id = 1;
+  string state = 2;           // "active", "done", "error", "cancelled"
+  uint64 received_bytes = 3;
+  uint64 total_bytes = 4;     // 0 = unknown
+}
+
 message TitleChanged {
   int64 tab_id = 1;
   string title = 2;
@@ -301,6 +316,17 @@ message FileChooserReply {
   uint64 request_id = 2;
   bool accepted = 3;
   repeated string paths = 4;
+}
+
+// Host → engine: OS/Finder file drag phases onto the overlay at client (x,y).
+// phase: "enter" | "over" | "leave" | "drop" (empty/omitted treated as "drop").
+// Exp 4 streams enter/over/leave for page hover highlight; drop completes upload.
+message ExternalFileDrop {
+  int64 tab_id = 1;
+  repeated string paths = 2;
+  double x = 3;
+  double y = 4;
+  string phase = 5;
 }
 
 message ConsoleMessage {

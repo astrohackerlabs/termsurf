@@ -7,21 +7,142 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26073010145867 Exp 3):** Electron Chromium
-  **`150.0.7871.129`** + **127** + **5** file-chooser + **3** drag-freeze
-  (`issue-26073010145867/`) = **135** total — see
+- **Active pin (Issue 26073112048720 Exp 4):** Electron Chromium
+  **`150.0.7871.129`** + prior series + **3** issue patches
+  (`issue-26073112048720/`) = **143** total — see
   `patches/release-manifest.json`
 - Product branch:
-  `150.0.7871.129-issue-26073010145867-exp3-buildable-drag-suppress`
-- Product HEAD: `c9bcf6210561d152816c4f940be2b46ba53c5273`
-- Product tree: `f4daaeaddac5b9a3e4ae90ecfe4dca44ab54f3e8`
+  `150.0.7871.129-issue-26073112048720-exp4-determinate-download-progress`
+- Product HEAD: `8a430a734739b48e3c315b10fa48e3debe375944`
+- Product tree: `818f62f4453f0dc69621f771bf4c46449d95f678`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
 
-### Issue 26073010145867 Exp 3 / buildable drag suppress (current tip)
+
+### Issue 26073112048720 Exp 4 / determinate totals (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `7d6838a2a1` (Exp 3 download progress bar) |
+| Product branch | `150.0.7871.129-issue-26073112048720-exp4-determinate-download-progress` |
+| Product HEAD | `8a430a734739b48e3c315b10fa48e3debe375944` |
+| Product tree | `818f62f4453f0dc69621f771bf4c46449d95f678` |
+| Archives | prior + `issue-26073112048720/` (3) |
+| Patch count | **143** |
+| Archive aggregate SHA-256 | `92ff6915bd042e0cab7b6d9ae8fcd99b1656ce8817bedf63f629d3c92e59c61c` |
+| Scope | `ResolveDownloadTotalBytes`: GetTotalBytes, PercentComplete recovery, Content-Length fallback |
+| Build | See experiment Results |
+
+### Issue 26073112048720 Exp 3 / download progress (parent tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `1085766faa` (Exp 1 silent Downloads) |
+| Product branch | `150.0.7871.129-issue-26073112048720-exp3-download-progress-bar` |
+| Product HEAD | `7d6838a2a191d0dd244839b83a773b861d3f21a1` |
+| Product tree | `9036aee872212d13962659f98079ed7930d2a448` |
+| Archives | prior + `issue-26073112048720/` (2) |
+| Patch count | **142** |
+| Archive aggregate SHA-256 | `cb0ccd4d6f64b20d16fa5785397a9580f90e48c8b20ab3b5532c11c2506224ca` |
+| Scope | DownloadManager observer → C callback for pane progress bar |
+| Build | See experiment Results |
+
+### Issue 26073112048720 Exp 1 / silent OS Downloads (parent)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `db96082f27` (Issue 26073012571498 Exp 1 hardening) |
+| Product branch | `150.0.7871.129-issue-26073112048720-exp1-silent-downloads-dir` |
+| Product HEAD | `1085766faa1d1ce2448480cfb797fdee3e7ad50b` |
+| Product tree | `90ba30e7567e927a525cda3bef73a7c898cfee77` |
+| Archives | prior + `issue-26073112048720/` (1) |
+| Patch count | **141** |
+| Archive aggregate SHA-256 | `13af17c6b7e945160c9aa994aafa4437240f49c680d83388ef0de78d15f56d2d` |
+| Scope | Silent download targets; default `chrome::DIR_DEFAULT_DOWNLOADS`; `--termsurf-download-dir` override; `GetUniquePath` |
+| Build | See experiment Results |
+
+### Issue 26073012571498 Exp 1 / chooser-drag hardening (parent tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `caea31b5e2` (Issue 26072811532404 Exp 4 hover) |
+| Product branch | `150.0.7871.129-issue-26073012571498-exp1-chooser-drag-hardening` |
+| Product HEAD | `db96082f276c1bc623d1fb55857c87179b389d26` |
+| Product tree | `8186a48488f346d4a5be4ff4f5082c3f02b37555` |
+| Archives | prior + `issue-26073012571498/` (1) |
+| Patch count | **140** |
+| Archive aggregate SHA-256 | `683a1e80fd4cfe69f8230ad7712cc3af6ba209d0739c888dcc34d89fefc70289` |
+| Scope | `TsClearFileTransferStateForWebContents` on DestroyTab/ShutdownTabs — cancel chooser + clear drag sessions |
+| Build | **Pass** — `chromium-fork` + `ah-chromiumd --release` (2026-07-30) |
+
+### Issue 26072811532404 Exp 4 / Finder drag-hover phases (parent tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `7f40f72514` (Exp 3 page-handled drop Pass) |
+| Product branch | `150.0.7871.129-issue-26072811532404-exp4-finder-drag-hover-highlight` |
+| Product HEAD | `caea31b5e2b9171bcb7c6003b2cd964fbfdc1c51` |
+| Product tree | `93729c60099a4a6c79951bf6a4e0574cd50de348` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (3) + `issue-26072811532404/` (4) |
+| Patch count | **139** |
+| Archive aggregate SHA-256 | `9386ed5d63e924e21f6a425aa0c31ab665247c11c738a37ce07604f245d8740b` |
+| Scope | Phase-aware `TsApplyExternalFileDrop` (`enter`/`over`/`leave`/`drop`) + session DropData for live hover |
+| Status | Parent of hardening Exp 1 |
+
+### Issue 26072811532404 Exp 3 / page file drop not navigate (parent tip — Pass)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `8a4683a3d8` (Exp 2 view_id fix — Fail: navigated to file body) |
+| Product branch | `150.0.7871.129-issue-26072811532404-exp3-page-file-drop-not-navigate` |
+| Product HEAD | `7f40f72514d31452ccd22e7ffed0228a38db9170` |
+| Product tree | `cfcfe63d953548f7faea512e0726090f8d1fa01b` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (3) + `issue-26072811532404/` (3) |
+| Patch count | **138** |
+| Archive aggregate SHA-256 | `117820af5e287434122b342a645899f6b23bfe9e880800fc59e558566d59600c` |
+| Scope | `document_is_handling_drag=true`, Enter→Over→Drop one-shot |
+| Status | **Pass** (operator drop records filename) |
+
+### Issue 26072811532404 Exp 2 / drop view_id fix (parent tip — Fail)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `4c74755d7a` (Exp 1 Finder drag-upload apply — Fail at runtime) |
+| Product branch | `150.0.7871.129-issue-26072811532404-exp2-drop-view-id-fix` |
+| Product HEAD | `8a4683a3d8f2e277e67e1c909b932849836735fb` |
+| Product tree | `10dfc5990e83545c6fb8b87ff0df1573fbc35b66` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (3) + `issue-26072811532404/` (2) |
+| Patch count | **137** |
+| Archive aggregate SHA-256 | `74e2ca26d15e209563667a60920265a1804df19da11bdfdbbc05f1d530d05c3d` |
+| Scope | `FilterDropData` only; bare enter+drop |
+| Status | **Fail** — operator: tab navigated to file body |
+
+### Issue 26072811532404 Exp 1 / Finder drag-upload apply (parent tip — Fail)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `c9bcf62105` (Issue 26073010145867 Exp 3 buildable drag suppress) |
+| Product branch | `150.0.7871.129-issue-26072811532404-exp1-finder-drag-upload` |
+| Product HEAD | `4c74755d7a91a838984f1819c48356bad71a0712` |
+| Product tree | `2b6f8471c47923907d969c3293d1e9671bb78a83` |
+| Archives | `issue-26072616587256/` (127) + `issue-26072810194224/` (5) + `issue-26073010145867/` (3) + `issue-26072811532404/` (1) |
+| Patch count | **136** |
+| Archive aggregate SHA-256 | `4831600b772e7c7a904a9a032bac2245bdfb7746cc07980e4e934e8d6865c476` |
+| Scope | `TsApplyExternalFileDrop` without `view_id` / `FilterDropData` |
+| Status | **Fail** — operator `SIGABRT` in `GrantFileAccessFromDropData` |
+
+### Issue 26073010145867 Exp 3 / buildable drag suppress (parent tip)
 
 | Field | Value |
 | --- | --- |

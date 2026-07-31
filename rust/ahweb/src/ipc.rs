@@ -61,6 +61,12 @@ pub enum CompositorMessage {
         _progress: u8,
         navigation_request_id: u64,
     },
+    DownloadProgress {
+        tab_id: i64,
+        state: String,
+        received_bytes: u64,
+        total_bytes: u64,
+    },
     NavigationState {
         tab_id: i64,
         can_go_back: bool,
@@ -672,6 +678,17 @@ fn dispatch_message(
                 state: m.state.clone(),
                 _progress: m.progress as u8,
                 navigation_request_id: m.navigation_request_id,
+            }));
+        }
+        Some(Msg::DownloadProgress(m)) => {
+            if tab_id != 0 && m.tab_id != 0 && m.tab_id != tab_id {
+                return;
+            }
+            let _ = event_tx.send(super::LoopEvent::Ipc(CompositorMessage::DownloadProgress {
+                tab_id: m.tab_id,
+                state: m.state.clone(),
+                received_bytes: m.received_bytes,
+                total_bytes: m.total_bytes,
             }));
         }
         Some(Msg::NavigationState(m)) => {

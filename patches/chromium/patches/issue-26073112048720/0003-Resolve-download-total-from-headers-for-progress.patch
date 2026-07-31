@@ -1,0 +1,100 @@
+From 8a430a734739b48e3c315b10fa48e3debe375944 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 31 Jul 2026 08:31:52 -0500
+Subject: [PATCH] Resolve download total from headers for progress
+
+Prefer GetTotalBytes, then PercentComplete recovery,
+then Content-Length so known-size downloads report
+non-zero totals for determinate pane progress.
+---
+ .../ts_download_progress.cc                   | 55 +++++++++++++++++--
+ 1 file changed, 50 insertions(+), 5 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_download_progress.cc b/content/libtermsurf_chromium/ts_download_progress.cc
+index fa35942571..3ab5f7800a 100644
+--- a/content/libtermsurf_chromium/ts_download_progress.cc
++++ b/content/libtermsurf_chromium/ts_download_progress.cc
+@@ -10,11 +10,13 @@
+ 
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
++#include "base/byte_count.h"
+ #include "components/download/public/common/download_item.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/download_item_utils.h"
+ #include "content/public/browser/download_manager.h"
+ #include "content/public/browser/web_contents.h"
++#include "net/http/http_response_headers.h"
+ 
+ namespace content {
+ namespace {
+@@ -27,6 +29,52 @@ extern "C" void (*g_on_download_progress)(void* wc,
+                                           void* user_data);
+ extern "C" void* g_on_download_progress_data;
+ 
++// Resolve total size for pane progress (Issue 26073112048720 Exp 4).
++// Returns 0 when size is truly unknown → indeterminate bar.
++// Prefer DownloadItem totals; fall back to Content-Length when the item has not
++// populated total_bytes_ yet (common early in Content-Length attachments).
++uint64_t ResolveDownloadTotalBytes(download::DownloadItem* item,
++                                   uint64_t received) {
++  if (!item) {
++    return 0;
++  }
++
++  const int64_t item_total = item->GetTotalBytes();
++  if (item_total > 0) {
++    return static_cast<uint64_t>(item_total);
++  }
++
++  // PercentComplete is defined only when total_bytes_ > 0 in Chromium; if it
++  // returns 1–100, recover total from received when possible.
++  const int pct = item->PercentComplete();
++  if (pct > 0 && pct <= 100 && received > 0) {
++    // total ≈ received * 100 / pct (integer). Avoid div-by-zero; pct >= 1.
++    const uint64_t recovered =
++        (received * 100ULL + static_cast<uint64_t>(pct) - 1) /
++        static_cast<uint64_t>(pct);
++    if (recovered >= received) {
++      return recovered;
++    }
++  }
++
++  const scoped_refptr<const net::HttpResponseHeaders> headers =
++      item->GetResponseHeaders();
++  if (headers) {
++    std::optional<base::ByteCount> content_length = headers->GetContentLength();
++    if (content_length.has_value() && content_length->InBytes() > 0) {
++      return static_cast<uint64_t>(content_length->InBytes());
++    }
++  }
++
++  // Completed download with unknown total: treat final size as total so the
++  // last active update before done can show 100% if we emit active first.
++  if (item->GetState() == download::DownloadItem::COMPLETE && received > 0) {
++    return received;
++  }
++
++  return 0;
++}
++
+ class TsDownloadProgressObserver : public DownloadManager::Observer,
+                                    public download::DownloadItem::Observer {
+  public:
+@@ -101,11 +149,8 @@ class TsDownloadProgressObserver : public DownloadManager::Observer,
+     }
+     const uint64_t received =
+         static_cast<uint64_t>(std::max<int64_t>(0, item->GetReceivedBytes()));
+-    int64_t total_signed = item->GetTotalBytes();
+-    if (total_signed <= 0) {
+-      total_signed = 0;
+-    }
+-    const uint64_t total = static_cast<uint64_t>(total_signed);
++    // Exp 4: robust total so Content-Length downloads become determinate.
++    const uint64_t total = ResolveDownloadTotalBytes(item, received);
+     TsNotifyDownloadProgress(static_cast<void*>(wc), state, received, total);
+   }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

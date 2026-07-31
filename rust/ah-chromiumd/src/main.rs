@@ -189,6 +189,7 @@ fn main() {
         ffi::ts_set_on_ca_context_id(Some(dispatch::on_ca_context_id), ptr::null_mut());
         ffi::ts_set_on_url_changed(Some(dispatch::on_url_changed), ptr::null_mut());
         ffi::ts_set_on_loading_state(Some(dispatch::on_loading_state), ptr::null_mut());
+        ffi::ts_set_on_download_progress(Some(dispatch::on_download_progress), ptr::null_mut());
         ffi::ts_set_on_navigation_state(Some(dispatch::on_navigation_state), ptr::null_mut());
         ffi::ts_set_on_title_changed(Some(dispatch::on_title_changed), ptr::null_mut());
         ffi::ts_set_on_cursor_changed(Some(dispatch::on_cursor_changed), ptr::null_mut());

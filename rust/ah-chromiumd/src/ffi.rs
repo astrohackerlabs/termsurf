@@ -114,6 +114,15 @@ extern "C" {
         path_count: usize,
     ) -> bool;
 
+    pub fn ts_apply_external_file_drop(
+        wc: TsWebContents,
+        paths: *const *const c_char,
+        path_count: usize,
+        x: c_double,
+        y: c_double,
+        phase: *const c_char,
+    ) -> bool;
+
     pub fn ts_reply_http_auth(
         wc: TsWebContents,
         request_id: c_ulonglong,
@@ -141,6 +150,13 @@ extern "C" {
 
     pub fn ts_set_on_loading_state(
         cb: Option<unsafe extern "C" fn(TsWebContents, *const c_char, c_int, *mut c_void)>,
+        user_data: *mut c_void,
+    );
+
+    pub fn ts_set_on_download_progress(
+        cb: Option<
+            unsafe extern "C" fn(TsWebContents, *const c_char, u64, u64, *mut c_void),
+        >,
         user_data: *mut c_void,
     );
 

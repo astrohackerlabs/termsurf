@@ -662,6 +662,64 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 );
             }
         }
+        Msg::ExternalFileDrop(m) => {
+            if let Some(t) = find_by_tab_id(m.tab_id) {
+                let path_cstrings: Vec<CString> = m
+                    .paths
+                    .iter()
+                    .map(|p| CString::new(p.as_str()).unwrap_or_else(|_| CString::new("").unwrap()))
+                    .collect();
+                let path_ptrs: Vec<*const std::os::raw::c_char> =
+                    path_cstrings.iter().map(|c| c.as_ptr()).collect();
+                let phase = if m.phase.is_empty() {
+                    "drop"
+                } else {
+                    m.phase.as_str()
+                };
+                let phase_c =
+                    CString::new(phase).unwrap_or_else(|_| CString::new("drop").unwrap());
+                let ok = unsafe {
+                    ffi::ts_apply_external_file_drop(
+                        t.handle,
+                        if path_ptrs.is_empty() {
+                            std::ptr::null()
+                        } else {
+                            path_ptrs.as_ptr()
+                        },
+                        path_ptrs.len(),
+                        m.x,
+                        m.y,
+                        phase_c.as_ptr(),
+                    )
+                };
+                eprintln!(
+                    "[termsurf-file-drop] tab_id={} phase={} paths={} x={} y={} ok={}",
+                    m.tab_id,
+                    phase,
+                    m.paths.len(),
+                    m.x,
+                    m.y,
+                    ok
+                );
+                trace_pdf_input(format!(
+                    "external-file-drop tab={} pane={} phase={} paths={} x={} y={} ok={}",
+                    m.tab_id,
+                    t.pane_id,
+                    phase,
+                    m.paths.len(),
+                    m.x,
+                    m.y,
+                    ok
+                ));
+            } else {
+                eprintln!(
+                    "[termsurf-file-drop] missing-tab tab_id={} phase={} paths={}",
+                    m.tab_id,
+                    m.phase,
+                    m.paths.len()
+                );
+            }
+        }
         Msg::HttpAuthReply(m) => {
             if let Some(t) = find_by_tab_id(m.tab_id) {
                 let username =
@@ -812,6 +870,30 @@ pub unsafe extern "C" fn on_url_changed(
         msg: Some(Msg::UrlChanged(proto::termsurf::UrlChanged {
             tab_id: t.tab_id,
             url: url_str,
+        })),
+    };
+    crate::ipc::send(&msg);
+}
+
+pub unsafe extern "C" fn on_download_progress(
+    wc: TsWebContents,
+    state: *const std::os::raw::c_char,
+    received_bytes: u64,
+    total_bytes: u64,
+    _user_data: *mut c_void,
+) {
+    let state_str = unsafe { std::ffi::CStr::from_ptr(state) }
+        .to_string_lossy()
+        .into_owned();
+    let Some(t) = find_by_handle(wc) else {
+        return;
+    };
+    let msg = TermSurfMessage {
+        msg: Some(Msg::DownloadProgress(proto::termsurf::DownloadProgress {
+            tab_id: t.tab_id,
+            state: state_str,
+            received_bytes,
+            total_bytes,
         })),
     };
     crate::ipc::send(&msg);

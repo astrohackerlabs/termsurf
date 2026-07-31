@@ -1,0 +1,102 @@
+From db96082f276c1bc623d1fb55857c87179b389d26 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 08:05:55 -0500
+Subject: [PATCH] Clear file transfer state on tab destroy
+
+Cancel parked choosers and drop drag sessions
+when DestroyTab tears the WebContents down.
+---
+ .../ts_browser_main_parts.cc                  | 11 +++++++++
+ .../ts_file_select_helper.cc                  | 23 +++++++++++++++++++
+ .../ts_file_select_helper.h                   |  5 ++++
+ 3 files changed, 39 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index f4fac52440..1c23fccc8e 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -29,6 +29,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/ts_browser_context.h"
+ #include "content/libtermsurf_chromium/ts_download_support.h"
++#include "content/libtermsurf_chromium/ts_file_select_helper.h"
+ #include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -693,6 +694,11 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+   for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
+     if ((*it)->shell &&
+         static_cast<void*>((*it)->shell->web_contents()) == wc_handle) {
++      // Cancel parked file chooser + clear external-drag session before WC dies
++      // (Issue 26073012571498 Exp 1).
++      if (WebContents* wc = (*it)->shell->web_contents()) {
++        TsClearFileTransferStateForWebContents(wc);
++      }
+       (*it)->tab_observer.reset();
+ #if BUILDFLAG(IS_MAC)
+       if (auto* view = (*it)->shell->web_contents()->GetRenderWidgetHostView()) {
+@@ -713,6 +719,11 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+ void TsBrowserMainParts::ShutdownTabs() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   for (auto& tab : tabs_) {
++    if (tab->shell) {
++      if (WebContents* wc = tab->shell->web_contents()) {
++        TsClearFileTransferStateForWebContents(wc);
++      }
++    }
+     tab->tab_observer.reset();
+ #if BUILDFLAG(IS_MAC)
+     if (tab->shell) {
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 7dd40bbd69..22bc165321 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -682,6 +682,29 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+   return true;
+ }
+ 
++void TsClearFileTransferStateForWebContents(WebContents* web_contents) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!web_contents) {
++    return;
++  }
++
++  auto& pending = PendingChoosers();
++  auto pit = pending.find(web_contents);
++  if (pit != pending.end()) {
++    LOG(INFO) << "[termsurf-file-upload] cancel pending on destroy request_id="
++              << pit->second.request_id;
++    if (pit->second.listener) {
++      pit->second.listener->FileSelectionCanceled();
++    }
++    pending.erase(pit);
++  }
++
++  auto& sessions = ExternalDragSessions();
++  if (sessions.erase(web_contents) > 0) {
++    LOG(INFO) << "[termsurf-file-drop] cleared drag session on destroy";
++  }
++}
++
+ bool RunTsFileChooser(RenderFrameHost* render_frame_host,
+                       scoped_refptr<FileSelectListener> listener,
+                       const blink::mojom::FileChooserParams& params) {
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+index b5ecf6f559..6ab868042b 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.h
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -76,6 +76,11 @@ void TsNotifyFileChooserRequest(void* wc_handle,
+                                 const char* const* accept,
+                                 size_t accept_count);
+ 
++// Cancel parked chooser listener (if any) and clear external-drag session for
++// |web_contents|. Call from DestroyTab / ShutdownTabs before deleting WC
++// (Issue 26073012571498 Exp 1 lifecycle cleanup).
++void TsClearFileTransferStateForWebContents(WebContents* web_contents);
++
+ }  // namespace content
+ 
+ #endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_FILE_SELECT_HELPER_H_
+-- 
+2.50.1 (Apple Git-155)
+

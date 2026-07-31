@@ -1,0 +1,36 @@
+From 8a4683a3d8f2e277e67e1c909b932849836735fb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 07:04:35 -0500
+Subject: [PATCH] Set DropData view_id before external file drop
+
+FilterDropData stamps routing before enter-drop,
+so GrantFileAccess CHECK no longer goes pop.
+---
+ content/libtermsurf_chromium/ts_file_select_helper.cc | 6 +++++-
+ 1 file changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index a2c44c7b16..d197d440d3 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -584,12 +584,16 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+     return false;
+   }
+ 
++  // Stock contract: GrantFileAccessFromDropData CHECKs view_id == GetRoutingID().
++  // Exp 1 omitted this and aborted; FilterDropData sets view_id (and filters URLs).
++  rwh->FilterDropData(&drop_data);
++
+   const gfx::PointF client_pt(static_cast<float>(x), static_cast<float>(y));
+   const gfx::PointF screen_pt = client_pt;
+   const blink::DragOperationsMask ops = blink::kDragOperationCopy;
+ 
+   LOG(INFO) << "[termsurf-file-drop] apply count=" << drop_data.filenames.size()
+-            << " x=" << x << " y=" << y;
++            << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id;
+ 
+   // Enter then drop so the renderer builds a dataTransfer with files.
+   rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
+-- 
+2.50.1 (Apple Git-155)
+

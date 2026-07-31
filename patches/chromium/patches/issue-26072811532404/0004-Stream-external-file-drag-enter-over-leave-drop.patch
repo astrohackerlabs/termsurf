@@ -1,0 +1,259 @@
+From caea31b5e2b9171bcb7c6003b2cd964fbfdc1c51 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 07:28:56 -0500
+Subject: [PATCH] Stream external file drag enter over leave drop
+
+Phase-aware apply keeps hover live on the page;
+session DropData bridges over until drop stage.
+---
+ .../libtermsurf_chromium.cc                   |   7 +-
+ .../libtermsurf_chromium.h                    |   6 +-
+ .../ts_file_select_helper.cc                  | 133 ++++++++++++++----
+ .../ts_file_select_helper.h                   |   8 +-
+ 4 files changed, 115 insertions(+), 39 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 8661ece46e..58e9673073 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -474,13 +474,14 @@ bool ts_apply_external_file_drop(ts_web_contents_t wc,
+                                  const char* const* paths,
+                                  size_t path_count,
+                                  double x,
+-                                 double y) {
++                                 double y,
++                                 const char* phase) {
+   if (!wc) {
+     return false;
+   }
+   auto* web_contents = static_cast<content::WebContents*>(wc);
+-  return content::TsApplyExternalFileDrop(web_contents, paths, path_count, x,
+-                                          y);
++  return content::TsApplyExternalFileDrop(web_contents, paths, path_count, x, y,
++                                          phase);
+ }
+ 
+ bool ts_reply_http_auth(ts_web_contents_t wc,
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 7d5eb60ec3..658eac45dc 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -164,12 +164,14 @@ TS_EXPORT bool ts_reply_file_chooser(ts_web_contents_t wc,
+                                      const char* const* paths,
+                                      size_t path_count);
+ 
+-/* Host-mediated OS/Finder file drop onto the page (DIP/view coords). */
++/* Host-mediated OS/Finder file drag phase onto the page (DIP/view coords).
++   phase: "enter"|"over"|"leave"|"drop" (NULL/empty => "drop"). */
+ TS_EXPORT bool ts_apply_external_file_drop(ts_web_contents_t wc,
+                                            const char* const* paths,
+                                            size_t path_count,
+                                            double x,
+-                                           double y);
++                                           double y,
++                                           const char* phase);
+ 
+ TS_EXPORT bool ts_reply_http_auth(ts_web_contents_t wc,
+                                   uint64_t request_id,
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 999ccd2f8a..7dd40bbd69 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -540,27 +540,25 @@ bool TsReplyFileChooser(WebContents* web_contents,
+   return true;
+ }
+ 
+-bool TsApplyExternalFileDrop(WebContents* web_contents,
+-                             const char* const* paths,
+-                             size_t path_count,
+-                             double x,
+-                             double y) {
+-  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  if (!web_contents || !paths || path_count == 0) {
+-    return false;
+-  }
++namespace {
+ 
+-  // paths is a C array of absolute path C strings from the host drop FFI.
+-  base::span<const char* const> path_span =
+-      // SAFETY: caller provides |path_count| entries for |paths|.
+-      UNSAFE_BUFFERS(base::span(paths, path_count));
++// Active host-mediated drag session per WebContents (Exp 4 hover stream).
++std::map<WebContents*, DropData>& ExternalDragSessions() {
++  static auto* sessions = new std::map<WebContents*, DropData>();
++  return *sessions;
++}
+ 
++DropData BuildExternalDropData(const char* const* paths, size_t path_count) {
+   DropData drop_data;
+   drop_data.did_originate_from_renderer = false;
+-  // Page-handled drop (not default navigate-to-file). Stock external-drop
+-  // tests and web_drag_dest_mac set this before enter/drop (Exp 3).
+   drop_data.operation = ui::mojom::DragOperation::kCopy;
+   drop_data.document_is_handling_drag = true;
++  if (!paths || path_count == 0) {
++    return drop_data;
++  }
++  base::span<const char* const> path_span =
++      // SAFETY: caller provides |path_count| entries for |paths|.
++      UNSAFE_BUFFERS(base::span(paths, path_count));
+   for (const char* path_cstr : path_span) {
+     if (!path_cstr || path_cstr[0] == '\0') {
+       continue;
+@@ -573,41 +571,114 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+     }
+     drop_data.filenames.emplace_back(path, path.BaseName());
+   }
+-  if (drop_data.filenames.empty()) {
+-    LOG(WARNING) << "[termsurf-file-drop] no valid paths";
+-    return false;
+-  }
++  return drop_data;
++}
+ 
++RenderWidgetHostImpl* ExternalDragRwh(WebContents* web_contents) {
++  if (!web_contents) {
++    return nullptr;
++  }
+   RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
+   if (!view) {
+-    LOG(WARNING) << "[termsurf-file-drop] no RWHV";
++    return nullptr;
++  }
++  return static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++}
++
++}  // namespace
++
++bool TsApplyExternalFileDrop(WebContents* web_contents,
++                             const char* const* paths,
++                             size_t path_count,
++                             double x,
++                             double y,
++                             const char* phase) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!web_contents) {
+     return false;
+   }
+-  auto* rwh = static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++
++  const std::string phase_str = base::ToLowerASCII(
++      (phase && phase[0] != '\0') ? std::string(phase) : std::string("drop"));
++
++  auto* rwh = ExternalDragRwh(web_contents);
+   if (!rwh) {
++    LOG(WARNING) << "[termsurf-file-drop] no RWH phase=" << phase_str;
+     return false;
+   }
+ 
+-  // Stock contract: GrantFileAccessFromDropData CHECKs view_id == GetRoutingID().
+-  // Exp 1 omitted this and aborted; FilterDropData sets view_id (and filters URLs).
+-  rwh->FilterDropData(&drop_data);
+-
+   const gfx::PointF client_pt(static_cast<float>(x), static_cast<float>(y));
+   const gfx::PointF screen_pt = client_pt;
+-  // Match stock external-drop browsertests (kDragOperationEvery on enter/over).
+   const blink::DragOperationsMask ops = blink::kDragOperationEvery;
++  auto& sessions = ExternalDragSessions();
+ 
+-  LOG(INFO) << "[termsurf-file-drop] apply count=" << drop_data.filenames.size()
++  if (phase_str == "leave") {
++    rwh->DragTargetDragLeave(client_pt, screen_pt);
++    sessions.erase(web_contents);
++    LOG(INFO) << "[termsurf-file-drop] leave x=" << x << " y=" << y;
++    return true;
++  }
++
++  if (phase_str == "over") {
++    auto it = sessions.find(web_contents);
++    if (it == sessions.end()) {
++      // No enter yet: treat as enter if paths present, else over alone is a no-op.
++      DropData drop_data = BuildExternalDropData(paths, path_count);
++      if (drop_data.filenames.empty()) {
++        return false;
++      }
++      rwh->FilterDropData(&drop_data);
++      rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                               base::DoNothing());
++      sessions[web_contents] = drop_data;
++    }
++    rwh->DragTargetDragOver(client_pt, screen_pt, ops, 0, base::DoNothing());
++    LOG(INFO) << "[termsurf-file-drop] over x=" << x << " y=" << y;
++    return true;
++  }
++
++  if (phase_str == "enter") {
++    DropData drop_data = BuildExternalDropData(paths, path_count);
++    if (drop_data.filenames.empty()) {
++      LOG(WARNING) << "[termsurf-file-drop] enter with no paths";
++      return false;
++    }
++    rwh->FilterDropData(&drop_data);
++    rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                             base::DoNothing());
++    sessions[web_contents] = drop_data;
++    LOG(INFO) << "[termsurf-file-drop] enter count=" << drop_data.filenames.size()
++              << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id;
++    return true;
++  }
++
++  // drop (default): full upload apply. Prefer paths from host; fall back to session.
++  DropData drop_data = BuildExternalDropData(paths, path_count);
++  if (drop_data.filenames.empty()) {
++    auto it = sessions.find(web_contents);
++    if (it != sessions.end()) {
++      drop_data = it->second;
++    }
++  }
++  if (drop_data.filenames.empty()) {
++    LOG(WARNING) << "[termsurf-file-drop] drop with no paths";
++    return false;
++  }
++
++  rwh->FilterDropData(&drop_data);
++  LOG(INFO) << "[termsurf-file-drop] drop count=" << drop_data.filenames.size()
+             << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id
+             << " document_is_handling_drag="
+             << drop_data.document_is_handling_drag;
+ 
+-  // Enter → Over → Drop so the renderer builds dataTransfer.files for the page
+-  // (not bare enter+drop which navigated to the file body — Exp 2 Fail).
+-  rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
+-                           base::DoNothing());
++  // If hover already entered, over+drop is enough; else enter→over→drop (Exp 3).
++  if (sessions.find(web_contents) == sessions.end()) {
++    rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                             base::DoNothing());
++  }
+   rwh->DragTargetDragOver(client_pt, screen_pt, ops, 0, base::DoNothing());
+   rwh->DragTargetDrop(drop_data, client_pt, screen_pt, 0, base::DoNothing());
++  sessions.erase(web_contents);
+   return true;
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+index bb660831cd..b5ecf6f559 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.h
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -58,13 +58,15 @@ bool TsReplyFileChooser(WebContents* web_contents,
+                         const char* const* paths,
+                         size_t path_count);
+ 
+-// Host-mediated Finder/OS file drop onto the page (Issue 26072811532404 Exp 1).
+-// Injects DropData.filenames at client point (x,y) in DIP/view space.
++// Host-mediated Finder/OS file drag phases onto the page
++// (Issue 26072811532404 Exp 1–4). phase: "enter"|"over"|"leave"|"drop"
++// (nullptr/empty => "drop"). Injects DropData at client (x,y) in DIP/view space.
+ bool TsApplyExternalFileDrop(WebContents* web_contents,
+                              const char* const* paths,
+                              size_t path_count,
+                              double x,
+-                             double y);
++                             double y,
++                             const char* phase);
+ 
+ // Notify host (implemented in libtermsurf_chromium.cc via C callback).
+ void TsNotifyFileChooserRequest(void* wc_handle,
+-- 
+2.50.1 (Apple Git-155)
+
