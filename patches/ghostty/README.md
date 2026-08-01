@@ -1,6 +1,22 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26073112048720 Exp 3 download progress bar)
+## Active Pin (Issue 26080113489189 Exp 1 host split launch)
+
+- **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
+- **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
+- **Product branch:** `issue-26080113489189-exp1-initial-split-config`
+- **Product HEAD:** `a92a073a0c6974523b44f823d130d512508ce67c`
+- **Product tree:** `60ac94637afb18c60b03e67c9493429eecd3f631`
+- **Issue archives:** prior + `issue-26080113489189/` (**1**)
+- **Patches:** **64** total
+- **Archive SHA-256:**
+  `6449645887a792d48ca3f3b62203f214e66b6e6cf1b4baa78e5b54468f271aca`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** launch-time `initial-split-direction` + `initial-split-command`
+  (one host split with explicit second command). Parent: download-progress Exp 3.
+
+## Prior Active Pin (Issue 26073112048720 Exp 3 download progress bar)
 
 - **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
