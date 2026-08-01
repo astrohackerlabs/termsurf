@@ -1336,11 +1336,6 @@ struct Cli {
     /// Render in the primary terminal screen instead of the alternate screen
     #[arg(long, global = true)]
     primary_screen: bool,
-
-    /// After BrowserReady, open one product split to the left running this command
-    /// (Issue 26080110529573 Exp 3 — shot-gallery; uses existing OpenSplit IPC).
-    #[arg(long, global = true, value_name = "COMMAND")]
-    open_split_left: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1382,10 +1377,6 @@ fn main() -> io::Result<()> {
         profile_arg.clone().unwrap_or_else(|| "default".to_string())
     };
     let mut browser = cli.browser.unwrap_or_default();
-    // One-shot OpenSplit after first BrowserReady (shot-gallery Exp 3).
-    let mut pending_open_split_left: Option<String> = cli
-        .open_split_left
-        .filter(|s| !s.trim().is_empty());
 
     // Validate profile name: lowercase alphanumeric, starts with a letter.
     if profile.is_empty()
@@ -3009,23 +3000,6 @@ fn main() -> io::Result<()> {
                             }
                         }
                         loading_log.push((LoadingStage::LoadingPage, StageStatus::InProgress));
-
-                        // Shot-gallery / automation: one OpenSplit left after first ready
-                        // (Issue 26080110529573 Exp 3). Host already handles OpenSplit.
-                        if let Some(cmd) = pending_open_split_left.take() {
-                            if let (Some(ref conn), Some(ref pid)) = (&compositor, &pane_id) {
-                                eprintln!(
-                                    "OpenSplit: direction=left command={} pane_id={}",
-                                    cmd, pid
-                                );
-                                conn.send_open_split(pid, "left", &cmd);
-                            } else {
-                                eprintln!(
-                                    "OpenSplit: skipped (no compositor/pane_id) command={}",
-                                    cmd
-                                );
-                            }
-                        }
                     }
                     ipc::CompositorMessage::JavaScriptDialogRequest {
                         tab_id,
@@ -5755,23 +5729,4 @@ mod tests {
         );
     }
 
-    /// Issue 26080110529573 Exp 3: --open-split-left parses for shot-gallery.
-    #[test]
-    fn cli_parses_open_split_left() {
-        let cli = Cli::try_parse_from([
-            "ahweb",
-            "--browser",
-            "chromium",
-            "--open-split-left",
-            "/opt/homebrew/bin/ahcalc",
-            "https://astrohacker.com",
-        ])
-        .expect("parse");
-        assert_eq!(
-            cli.open_split_left.as_deref(),
-            Some("/opt/homebrew/bin/ahcalc")
-        );
-        assert_eq!(cli.url.as_deref(), Some("https://astrohacker.com"));
-        assert_eq!(cli.browser.as_deref(), Some("chromium"));
-    }
 }

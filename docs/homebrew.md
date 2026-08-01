@@ -331,6 +331,14 @@ normal operator interface.
    # commit in ~/dev/termsurf
    ```
 
+   This step keeps the **public README** and **story screenshots** current:
+   `docs/public-source/README-template.md` becomes public `README.md`, and
+   allowlisted `assets/screenshots/story/*.webp` ship with the public tree.
+   After regenerating story WebPs in the private monorepo
+   (`shot-gallery/out/` → refresh `assets/screenshots/story/`), re-run this
+   sync (or the next Homebrew release, which includes the same step) so
+   github.com/astrohackerlabs/termsurf does not lag.
+
 6. **Publish** (a direct helper invocation repackages; the canonical command
    instead uses the exact existing-package mode documented above):
 

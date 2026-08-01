@@ -8,7 +8,8 @@ This public repository contains the open source client material synced from the
 private Astrohacker monorepo for source releases. It includes:
 
 - `assets/` — TermSurf mark SVG and icon masters (`termsurf-icon.svg`,
-  `termsurf-14-*.png`).
+  `termsurf-14-*.png`), plus product story screenshots under
+  `assets/screenshots/story/`.
 - `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install helpers and smoke scripts.
   and protocol/native support code.
@@ -17,6 +18,43 @@ private Astrohacker monorepo for source releases. It includes:
 Large upstream fork checkouts and build outputs are not committed here. Use the
 patch records under `patches/` to reconstruct local engine workspaces when
 developing browser integrations.
+
+## Screenshots
+
+Product story shots from a real Astrohacker TermSurf window (multi-profile
+first, then composition, then solo surfaces).
+
+### Two different browser profiles in one window
+
+![Astrohacker TermSurf window with two browser panes using different profiles at the same time](assets/screenshots/story/two-profiles.webp)
+
+### Two real browser panes at once
+
+![TermSurf window with two browser panes showing the Astrohacker blog and home page](assets/screenshots/story/two-browsers.webp)
+
+### Shell and browser, same window
+
+![TermSurf split window with Astrohacker Shell on the left and a browser pane on the right](assets/screenshots/story/browser-terminal.webp)
+
+### Product apps beside the web
+
+![TermSurf split window with the Astrohacker calculator on the left and the product website on the right](assets/screenshots/story/ahweb-ahcalc.webp)
+
+### Help open while you browse
+
+![TermSurf split window with product help on the left and a browser pane on the right](assets/screenshots/story/ahweb-ahhelp.webp)
+
+### Apps compose with apps
+
+![TermSurf split window with product help and the Astrohacker calculator in two panes](assets/screenshots/story/ahhelp-ahcalc.webp)
+
+### A real browser engine in the host
+
+![Astrohacker TermSurf window showing a browser pane open to the Astrohacker website](assets/screenshots/story/browser-solo.webp)
+
+### Still a terminal when you want one
+
+![Astrohacker TermSurf window showing only Astrohacker Shell](assets/screenshots/story/shell-solo.webp)
 
 ## Install
 
