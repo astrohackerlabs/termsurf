@@ -2,6 +2,7 @@
 members = [
     "rust/ahweb",
     "rust/ah-chromiumd",
+    "rust/ahnexus",
 ]
 exclude = [
     "rust/ahsh",

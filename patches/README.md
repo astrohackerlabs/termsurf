@@ -36,6 +36,9 @@ Historical per-fork pointers (the release manifest is authoritative):
 - `reedline/` — **Issue 26071814115751:** main tip `f776f507…` / zero-patch pin.
   (Helix/editor patch tree retired; recovery only via monorepo history — Issue
   26071716113040.)
+- `nexus/` — **Issue 26080119514255 Exp 3:** pin-only
+  `9b9b69ca…` / zero-patch pin (`nexus-common` for `ahnexus`). See
+  [`nexus/README.md`](./nexus/README.md).
 
 ### Merge-upstream (portfolio)
 

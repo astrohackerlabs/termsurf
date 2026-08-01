@@ -1,0 +1,111 @@
+From 84eb750354f8407306723d1489136b2d0848c31e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 1 Aug 2026 16:51:23 -0500
+Subject: [PATCH] fix: bare Shift+R is typing, not hard refresh
+
+Cmd+Shift+R remains hard refresh; bare Shift+R
+forwards to the webview as capital R.
+Issue 26080121448364 Exp 1.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 37 +++----------------
+ .../Ghostty/SurfaceViewAppKitTests.swift      |  5 ++-
+ 2 files changed, 8 insertions(+), 34 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 4ef71f3ac..512249ee3 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -1916,32 +1916,8 @@ extension Ghostty {
+         note:
+           "key_code=\(event.keyCode) modifiers=\(termSurfModifiers(event.modifierFlags)) focused=\(focused)"
+       )
+-      // Hard refresh Shift+R (no Command): intercept before Browse bulk-forward.
+-      // performKeyEquivalent only sees Command-bearing chords reliably.
+-      if event.keyCode == 0x0F,
+-        event.modifierFlags.contains(.shift),
+-        !event.modifierFlags.contains(.command),
+-        !event.modifierFlags.contains(.control),
+-        !event.modifierFlags.contains(.option),
+-        termSurfScriptHasActiveOverlay
+-      {
+-        let action = "refresh_ignore_cache"
+-        let paneID = id.uuidString
+-        let accepted: Bool = paneID.withCString { paneIDPointer in
+-          action.withCString { actionPointer in
+-            termsurf_navigation_action_for_pane(paneIDPointer, actionPointer) != 0
+-          }
+-        }
+-        termsurfSemanticNavigationKeys.insert(event.keyCode)
+-        termSurfLogGeometry(
+-          event:
+-            accepted
+-            ? "key_down_browser_hard_refresh"
+-            : "key_down_browser_hard_refresh_disabled",
+-          note: "key_code=\(event.keyCode) action=\(action)"
+-        )
+-        return
+-      }
++      // Hard refresh is Cmd+Shift+R only (performKeyEquivalent). Bare Shift+R
++      // must reach the webview as capital R (Issue 26080121448364 Exp 1).
+       // Exp 7: browse-chrome bindings stay on Ghostty (do not bulk-forward).
+       if !shouldSkipTermSurfKeyForwardForBrowseChrome(event),
+         forwardTermSurfKeyDown(event)
+@@ -2637,7 +2613,7 @@ extension Ghostty {
+ 
+     /// Maps browser chrome key equivalents to NavigationAction strings.
+     /// Soft: Command + [ / ] / R without Shift.
+-    /// Hard: Command+Shift+R (and bare Shift+R is handled in keyDown).
++    /// Hard: Command+Shift+R only (bare Shift+R is not host hard refresh).
+     private func termSurfBrowserNavigationAction(for event: NSEvent) -> String? {
+       let flags = event.modifierFlags.intersection([.command, .shift, .control, .option])
+       // Hard: Cmd+Shift+R
+@@ -2666,6 +2642,7 @@ extension Ghostty {
+     }
+ 
+     /// Pure helper for tests: classify hard refresh key chords.
++    /// Hard refresh is Cmd+Shift+R only; bare Shift+R is typing (capital R).
+     static func termSurfHardRefreshAction(
+       keyCode: UInt16,
+       command: Bool,
+@@ -2674,11 +2651,7 @@ extension Ghostty {
+       option: Bool
+     ) -> String? {
+       if control || option { return nil }
+-      // Shift+R (no Command)
+-      if keyCode == 0x0F, shift, !command {
+-        return "refresh_ignore_cache"
+-      }
+-      // Cmd+Shift+R
++      // Cmd+Shift+R only (Issue 26080121448364: bare Shift+R is not hard refresh)
+       if keyCode == 0x0F, shift, command {
+         return "refresh_ignore_cache"
+       }
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 1127a3b51..a1a025e34 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -45,7 +45,7 @@ struct SurfaceViewAppKitTests {
+         )
+     }
+ 
+-    /// Issue 26072209562907 Exp 1: hard refresh key classification (R = 0x0F).
++    /// Issue 26080121448364 Exp 1: bare Shift+R is typing, not hard refresh (R = 0x0F).
+     @Test func hardRefreshShiftRWithoutCommand() {
+         #expect(
+             Ghostty.SurfaceView.termSurfHardRefreshAction(
+@@ -54,10 +54,11 @@ struct SurfaceViewAppKitTests {
+                 shift: true,
+                 control: false,
+                 option: false
+-            ) == "refresh_ignore_cache"
++            ) == nil
+         )
+     }
+ 
++    /// Issue 26072209562907 / 26080121448364: Cmd+Shift+R remains hard refresh.
+     @Test func hardRefreshCmdShiftR() {
+         #expect(
+             Ghostty.SurfaceView.termSurfHardRefreshAction(
+-- 
+2.50.1 (Apple Git-155)
+

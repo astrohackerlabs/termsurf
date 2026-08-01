@@ -1,6 +1,25 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080113489189 Exp 1 host split launch)
+## Active Pin (Issue 26080121448364 Exp 1 remove bare Shift+R hard refresh)
+
+- **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
+- **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`
+- **Product branch:** `issue-26080121448364-exp1-remove-bare-shift-r`
+- **Product HEAD:** `84eb750354f8407306723d1489136b2d0848c31e`
+- **Product tree:** `f58cef7d3730a2a02f8981e625289d37cfb7bf3e`
+- **Issue archives:** prior + `issue-26080121448364/` (**1**)
+- **Patches:** **65** total
+- **Archive SHA-256:**
+  `7bc24228c4bc430c79e1d447b75c0ff5e02b6363fafa289e9df52d6741207c24`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Browse hard refresh is **Cmd+Shift+R** only; bare **Shift+R** is
+  capital-R typing (no `keyDown` hard intercept). Soft Cmd+R unchanged.
+  Parent: initial-split Exp 1.
+- **Patch SHA-256:**
+  - 0001: `c3669e918a9afcbe85260177d186fb39951ecc4b8440a3abbe3382edf2a3939a`
+
+## Prior Active Pin (Issue 26080113489189 Exp 1 host split launch)
 
 - **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`

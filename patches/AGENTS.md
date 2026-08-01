@@ -78,5 +78,6 @@ add local paths and branch prefixes only.
 | `gecko/` | Historical archive only (never shipped; Issue 26072121272459) |
 | `nushell/` | Shell product fork |
 | `reedline/` | Tip pin only (no product patch unless source is edited) |
+| `nexus/` | Nexus BBS protocol (`nexus-common`); pin-only until first product edit |
 
 Working trees stay under ignored `forks/`; only archives and docs live here.

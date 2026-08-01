@@ -39,12 +39,14 @@ private Astrohacker monorepo for source releases. It includes:
   `assets/screenshots/story/`.
 - `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install helpers and smoke scripts.
-  and protocol/native support code.
-- `patches/` — fork patch archives and reconstruction notes for Chromium,
+- `rust/` — TermSurf client/protocol/native support code.
+- `patches/` — **shipped** fork patch archives, per-fork READMEs, and
+  `release-manifest.json` (Chromium, Ghostty, Nushell, Reedline, plus
+  historical WebKit/Gecko/Ladybird records).
 
-Large upstream fork checkouts and build outputs are not committed here. Use the
-patch records under `patches/` to reconstruct local engine workspaces when
-developing browser integrations.
+Large upstream fork checkouts and build outputs are **not** committed here
+(`forks/` is intentionally empty/gitignored). You reconstruct local engine and
+host workspaces from `patches/` before a from-source build.
 
 ## Screenshots
 
@@ -103,7 +105,32 @@ brew upgrade --cask astrohacker
 
 ## Build
 
-Development builds require Xcode, Zig, Rust, Bun, Chromium's `depot_tools`, and
+Most people should use the **Install** section above. Building from this repo
+is for developers who want a patched engine and host from source.
+
+### What this repo includes (and what it does not)
+
+| Included | Not included |
+| --- | --- |
+| Client source under `rust/`, scripts, docs, assets | Pre-built engines or app bundles |
+| **`patches/`** — full `.patch` archives + reconstruction notes | Checked-in `forks/` trees (Chromium, Ghostty, …) |
+| `patches/release-manifest.json` — exact bases, heads, ordered patch dirs | Automatic one-command clone of Chromium (you reconstruct manually) |
+
+`scripts/build.sh` only **compiles** workspaces that already exist under
+`forks/`. If `forks/chromium/src` (or Ghostty, etc.) is missing, the script
+skips that component — it does **not** download upstream or apply patches for
+you.
+
+### Prerequisites
+
+Typical host: **Apple silicon macOS**, with:
+
+- Xcode (and command-line tools)
+- Zig
+- Rust (`rustup`)
+- Bun (for TermSurf apps that need it)
+- Chromium **`depot_tools`** and a full Chromium source checkout workflow
+  (large disk + long first build)
 
 ```bash
 brew install zig
@@ -111,22 +138,65 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 curl -fsSL https://bun.sh/install | bash
 ```
 
-Prepare local engine workspaces from the recorded patch archives, then build the
-client components:
+Install Chromium `depot_tools` and follow Google’s Chromium macOS setup for
+fetching source (this repo does not vendor Chromium).
+
+### Reconstruct forks from patches (required before build)
+
+1. Read **`patches/README.md`** and the machine-readable pin
+   **`patches/release-manifest.json`** (ordered `patch_directories`, `base`,
+   `expected_head` / `expected_tree` per shipped fork).
+2. For each fork you need, follow that fork’s README (clone/checkout **base**,
+   create the product branch, **`git am`** the ordered archives):
+
+   | Fork | Checkout path | Docs |
+   | --- | --- | --- |
+   | Chromium (shipped engine) | `forks/chromium/src` | [`patches/chromium/README.md`](patches/chromium/README.md) |
+   | Ghostty (host / `ahterm`) | `forks/ghostty` | [`patches/ghostty/README.md`](patches/ghostty/README.md) |
+   | Nushell | `forks/nushell` | [`patches/nushell/README.md`](patches/nushell/README.md) |
+   | Reedline | `forks/reedline` | [`patches/reedline/README.md`](patches/reedline/README.md) |
+
+   WebKit / Gecko / Ladybird under `patches/` are **historical** only — not
+   required for a current product build.
+
+3. Pattern (simplified; **use the base SHA and archive list from the
+   release-manifest + per-fork README**, not invent paths):
+
+   ```bash
+   # Example shape only — replace base, branch, and archive dirs from the pin.
+   cd forks/<fork>
+   git checkout <base-from-release-manifest>
+   git checkout -b <product-branch-name>
+   git am ../../patches/<fork>/patches/<issue-dir>/*.patch
+   # …apply every directory listed for that fork in order…
+   ```
+
+   Chromium’s base is an Electron Chromium tag/commit recorded in the
+   manifest; fetch that tree with `depot_tools` / your usual Chromium workflow
+   into `forks/chromium/src`, then apply the Chromium series the same way.
+
+4. Confirm `git rev-parse HEAD` (and tree, if you verify) matches
+   `expected_head` / `expected_tree` in `release-manifest.json` for that fork.
+
+Expect a **large** Chromium build (many GB, often hours on first compile).
+
+### Compile client components
+
+After forks are reconstructed and (for Chromium) built as needed:
 
 ```bash
-./scripts/build.sh chromium
+./scripts/build.sh chromium      # Chromium fork / ah-chromiumd path
 ./scripts/build.sh ahweb
 ./scripts/build.sh ahterm
 ```
 
-For a release-style local build:
+Release-style local build (still requires reconstructed forks):
 
 ```bash
 ./scripts/build.sh all --release
 ```
 
-The app bundle is written to:
+The host app bundle (when Ghostty/`ahterm` succeeds) is written to:
 
 ```text
 forks/ghostty/macos/build/Release/Astrohacker TermSurf.app
@@ -134,7 +204,7 @@ forks/ghostty/macos/build/Release/Astrohacker TermSurf.app
 
 ## Run
 
-During development, launch the Ghostty-based frontend from the reconstructed
+During development, launch the Ghostty-based host from the reconstructed
 Ghostty workspace:
 
 ```bash
@@ -144,8 +214,8 @@ cd macos
 ./build.nu --configuration Debug --action build
 ```
 
-Inside Astrohacker TermSurf, run the debug `ahweb` binary and point it at a
-local engine build:
+Inside Astrohacker TermSurf, run a local `ahweb` and point it at a built
+engine (paths after a successful Chromium/`ah-chromiumd` build):
 
 ```bash
 ./rust/target/debug/ahweb \
