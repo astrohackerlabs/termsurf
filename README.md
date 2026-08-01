@@ -4,6 +4,33 @@
 `ahweb`, open a URL, and the page appears alongside shells and other terminal
 workflows.
 
+Open a site in a browser pane:
+
+```bash
+ahweb astrohacker.com
+```
+
+Open the same site under a named browser profile (separate cookies and logins):
+
+```bash
+ahweb astrohacker.com --profile work
+```
+
+**TermSurf apps** are native graphical apps that run inside your terminal with
+real GUIs based on web technologies. Two examples ship with the product:
+
+Open the scientific calculator:
+
+```bash
+ahcalc
+```
+
+Open the product help cheatsheet:
+
+```bash
+ahhelp
+```
+
 This public repository contains the open source client material synced from the
 private Astrohacker monorepo for source releases. It includes:
 
