@@ -52,19 +52,20 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "e69b30bba288603e514cffb4c79c359cac68e923",
-      "branch": "150.0.7871.129-issue-26073112048720-exp4-determinate-download-progress",
-      "expected_head": "8a430a734739b48e3c315b10fa48e3debe375944",
-      "expected_tree": "818f62f4453f0dc69621f771bf4c46449d95f678",
+      "branch": "150.0.7871.129-issue-26080110296516-exp1-accessory-activation-policy",
+      "expected_head": "62820976b0d448ef11433a40297ac4ba0d1f3473",
+      "expected_tree": "0a30826c3be652b011b0f0016be66301cec2bd73",
       "patch_directories": [
         "patches/chromium/patches/issue-26072616587256",
         "patches/chromium/patches/issue-26072810194224",
         "patches/chromium/patches/issue-26073010145867",
         "patches/chromium/patches/issue-26072811532404",
         "patches/chromium/patches/issue-26073012571498",
-        "patches/chromium/patches/issue-26073112048720"
+        "patches/chromium/patches/issue-26073112048720",
+        "patches/chromium/patches/issue-26080110296516"
       ],
-      "patch_count": 143,
-      "archive_sha256": "92ff6915bd042e0cab7b6d9ae8fcd99b1656ce8817bedf63f629d3c92e59c61c",
+      "patch_count": 144,
+      "archive_sha256": "42afd85622fc40f60fbac77088e4e1b2c0a9c2889f4bf5653ecc689f77d12f4a",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

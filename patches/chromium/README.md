@@ -7,14 +7,14 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26073112048720 Exp 4):** Electron Chromium
-  **`150.0.7871.129`** + prior series + **3** issue patches
-  (`issue-26073112048720/`) = **143** total — see
+- **Active pin (Issue 26080110296516 Exp 1):** Electron Chromium
+  **`150.0.7871.129`** + prior series + **1** issue patch
+  (`issue-26080110296516/`) = **144** total — see
   `patches/release-manifest.json`
 - Product branch:
-  `150.0.7871.129-issue-26073112048720-exp4-determinate-download-progress`
-- Product HEAD: `8a430a734739b48e3c315b10fa48e3debe375944`
-- Product tree: `818f62f4453f0dc69621f771bf4c46449d95f678`
+  `150.0.7871.129-issue-26080110296516-exp1-accessory-activation-policy`
+- Product HEAD: `62820976b0d448ef11433a40297ac4ba0d1f3473`
+- Product tree: `0a30826c3be652b011b0f0016be66301cec2bd73`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
@@ -22,7 +22,22 @@ branch notes that are safe to commit.
 - Release authority: `patches/release-manifest.json` chromium entry
 
 
-### Issue 26073112048720 Exp 4 / determinate totals (current tip)
+### Issue 26080110296516 Exp 1 / Accessory activation policy (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Parent tip | `8a430a7347` (Issue 26073112048720 Exp 4 determinate totals) |
+| Product branch | `150.0.7871.129-issue-26080110296516-exp1-accessory-activation-policy` |
+| Product HEAD | `62820976b0d448ef11433a40297ac4ba0d1f3473` |
+| Product tree | `0a30826c3be652b011b0f0016be66301cec2bd73` |
+| Archives | prior + `issue-26080110296516/` (1) |
+| Patch count | **144** |
+| Archive aggregate SHA-256 | `42afd85622fc40f60fbac77088e4e1b2c0a9c2889f4bf5653ecc689f77d12f4a` |
+| Scope | Ensure Accessory AppKit policy for product browse (no Regular Dock) |
+| Build | See experiment Results |
+
+### Issue 26073112048720 Exp 4 / determinate totals (parent tip)
 
 | Field | Value |
 | --- | --- |
