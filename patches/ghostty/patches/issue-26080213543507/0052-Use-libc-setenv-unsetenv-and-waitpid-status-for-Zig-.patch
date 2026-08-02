@@ -1,0 +1,55 @@
+From ef1d1ef205d9fd4f37c9a1b3c6e4488eec1913b8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:55:57 -0500
+Subject: [PATCH 52/65] Use libc setenv/unsetenv and waitpid status for Zig
+ 0.16
+
+---
+ src/apprt/termsurf.zig | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 1899e8acc..3bdc26099 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -949,7 +949,7 @@ pub fn start() !void {
+     errdefer {
+         punlink(path_z);
+         socket_path_len = 0;
+-        _ = internal_os.unsetenv(env_key);
++        _ = c.unsetenv(env_key);
+     }
+ 
+     const fd = try psocket();
+@@ -958,7 +958,7 @@ pub fn start() !void {
+     try pbindUnix(fd, path_z);
+     try plisten(fd, 8);
+ 
+-    if (internal_os.setenv(env_key, path_z) != 0) return error.SetEnvFailed;
++    if (c.setenv(env_key, path_z) != 0) return error.SetEnvFailed;
+ 
+     stopping.store(false, .release);
+     const thread = try std.Thread.spawn(.{}, acceptLoop, .{fd});
+@@ -997,7 +997,7 @@ pub fn stop() void {
+         socket_path_len = 0;
+     }
+ 
+-    _ = internal_os.unsetenv(env_key);
++    _ = c.unsetenv(env_key);
+ }
+ 
+ fn acceptLoop(fd: std.posix.fd_t) void {
+@@ -3288,8 +3288,8 @@ fn shutdownBrowserSocket(snapshot: *const ServerShutdownSnapshot) void {
+ fn reapServerChild(snapshot: *const ServerShutdownSnapshot) void {
+     if (snapshot.child_pid == 0) return;
+     for (0..50) |_| {
+-        const res = pwaitpidNoHang(snapshot.child_pid);
+-        if (res.pid != 0) {
++        const res = pwaitpidNoHang(@intCast(snapshot.child_pid));
++        if (res > 0) {
+             log.info(
+                 "Server child reaped: profile={s} browser={s} pid={}",
+                 .{ snapshot.profileName(), snapshot.browserName(), snapshot.child_pid },
+-- 
+2.50.1 (Apple Git-155)
+

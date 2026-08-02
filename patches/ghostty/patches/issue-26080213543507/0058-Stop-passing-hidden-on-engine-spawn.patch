@@ -1,0 +1,84 @@
+From 0d381c989ac74ef1f335d439d6aa60b84cd3b364 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 05:44:52 -0500
+Subject: [PATCH 58/65] Stop passing --hidden on engine spawn
+
+ah-chromiumd is always embed-only; the host
+no longer sends a redundant --hidden flag.
+Spawn tests assert absence and shifted argv.
+---
+ src/apprt/termsurf.zig | 24 ++++++++++++++----------
+ 1 file changed, 14 insertions(+), 10 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 705e1cda8..0e8691dc0 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4724,12 +4724,14 @@ fn buildBrowserSpawnArgv(
+         return null;
+     };
+ 
++    // Product Chromium is always embed-hidden; do not pass --hidden (Issue
++    // 26073010145867 Exp 1). Embed window/activation policy is unconditional
++    // in the engine binary.
+     if (!out.push(browser_executable) or
+         !out.push(ipc_arg) or
+         !out.push(browser_name_arg) or
+         !out.push(data_arg) or
+         !out.push(listen_arg) or
+-        !out.push("--hidden") or
+         !out.push("--no-sandbox") or
+         !out.push("--enable-logging") or
+         !out.push(log_arg))
+@@ -5983,12 +5985,12 @@ test "browser spawn argv carries one render surface service for every selector"
+             12345,
+         ) orelse return error.BuildBrowserArgvFailed;
+ 
+-        try testing.expectEqual(@as(usize, 10), argv.len);
+-        try expectBaseBrowserArgv(argv[0..9], case.executable, case.selector);
++        try testing.expectEqual(@as(usize, 9), argv.len);
++        try expectBaseBrowserArgv(argv[0..8], case.executable, case.selector);
+         try testing.expectEqual(@as(usize, 1), countArgPrefix(argv, "--render-surface-service="));
+         const render_service = args.renderService() orelse return error.MissingRenderService;
+-        try testing.expect(std.mem.startsWith(u8, argv[9], "--render-surface-service="));
+-        try testing.expect(std.mem.endsWith(u8, argv[9], render_service));
++        try testing.expect(std.mem.startsWith(u8, argv[8], "--render-surface-service="));
++        try testing.expect(std.mem.endsWith(u8, argv[8], render_service));
+         try testing.expect(std.mem.startsWith(u8, render_service, "com.astrohacker.terminal.render.12345."));
+         try testing.expect(render_service.len < max_render_service_name_len);
+         try testing.expect(std.mem.indexOfScalar(u8, render_service, '/') == null);
+@@ -6000,6 +6002,8 @@ test "browser spawn argv carries one render surface service for every selector"
+             @as(usize, 0),
+             countExactArg(argv, "--disable-backgrounding-occluded-windows"),
+         );
++        // Issue 26073010145867 Exp 1: product engine is always embed-hidden.
++        try testing.expectEqual(@as(usize, 0), countExactArg(argv, "--hidden"));
+     }
+ }
+ 
+@@ -6065,17 +6069,17 @@ fn countExactArg(argv: []const []const u8, needle: []const u8) usize {
+ 
+ fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, browser: []const u8) !void {
+     const testing = std.testing;
+-    try testing.expectEqual(@as(usize, 9), argv.len);
++    try testing.expectEqual(@as(usize, 8), argv.len);
+     try testing.expectEqualStrings(executable, argv[0]);
+     try testing.expect(std.mem.startsWith(u8, argv[1], "--ipc-socket="));
+     try testing.expect(std.mem.startsWith(u8, argv[2], "--browser-name="));
+     try testing.expect(std.mem.endsWith(u8, argv[2], browser));
+     try testing.expect(std.mem.startsWith(u8, argv[3], "--user-data-dir="));
+     try testing.expect(std.mem.startsWith(u8, argv[4], "--listen-socket="));
+-    try testing.expectEqualStrings("--hidden", argv[5]);
+-    try testing.expectEqualStrings("--no-sandbox", argv[6]);
+-    try testing.expectEqualStrings("--enable-logging", argv[7]);
+-    try testing.expect(std.mem.startsWith(u8, argv[8], "--log-file="));
++    try testing.expectEqualStrings("--no-sandbox", argv[5]);
++    try testing.expectEqualStrings("--enable-logging", argv[6]);
++    try testing.expect(std.mem.startsWith(u8, argv[7], "--log-file="));
++    try testing.expectEqual(@as(usize, 0), countExactArg(argv, "--hidden"));
+ }
+ 
+ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {
+-- 
+2.50.1 (Apple Git-155)
+

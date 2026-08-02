@@ -1,6 +1,28 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080121448364 Exp 1 remove bare Shift+R hard refresh)
+## Active Pin (Issue 26080213543507 Exp 2 Ghostty main tip)
+
+- **Upstream policy:** latest commit on **`main`**
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080213543507-exp2-ghostty-main`
+- **Product HEAD:** `9ff188dd5e45c47a9611ee7dbc87877ed70d157e`
+- **Product tree:** `9d01f6586d3bcd61d9115f7ddf6d9d1b4c402d47`
+- **Issue archives:** cumulative `issue-26080213543507/` (**65** from base)
+- **Patches:** **65** total
+- **Archive SHA-256:**
+  `972921f360010828c7d3591773b80d8adfbbbef0a0bc545a3b54a3ea9df9caf6`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Rebase full product series onto upstream main tip
+  `e85bf9fb2…` (moved past Exp 1 freeze `6837d702…`). TREE_MATCH: clean-base
+  `git am` of archive equals product tree. XDG product path remains
+  **`astrohacker/termsurf`** (not legacy `astrohacker/terminal`).
+- **TREE_MATCH:** yes
+- **Patch SHA-256 (bookends):**
+  - 0001: `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065: `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+
+## Prior Active Pin (Issue 26080121448364 Exp 1 remove bare Shift+R hard refresh)
 
 - **Upstream policy:** latest commit on **`main`** (via Zig 0.16 pin series)
 - **Upstream base:** `2de5e7d38e1354759211722a8687c0815d2cf02c`

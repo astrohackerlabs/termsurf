@@ -1,0 +1,53 @@
+From d5127fa2b0140dc93b17a02df99d4b2f029c48f0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 28 Jul 2026 06:35:42 -0500
+Subject: [PATCH 57/65] Folder-only NSOpenPanel for upload_folder mode
+
+When FileChooserRequest mode is upload_folder, present a directory
+picker; engine enumerates files under the selected path.
+---
+ .../App/macOS/AppDelegate+TermSurf.swift      | 20 ++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+index ef91f442b..191bbfbdd 100644
+--- a/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
++++ b/macos/Sources/App/macOS/AppDelegate+TermSurf.swift
+@@ -597,6 +597,7 @@ func termsurf_request_file_chooser(
+   let paneID = String(cString: paneIDPointer)
+   let mode = modePointer.map { String(cString: $0) } ?? "open"
+   let originURL = originURLPointer.map { String(cString: $0) } ?? ""
++  let isUploadFolder = mode == "upload_folder"
+   let allowsMultiple = mode == "open_multiple"
+ 
+   termsurfLogFileChooser(
+@@ -621,12 +622,21 @@ func termsurf_request_file_chooser(
+     }
+ 
+     let panel = NSOpenPanel()
+-    panel.canChooseFiles = true
+-    panel.canChooseDirectories = false
+-    panel.allowsMultipleSelection = allowsMultiple
++    if isUploadFolder {
++      // Exp 4: folder pick only; engine enumerates files under the path.
++      panel.canChooseFiles = false
++      panel.canChooseDirectories = true
++      panel.allowsMultipleSelection = false
++      panel.title = "Choose Folder"
++      panel.prompt = "Select"
++    } else {
++      panel.canChooseFiles = true
++      panel.canChooseDirectories = false
++      panel.allowsMultipleSelection = allowsMultiple
++      panel.title = "Choose File"
++      panel.prompt = "Select"
++    }
+     panel.resolvesAliases = true
+-    panel.title = "Choose File"
+-    panel.prompt = "Select"
+     if !originURL.isEmpty {
+       panel.message = "Upload from \(originURL)"
+     }
+-- 
+2.50.1 (Apple Git-155)
+

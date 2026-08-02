@@ -1,0 +1,34 @@
+From 56e279b4df9532c7f50fb3e62047b6d441d1e5a3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:56:24 -0500
+Subject: [PATCH 53/65] Fix setenv arity and Io.sleep for Zig 0.16
+
+---
+ src/apprt/termsurf.zig | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 3bdc26099..f213983a6 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -958,7 +958,7 @@ pub fn start() !void {
+     try pbindUnix(fd, path_z);
+     try plisten(fd, 8);
+ 
+-    if (c.setenv(env_key, path_z) != 0) return error.SetEnvFailed;
++    if (c.setenv(env_key, path_z, 1) != 0) return error.SetEnvFailed;
+ 
+     stopping.store(false, .release);
+     const thread = try std.Thread.spawn(.{}, acceptLoop, .{fd});
+@@ -3296,7 +3296,7 @@ fn reapServerChild(snapshot: *const ServerShutdownSnapshot) void {
+             );
+             return;
+         }
+-        std.Thread.sleep(100 * std.time.ns_per_ms);
++        std.Io.sleep(global.io(), .fromMilliseconds(100), .awake) catch {};
+     }
+     log.warn(
+         "Server child reap timed out: profile={s} browser={s} pid={}",
+-- 
+2.50.1 (Apple Git-155)
+

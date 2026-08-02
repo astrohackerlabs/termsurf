@@ -1,0 +1,267 @@
+From bffa758871cf4850d06ae4cbccc6a50577f9236f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 1 Aug 2026 09:06:26 -0500
+Subject: [PATCH 64/65] feat: initial-split-direction/command launch-time host
+ split
+
+Add config keys next to initial-command for one scripted
+two-pane window at launch via newSplit. Pair validation in
+finalize. Issue 26080113489189 Exp 1.
+---
+ .../Terminal/TerminalController.swift         | 47 ++++++++++
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 24 +++++
+ src/config/Config.zig                         | 89 +++++++++++++++++++
+ src/config/command.zig                        |  9 ++
+ 4 files changed, 169 insertions(+)
+
+diff --git a/macos/Sources/Features/Terminal/TerminalController.swift b/macos/Sources/Features/Terminal/TerminalController.swift
+index 9c5839e3b..a83c929cc 100644
+--- a/macos/Sources/Features/Terminal/TerminalController.swift
++++ b/macos/Sources/Features/Terminal/TerminalController.swift
+@@ -166,6 +166,47 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
+         DispatchQueue.main.async(execute: workItem)
+     }
+ 
++    /// Apply config `initial-split-direction` + `initial-split-command` once per process.
++    /// Reuses `newSplit` (same path as interactive splits / TermSurf OpenSplit host side).
++    fileprivate func applyLaunchInitialSplitIfNeeded() {
++        guard !Self.didApplyLaunchInitialSplit else { return }
++        let dirName = ghostty.config.initialSplitDirection
++        let cmd = ghostty.config.initialSplitCommand
++        guard let dirName, !dirName.isEmpty, let cmd, !cmd.isEmpty else { return }
++
++        let splitDirection: SplitTree<Ghostty.SurfaceView>.NewDirection
++        switch dirName {
++        case "left": splitDirection = .left
++        case "right": splitDirection = .right
++        case "up": splitDirection = .up
++        case "down": splitDirection = .down
++        default:
++            AppDelegate.logger.warning("initial-split: invalid direction \(dirName, privacy: .public)")
++            return
++        }
++
++        let focus = focusedSurface ?? surfaceTree.first
++        guard let focus else {
++            AppDelegate.logger.warning("initial-split: no surface to split from")
++            return
++        }
++
++        var splitConfig = Ghostty.SurfaceConfiguration()
++        // Surface options apply command as shell form (see embedded surface config).
++        splitConfig.command = cmd
++
++        Self.didApplyLaunchInitialSplit = true
++        AppDelegate.logger.info(
++            "initial-split: direction=\(dirName, privacy: .public) command=\(cmd, privacy: .public)")
++        fputs(
++            "TermSurf initial-split direction=\(dirName) command=\(cmd)\n",
++            stderr)
++        if newSplit(at: focus, direction: splitDirection, baseConfig: splitConfig) == nil {
++            AppDelegate.logger.warning("initial-split: newSplit failed")
++            fputs("TermSurf initial-split: newSplit failed\n", stderr)
++        }
++    }
++
+     // MARK: Base Controller Overrides
+ 
+     override func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
+@@ -245,6 +286,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
+     // by something like an App Intent) then we prefer the most previous main.
+     static private(set) weak var lastMain: TerminalController?
+ 
++    /// Once per process: launch-time `initial-split-*` config (issue 26080113489189).
++    private static var didApplyLaunchInitialSplit = false
++
+     /// The "new window" action.
+     static func newWindow(
+         _ ghostty: Ghostty.App,
+@@ -304,6 +348,9 @@ class TerminalController: BaseTerminalController, TabGroupCloseCoordinator.Contr
+             // All new_window actions force our app to be active, so that the new
+             // window is focused and visible.
+             NSApp.activate(ignoringOtherApps: true)
++
++            // Host launch-time one-shot split (after first surface is on screen).
++            c.applyLaunchInitialSplitIfNeeded()
+         }
+ 
+         // Setup our undo
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index e678b9399..a6d0f9cbb 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -255,6 +255,30 @@ extension Ghostty {
+             return String(cString: ptr)
+         }
+ 
++        /// Launch-time one-shot split direction (`left`/`right`/`up`/`down`).
++        /// Pair with `initialSplitCommand`. Astrohacker issue 26080113489189.
++        var initialSplitDirection: String? {
++            guard let config = self.config else { return nil }
++            var v: UnsafePointer<Int8>?
++            let key = "initial-split-direction"
++            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
++            guard let ptr = v else { return nil }
++            let s = String(cString: ptr)
++            return s.isEmpty ? nil : s
++        }
++
++        /// Command for the surface created by `initialSplitDirection`.
++        /// SurfaceConfiguration applies this as a shell command string.
++        var initialSplitCommand: String? {
++            guard let config = self.config else { return nil }
++            var v: UnsafePointer<Int8>?
++            let key = "initial-split-command"
++            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
++            guard let ptr = v else { return nil }
++            let s = String(cString: ptr)
++            return s.isEmpty ? nil : s
++        }
++
+         var windowPositionX: Int16? {
+             guard let config = self.config else { return nil }
+             var v: Int16 = 0
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index cacb9d3cb..4de5aa55c 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1247,6 +1247,22 @@ command: ?Command = null,
+ ///     manually.
+ @"initial-command": ?Command = null,
+ 
++/// After the first terminal surface is created at app start, create exactly
++/// one host split in this direction. Must be set together with
++/// `initial-split-command`. The new surface runs `initial-split-command`.
++/// Interactive `new_split` keybinds are unchanged. (Astrohacker: issue
++/// 26080113489189 — host launch-time split for shot-gallery.)
++///
++/// Available since: Astrohacker host split launch.
++@"initial-split-direction": ?InitialSplitDirection = null,
++
++/// Command for the surface created by `initial-split-direction`. Same
++/// syntax as `command` / `initial-command` (including `direct:`). Must be
++/// set together with `initial-split-direction`.
++///
++/// Available since: Astrohacker host split launch.
++@"initial-split-command": ?Command = null,
++
+ /// Controls when command finished notifications are sent. There are
+ /// three options:
+ ///
+@@ -4877,6 +4893,26 @@ pub fn finalize(self: *Config) !void {
+ 
+     // Finalize key remapping set for efficient lookups
+     self.@"key-remap".finalize();
++
++    // initial-split-* pair: both required or neither (host launch-time split).
++    {
++        const has_dir = self.@"initial-split-direction" != null;
++        const has_cmd = self.@"initial-split-command" != null;
++        if (has_dir != has_cmd) {
++            try self.addDiagnosticFmt(
++                "initial-split-direction and initial-split-command must both be set (or neither)",
++                .{},
++            );
++            // Clear so we do not half-apply a launch split.
++            self.@"initial-split-direction" = null;
++            self.@"initial-split-command" = null;
++        } else if (self.@"initial-split-command") |cmd| {
++            // Normalize to shell string for C API / SurfaceConfiguration.command
++            // (embedded surface options always apply command as shell form).
++            const s = try cmd.string(alloc);
++            self.@"initial-split-command" = .{ .shell = try alloc.dupeZ(u8, s) };
++        }
++    }
+ }
+ 
+ /// Callback for src/cli/args.zig to allow us to handle special cases
+@@ -9457,6 +9493,14 @@ pub const WindowSaveState = enum {
+     always,
+ };
+ 
++/// See initial-split-direction (host launch-time one-shot split).
++pub const InitialSplitDirection = enum {
++    left,
++    right,
++    up,
++    down,
++};
++
+ /// See window-new-tab-position
+ pub const WindowNewTabPosition = enum {
+     current,
+@@ -10660,6 +10704,51 @@ test "parse hook: invalid command" {
+     try testing.expect(cfg.command == null);
+ }
+ 
++test "initial-split pair both set parses" {
++    const testing = std.testing;
++    var cfg = try Config.default(testing.allocator);
++    defer cfg.deinit();
++    // Avoid loading host theme files during finalize (not under test).
++    cfg.theme = null;
++    var it: TestIterator = .{ .data = &.{
++        "--initial-split-direction=left",
++        "--initial-split-command=direct:/tmp/run-left.sh",
++    } };
++    try cfg.loadIter(cfg._arena.?.allocator(), &it);
++    try cfg.finalize();
++    try testing.expectEqual(InitialSplitDirection.left, cfg.@"initial-split-direction".?);
++    try testing.expect(cfg.@"initial-split-command" != null);
++    const cmd_str = try cfg.@"initial-split-command".?.string(testing.allocator);
++    defer testing.allocator.free(cmd_str);
++    try testing.expectEqualStrings("/tmp/run-left.sh", cmd_str);
++}
++
++test "initial-split only direction fails pair validation" {
++    const testing = std.testing;
++    var cfg = try Config.default(testing.allocator);
++    defer cfg.deinit();
++    cfg.theme = null;
++    var it: TestIterator = .{ .data = &.{"--initial-split-direction=right"} };
++    try cfg.loadIter(cfg._arena.?.allocator(), &it);
++    try cfg.finalize();
++    try testing.expect(!cfg._diagnostics.empty());
++    try testing.expect(cfg.@"initial-split-direction" == null);
++    try testing.expect(cfg.@"initial-split-command" == null);
++}
++
++test "initial-split only command fails pair validation" {
++    const testing = std.testing;
++    var cfg = try Config.default(testing.allocator);
++    defer cfg.deinit();
++    cfg.theme = null;
++    var it: TestIterator = .{ .data = &.{"--initial-split-command=direct:/tmp/x.sh"} };
++    try cfg.loadIter(cfg._arena.?.allocator(), &it);
++    try cfg.finalize();
++    try testing.expect(!cfg._diagnostics.empty());
++    try testing.expect(cfg.@"initial-split-direction" == null);
++    try testing.expect(cfg.@"initial-split-command" == null);
++}
++
+ test "parse e: command only" {
+     const testing = std.testing;
+     var cfg = try Config.default(testing.allocator);
+diff --git a/src/config/command.zig b/src/config/command.zig
+index b48bee189..5651666d6 100644
+--- a/src/config/command.zig
++++ b/src/config/command.zig
+@@ -175,6 +175,15 @@ pub const Command = union(enum) {
+         }
+     }
+ 
++    /// C API: pointer into existing command memory (shell tag). Prefer
++    /// converting multi-arg `direct` to shell via `string()` before export.
++    pub fn cval(self: Self) [*:0]const u8 {
++        return switch (self) {
++            .shell => |v| v.ptr,
++            .direct => |v| if (v.len > 0) v[0].ptr else "",
++        };
++    }
++
+     pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
+         switch (self) {
+             .shell => |v| try formatter.formatEntry([]const u8, v),
+-- 
+2.50.1 (Apple Git-155)
+

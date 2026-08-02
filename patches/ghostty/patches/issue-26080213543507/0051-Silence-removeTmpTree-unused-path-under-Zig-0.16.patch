@@ -1,0 +1,30 @@
+From f09c2d727a7b7658fca6e81389e3cf67693989bb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:55:29 -0500
+Subject: [PATCH 51/65] Silence removeTmpTree unused path under Zig 0.16
+
+---
+ src/apprt/termsurf.zig | 7 ++-----
+ 1 file changed, 2 insertions(+), 5 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 62a57c2a8..1899e8acc 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -5790,11 +5790,8 @@ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void)
+     try callback();
+ }
+ 
+-fn removeTmpTree(path: []const u8) void {
+-    const prefix = "/tmp/";
+-    if (!std.mem.startsWith(u8, path, prefix)) return;
+-    // Best-effort cleanup; Zig 0.16 Dir API differs — ignore failures.
+-    _ = path;
++fn removeTmpTree(_: []const u8) void {
++    // Best-effort cleanup omitted under Zig 0.16 Dir API churn.
+ }
+ 
+ fn resetTermsurfStateForTest() void {
+-- 
+2.50.1 (Apple Git-155)
+
