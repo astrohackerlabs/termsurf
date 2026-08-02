@@ -20,9 +20,11 @@ wrapper|ahweb|first-party|MIT
 wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
 wrapper|ahhelp|first-party|MIT
+wrapper|ahnexus|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
 payload|ahcalc|first-party|MIT
 payload|ahhelp|first-party|MIT
+payload|ahnexus|first-party|MIT
 payload|ah-chromiumd|chromium|BSD-3-Clause
 pointer|third_party/chromium/LICENSE
 pointer|third_party/chromium/about_credits.html
@@ -45,6 +47,15 @@ under the MIT License in LICENSE (Copyright (c) 2026 Astrohacker Inc.). The
 distributed binary is produced with the Bun toolchain and embeds third-party
 runtime components under their respective licenses as used by Bun/Remix at
 build time; Astrohacker first-party source remains MIT as above.
+
+================================================================================
+## first-party — ahnexus
+
+Astrohacker-owned product code for ahnexus (Nexus TermSurf chat shell: Rust
+binary and staged Vite SPA under `ui/`) is licensed under the MIT License in
+LICENSE (Copyright (c) 2026 Astrohacker Inc.). The SPA build embeds third-party
+runtime components under their respective licenses as used by the frontend
+toolchain at build time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
 ## first-party — ahhelp

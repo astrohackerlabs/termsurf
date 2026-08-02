@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ah-chromiumd"
-version = "0.1.97"
+version = "0.1.98"
 dependencies = [
  "prost",
  "prost-build",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "ahnexus"
-version = "0.1.0"
+version = "0.1.98"
 dependencies = [
  "axum",
  "clap",
@@ -32,6 +32,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -52,7 +53,7 @@ dependencies = [
 
 [[package]]
 name = "ahweb"
-version = "0.1.97"
+version = "0.1.98"
 dependencies = [
  "arboard",
  "clap",
@@ -3146,6 +3147,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

@@ -18,7 +18,7 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahhelp, chromium-fork, ah-chromiumd, all"
+  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahhelp, ahnexus, chromium-fork, ah-chromiumd, all"
   echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -265,12 +265,60 @@ build_ahhelp() {
   echo "  ahhelp: $AHHELP_DIR/dist/ahhelp"
 }
 
+build_ahnexus() {
+  local AHNEXUS_SPA="$REPO_DIR/bun/ahnexus"
+  if [ ! -d "$AHNEXUS_SPA" ]; then
+    echo "Error: ahnexus SPA package missing: $AHNEXUS_SPA" >&2
+    exit 1
+  fi
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "Error: bun is required to build ahnexus SPA (not found on PATH)" >&2
+    exit 1
+  fi
+  if $CLEAN; then
+    echo "==> Cleaning ahnexus SPA dist..."
+    rm -rf "$AHNEXUS_SPA/dist"
+    if $RELEASE; then
+      cargo clean -p ahnexus || true
+    fi
+  fi
+  if [ -z "${ASTROHACKER_VERSION:-}" ] && [ -n "${TERMSURF_VERSION:-}" ]; then
+    export ASTROHACKER_VERSION="$TERMSURF_VERSION"
+  fi
+  if $RELEASE; then
+    echo "==> Building ahnexus SPA (release${ASTROHACKER_VERSION:+, version $ASTROHACKER_VERSION})..."
+  else
+    echo "==> Building ahnexus SPA (debug${ASTROHACKER_VERSION:+, version $ASTROHACKER_VERSION})..."
+  fi
+  (
+    cd "$REPO_DIR"
+    if [ ! -d "$AHNEXUS_SPA/node_modules" ] && [ ! -d "$REPO_DIR/node_modules" ]; then
+      bun install
+    fi
+    bun run build:ahnexus
+  )
+  echo "  ahnexus SPA: $AHNEXUS_SPA/dist"
+  # ahsh (and others) may have left the shell in rust/ahsh, which is excluded
+  # from the root workspace — always build from monorepo root.
+  cd "$RUST_DIR"
+  if $RELEASE; then
+    echo "==> Building ahnexus binary (release)..."
+    cargo build --release -p ahnexus
+    echo "  ahnexus: $RUST_DIR/target/release/ahnexus"
+  else
+    echo "==> Building ahnexus binary (debug)..."
+    cargo build -p ahnexus
+    echo "  ahnexus: $RUST_DIR/target/debug/ahnexus"
+  fi
+}
+
 case "$COMPONENT" in
   chromium-fork) build_chromium_fork ;;
   ahweb|webtui) build_ahweb ;;
   ahsh)       build_ahsh ;;
   ahcalc)     build_ahcalc ;;
   ahhelp)     build_ahhelp ;;
+  ahnexus)    build_ahnexus ;;
   ah-chromiumd|chromium)   build_chromiumd ;;
   ahterm|aht) build_ahterm ;;
   all)
@@ -280,6 +328,7 @@ case "$COMPONENT" in
     build_ahsh
     build_ahcalc
     build_ahhelp
+    build_ahnexus
     build_chromiumd
     build_ahterm
     echo ""

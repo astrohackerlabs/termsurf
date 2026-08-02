@@ -199,7 +199,6 @@ const FORWARD_SYMBOL: &str = "→";
 const REFRESH_IDLE_SYMBOL: &str = "\u{E348}";
 /// Top-right quit chrome (Issue 26072709578702). Prefer ×; layout may squeeze width.
 const QUIT_SYMBOL: &str = "×";
-const REFRESH_ANIMATION_FRAMES: [&str; 4] = ["⟳", "↻", "↺", "⟲"];
 const ENABLE_ANY_MOUSE_MOTION: &str = "\x1b[?1003h";
 const DISABLE_ANY_MOUSE_MOTION: &str = "\x1b[?1003l";
 
@@ -440,80 +439,6 @@ impl RefreshControlState {
 
     fn actionable(&self, route: Option<&BackRoute>) -> bool {
         self.active_tab_id > 0 && self.can_refresh && route.is_some()
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct RefreshAnimation {
-    tab_id: i64,
-    request_id: u64,
-    started_at: Option<Instant>,
-    completed_at: Option<Instant>,
-}
-
-impl RefreshAnimation {
-    const FRAME_DURATION: Duration = Duration::from_millis(120);
-    const MIN_VISIBLE: Duration = Duration::from_millis(240);
-    const TIMEOUT: Duration = Duration::from_secs(4);
-
-    fn start(&mut self, tab_id: i64, request_id: u64, now: Instant) -> bool {
-        if tab_id <= 0 || request_id == 0 {
-            return false;
-        }
-        *self = Self {
-            tab_id,
-            request_id,
-            started_at: Some(now),
-            completed_at: None,
-        };
-        true
-    }
-
-    fn complete(&mut self, tab_id: i64, request_id: u64, now: Instant) -> bool {
-        if self.started_at.is_none() || self.tab_id != tab_id || self.request_id != request_id {
-            return false;
-        }
-        self.completed_at = Some(now);
-        true
-    }
-
-    fn stop(&mut self) {
-        *self = Self::default();
-    }
-
-    fn tick(&mut self, now: Instant) -> bool {
-        let Some(started_at) = self.started_at else {
-            return false;
-        };
-        if now.duration_since(started_at) >= Self::TIMEOUT
-            || (self.completed_at.is_some() && now.duration_since(started_at) >= Self::MIN_VISIBLE)
-        {
-            self.stop();
-            return true;
-        }
-        false
-    }
-
-    fn active(&self) -> bool {
-        self.started_at.is_some()
-    }
-
-    fn frame(&self, now: Instant) -> usize {
-        self.started_at
-            .map(|started_at| {
-                (now.duration_since(started_at).as_millis() / Self::FRAME_DURATION.as_millis())
-                    as usize
-                    % REFRESH_ANIMATION_FRAMES.len()
-            })
-            .unwrap_or(0)
-    }
-}
-
-fn refresh_symbol(animation: &RefreshAnimation, now: Instant) -> &'static str {
-    if animation.active() {
-        REFRESH_ANIMATION_FRAMES[animation.frame(now)]
-    } else {
-        REFRESH_IDLE_SYMBOL
     }
 }
 
@@ -860,11 +785,9 @@ fn needs_event_polling(
     page_loaded: bool,
     page_loaded_at: Option<Instant>,
     copy_url_feedback_until: Option<Instant>,
-    refresh_animation_active: bool,
     now: Instant,
 ) -> bool {
     !page_loaded
-        || refresh_animation_active
         || page_loaded_at
             .map(|at| now.saturating_duration_since(at) < Duration::from_secs(2))
             .unwrap_or(false)
@@ -1610,7 +1533,6 @@ fn main() -> io::Result<()> {
     let mut forward_control = ForwardControlState::default();
     let mut refresh_control = RefreshControlState::default();
     let mut quit_control = QuitControlState::default();
-    let mut refresh_animation = RefreshAnimation::default();
     let mut last_back_visual: Option<BackVisualState> = None;
     let mut last_forward_visual: Option<BackVisualState> = None;
     let mut last_refresh_visual: Option<BackVisualState> = None;
@@ -1626,8 +1548,6 @@ fn main() -> io::Result<()> {
         let mut url_rect = Rect::default();
         let mut frame_area = Rect::default();
         let browser_label = browser_display_label(&browser);
-        let now = Instant::now();
-        refresh_animation.tick(now);
         let back_route = current_back_route(
             current_tab_id,
             compositor.is_some(),
@@ -1704,8 +1624,6 @@ fn main() -> io::Result<()> {
                 &forward_control,
                 &refresh_control,
                 &quit_control,
-                &refresh_animation,
-                now,
                 back_route.is_some(),
             );
             viewport_rect = geometry.viewport;
@@ -1766,7 +1684,6 @@ fn main() -> io::Result<()> {
             let forward_pressed = forward_control.pressed.is_some();
             let refresh_actionable = refresh_control.actionable(back_route.as_ref());
             let refresh_pressed = refresh_control.pressed.is_some();
-            let refresh_symbol = refresh_symbol(&refresh_animation, now);
             let back_route_label = back_route.as_ref().map(BackRoute::label).unwrap_or("none");
             let base_render_trace = format!(
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -1798,7 +1715,7 @@ fn main() -> io::Result<()> {
                 trace_rect(viewport_rect)
             );
             let render_trace = format!(
-                "{base_render_trace}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{base_render_trace}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 forward_control.can_go_forward,
                 forward_actionable,
                 forward_control.hovered,
@@ -1809,9 +1726,7 @@ fn main() -> io::Result<()> {
                 refresh_actionable,
                 refresh_control.hovered,
                 refresh_pressed,
-                refresh_animation.active(),
-                refresh_animation.request_id,
-                refresh_symbol,
+                REFRESH_IDLE_SYMBOL,
             );
             if render_trace != last_render_trace {
                 trace.write(
@@ -1853,15 +1768,7 @@ fn main() -> io::Result<()> {
                         ("refresh_hovered", refresh_control.hovered.to_string()),
                         ("refresh_pressed", refresh_pressed.to_string()),
                         ("refresh_route", back_route_label.to_string()),
-                        (
-                            "refresh_animation_active",
-                            refresh_animation.active().to_string(),
-                        ),
-                        (
-                            "refresh_request_id",
-                            refresh_animation.request_id.to_string(),
-                        ),
-                        ("refresh_symbol", refresh_symbol.to_string()),
+                        ("refresh_symbol", REFRESH_IDLE_SYMBOL.to_string()),
                         ("refresh_rect", trace_rect(refresh_rect)),
                         ("url_rect", trace_rect(url_rect)),
                         ("viewport_rect", trace_rect(viewport_rect)),
@@ -1929,7 +1836,6 @@ fn main() -> io::Result<()> {
             page_loaded,
             page_loaded_at,
             copy_url_feedback_until,
-            refresh_animation.active(),
             Instant::now(),
         );
         let event = if needs_polling {
@@ -2763,16 +2669,6 @@ fn main() -> io::Result<()> {
                                 ],
                             );
                         }
-                        let now = Instant::now();
-                        if state == "loading"
-                            && tab_id == current_tab_id
-                            && navigation_request_id != 0
-                            && refresh_control.can_refresh
-                        {
-                            refresh_animation.start(tab_id, navigation_request_id, now);
-                        } else if matches!(state.as_str(), "done" | "error") {
-                            refresh_animation.complete(tab_id, navigation_request_id, now);
-                        }
                         // Page-load progress does not override an active download bar.
                         if download_bar_active {
                             continue;
@@ -2871,9 +2767,6 @@ fn main() -> io::Result<()> {
                             forward_control.apply_navigation_state(tab_id, can_go_forward);
                         let refresh_applied =
                             refresh_control.apply_navigation_state(tab_id, can_refresh);
-                        if refresh_applied && !can_refresh {
-                            refresh_animation.stop();
-                        }
                         if let Some(trace) = state_trace.as_mut() {
                             trace.write(
                                 "navigation_state",
@@ -2943,7 +2836,6 @@ fn main() -> io::Result<()> {
                         back_control.renderer_crashed(tab_id);
                         forward_control.renderer_crashed(tab_id);
                         refresh_control.renderer_crashed(tab_id);
-                        refresh_animation.stop();
                         loading_bar_active = false;
                         loading_bar_start = None;
                         renderer_crash_recovery_load_started = false;
@@ -2975,7 +2867,6 @@ fn main() -> io::Result<()> {
                         reset_back_for_browser_ready(&mut back_control, &mut browser_conn, tab_id);
                         forward_control.browser_ready(tab_id);
                         refresh_control.browser_ready(tab_id);
-                        refresh_animation.stop();
                         current_tab_id = tab_id;
                         if !resolved_browser.is_empty() {
                             browser = resolved_browser;
@@ -3403,8 +3294,6 @@ fn ui(
     forward_control: &ForwardControlState,
     refresh_control: &RefreshControlState,
     quit_control: &QuitControlState,
-    refresh_animation: &RefreshAnimation,
-    now: Instant,
     back_route_available: bool,
 ) -> UiGeometry {
     // Paint full background.
@@ -3434,14 +3323,7 @@ fn ui(
 
     render_back_button(frame, back_area, back_control, back_route_available);
     render_forward_button(frame, forward_area, forward_control, back_route_available);
-    render_refresh_button(
-        frame,
-        refresh_area,
-        refresh_control,
-        refresh_animation,
-        now,
-        back_route_available,
-    );
+    render_refresh_button(frame, refresh_area, refresh_control, back_route_available);
     render_quit_button(frame, quit_area, quit_control);
 
     // URL bar / Command bar (Issue 26022712000659).
@@ -3944,20 +3826,17 @@ fn render_refresh_button(
     frame: &mut Frame,
     area: Rect,
     state: &RefreshControlState,
-    animation: &RefreshAnimation,
-    now: Instant,
     route_available: bool,
 ) {
     let actionable = state.can_refresh && state.active_tab_id > 0 && route_available;
     let pressed = actionable && state.pressed.is_some();
     let (fg, bg, border) = nav_button_colors(actionable, pressed);
-    let symbol = refresh_symbol(animation, now);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(chrome_border_type())
         .border_style(Style::default().fg(border).bg(bg))
         .style(Style::default().fg(fg).bg(bg));
-    let button = Paragraph::new(symbol)
+    let button = Paragraph::new(REFRESH_IDLE_SYMBOL)
         .alignment(Alignment::Center)
         .style(Style::default().fg(fg).bg(bg))
         .block(block);
@@ -4058,8 +3937,6 @@ mod tests {
             back_control,
             ForwardControlState::default(),
             RefreshControlState::default(),
-            RefreshAnimation::default(),
-            Instant::now(),
             back_route_available,
         )
     }
@@ -4072,8 +3949,6 @@ mod tests {
         back_control: BackControlState,
         forward_control: ForwardControlState,
         refresh_control: RefreshControlState,
-        refresh_animation: RefreshAnimation,
-        now: Instant,
         route_available: bool,
     ) -> RenderProbe {
         let backend = TestBackend::new(width, height);
@@ -4115,8 +3990,6 @@ mod tests {
                     &forward_control,
                     &refresh_control,
                     &QuitControlState::default(),
-                    &refresh_animation,
-                    now,
                     route_available,
                 );
                 viewport = geometry.viewport;
@@ -4185,8 +4058,6 @@ mod tests {
                     &ForwardControlState::default(),
                     &RefreshControlState::default(),
                     &QuitControlState::default(),
-                    &RefreshAnimation::default(),
-                    Instant::now(),
                     false,
                 );
                 viewport = geometry.viewport;
@@ -4761,8 +4632,6 @@ mod tests {
                 }),
             },
             RefreshControlState::default(),
-            RefreshAnimation::default(),
-            Instant::now(),
             true,
         );
         let (x, y) = find_cell(&disabled.buffer, FORWARD_SYMBOL);
@@ -4779,8 +4648,6 @@ mod tests {
             BackControlState::default(),
             hover_state,
             RefreshControlState::default(),
-            RefreshAnimation::default(),
-            Instant::now(),
             true,
         );
         let (x, y) = find_cell(&hover.buffer, FORWARD_SYMBOL);
@@ -4802,8 +4669,6 @@ mod tests {
             BackControlState::default(),
             pressed_state,
             RefreshControlState::default(),
-            RefreshAnimation::default(),
-            Instant::now(),
             true,
         );
         let (x, y) = find_cell(&pressed.buffer, FORWARD_SYMBOL);
@@ -4846,8 +4711,9 @@ mod tests {
     }
 
     #[test]
-    fn refresh_button_styles_and_animation_frames_are_deterministic() {
-        let now = Instant::now();
+    fn refresh_button_always_paints_static_idle_glyph() {
+        // Former spinner frames must not appear on the Control refresh control.
+        const FORMER_SPINNER_FRAMES: [&str; 4] = ["⟳", "↻", "↺", "⟲"];
         let route = compositor_route();
         let mut pressed_state = enabled_refresh_state();
         pressed_state.hovered = true;
@@ -4863,17 +4729,14 @@ mod tests {
             BackControlState::default(),
             ForwardControlState::default(),
             pressed_state,
-            RefreshAnimation::default(),
-            now,
             true,
         );
         let (x, y) = find_cell(&pressed.buffer, REFRESH_IDLE_SYMBOL);
         assert_eq!(pressed.buffer[(x, y)].fg, BG);
         assert_eq!(pressed.buffer[(x, y)].bg, CYAN);
+        assert_eq!(pressed.buffer[(x, y)].symbol(), REFRESH_IDLE_SYMBOL);
 
-        let mut animation = RefreshAnimation::default();
-        assert!(animation.start(7, 41, now));
-        let frame0 = render_probe_with_navigation(
+        let idle = render_probe_with_navigation(
             Mode::Control,
             80,
             18,
@@ -4881,30 +4744,21 @@ mod tests {
             BackControlState::default(),
             ForwardControlState::default(),
             enabled_refresh_state(),
-            animation,
-            now,
             true,
         );
-        let frame1 = render_probe_with_navigation(
-            Mode::Control,
-            80,
-            18,
-            None,
-            BackControlState::default(),
-            ForwardControlState::default(),
-            enabled_refresh_state(),
-            animation,
-            now + RefreshAnimation::FRAME_DURATION,
-            true,
-        );
-        assert!(frame0.capture.contains(REFRESH_ANIMATION_FRAMES[0]));
-        assert!(frame1.capture.contains(REFRESH_ANIMATION_FRAMES[1]));
-        assert_ne!(REFRESH_ANIMATION_FRAMES[0], REFRESH_ANIMATION_FRAMES[1]);
-        assert_eq!(
-            refresh_symbol(&RefreshAnimation::default(), now),
-            REFRESH_IDLE_SYMBOL
-        );
-        assert_eq!(frame0.refresh, frame1.refresh);
+        let (idle_x, idle_y) = find_cell(&idle.buffer, REFRESH_IDLE_SYMBOL);
+        assert_eq!(idle.buffer[(idle_x, idle_y)].symbol(), REFRESH_IDLE_SYMBOL);
+        for frame in FORMER_SPINNER_FRAMES {
+            assert!(
+                !idle.capture.contains(frame),
+                "idle refresh probe must not contain former spinner frame {frame}"
+            );
+            assert!(
+                !pressed.capture.contains(frame),
+                "pressed refresh probe must not contain former spinner frame {frame}"
+            );
+        }
+        assert_eq!(idle.refresh, pressed.refresh);
     }
 
     #[test]
@@ -4963,28 +4817,6 @@ mod tests {
 
         assert!(state.apply_navigation_state(7, false));
         assert!(!state.can_refresh);
-    }
-
-    #[test]
-    fn refresh_animation_correlates_replacement_completion_minimum_and_timeout() {
-        let now = Instant::now();
-        let mut animation = RefreshAnimation::default();
-        assert!(animation.start(7, 10, now));
-        assert_eq!(animation.frame(now), 0);
-        assert_eq!(animation.frame(now + RefreshAnimation::FRAME_DURATION), 1);
-        assert!(!animation.complete(7, 9, now + Duration::from_millis(50)));
-        assert!(animation.start(7, 11, now + Duration::from_millis(60)));
-        assert_eq!(animation.request_id, 11);
-        assert!(!animation.complete(7, 10, now + Duration::from_millis(70)));
-        assert!(animation.complete(7, 11, now + Duration::from_millis(80)));
-        assert!(!animation.tick(now + Duration::from_millis(299)));
-        assert!(animation.active());
-        assert!(animation.tick(now + Duration::from_millis(300)));
-        assert!(!animation.active());
-
-        assert!(animation.start(7, 12, now));
-        assert!(animation.tick(now + RefreshAnimation::TIMEOUT));
-        assert!(!animation.active());
     }
 
     #[test]
@@ -5597,25 +5429,12 @@ mod tests {
     }
 
     #[test]
-    fn event_polling_active_animation_overrides_expired_page_grace() {
-        let now = Instant::now();
-        assert!(needs_event_polling(
-            true,
-            Some(now - Duration::from_secs(3)),
-            None,
-            true,
-            now,
-        ));
-    }
-
-    #[test]
     fn event_polling_old_completed_page_blocks_without_active_reason() {
         let now = Instant::now();
         assert!(!needs_event_polling(
             true,
             Some(now - Duration::from_secs(3)),
             None,
-            false,
             now,
         ));
     }
@@ -5623,38 +5442,35 @@ mod tests {
     #[test]
     fn event_polling_cold_load_grace_and_copy_feedback_are_independent() {
         let now = Instant::now();
-        assert!(needs_event_polling(false, None, None, false, now));
+        assert!(needs_event_polling(false, None, None, now));
         assert!(needs_event_polling(
             true,
             Some(now - Duration::from_secs(1)),
             None,
-            false,
             now,
         ));
         assert!(needs_event_polling(
             true,
             None,
             Some(now + Duration::from_secs(1)),
-            false,
             now,
         ));
     }
 
     #[test]
-    fn event_polling_expired_copy_feedback_cannot_mask_animation() {
+    fn event_polling_expired_copy_feedback_does_not_force_poll() {
         let now = Instant::now();
         assert!(!needs_event_polling(
             true,
             None,
             Some(now - Duration::from_secs(1)),
-            false,
             now,
         ));
-        assert!(needs_event_polling(
+        // Expired page-load grace + expired copy feedback → no poll.
+        assert!(!needs_event_polling(
             true,
             Some(now - Duration::from_secs(3)),
             Some(now - Duration::from_secs(1)),
-            true,
             now,
         ));
     }
