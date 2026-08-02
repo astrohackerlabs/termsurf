@@ -1,6 +1,6 @@
 [package]
 name = "ahweb"
-version = "0.1.102"
+version = "0.1.103"
 edition = "2021"
 
 [[bin]]
@@ -9,15 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 crossterm = "0.29"
-# Pin pre-CPR-on-clear tree (Issue 26080220381373 Exp 1).
-# ratatui 0.30.2 / ratatui-core 0.1.2 make Terminal::clear() call
-# get_cursor_position() (CSI 6n), which races ahweb's concurrent event::read.
-# Direct exact pins hold transitively: edtui/macros otherwise re-float widgets→0.3.2→core 0.1.2.
-ratatui = "=0.30.0"
-ratatui-core = "=0.1.0"
-ratatui-widgets = "=0.3.0"
-ratatui-macros = "=0.7.0"
-ratatui-crossterm = "=0.1.0"
+# Nav full-redraw uses force_full_redraw (resize/clear_viewport), not Terminal::clear,
+# so concurrent event::read is safe with ratatui-core ≥ 0.1.2 (Issue 26080220381373 Exp 2).
+ratatui = "0.30"
 edtui = { version = "0.11.1", default-features = false, features = ["arboard"] }
 arboard = "3"
 libc = "0.2"

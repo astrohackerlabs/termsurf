@@ -1578,7 +1578,11 @@ fn main() -> io::Result<()> {
             // overlay. Navigation state changes are infrequent, so force one full
             // terminal redraw at that boundary to make the visual feedback
             // observable without turning steady-state rendering into polling.
-            terminal.clear()?;
+            //
+            // Do not use Terminal::clear(): on ratatui-core ≥ 0.1.2 it queries
+            // cursor position (CSI 6n) and races the concurrent event::read
+            // thread (Issue 26080220381373 Exp 2).
+            force_full_redraw(&mut terminal)?;
             if let Some(trace) = state_trace.as_mut() {
                 trace.write(
                     "back_visual_redraw",
@@ -3130,6 +3134,18 @@ fn shell_quote_arg(value: &str) -> String {
     }
 }
 
+/// Force a full terminal repaint without cursor-position CPR (`CSI 6n`).
+///
+/// On ratatui-core ≥ 0.1.2, [`Terminal::clear`] calls `get_cursor_position` so
+/// it can restore the cursor. That races ahweb's background `event::read`
+/// thread and times out (Issue 26080220381373). For a fullscreen viewport,
+/// [`Terminal::resize`] to the current size clears via `clear_viewport` /
+/// `ClearType::All` and resets buffers **without** a CPR query.
+fn force_full_redraw<B: Backend>(terminal: &mut Terminal<B>) -> Result<(), B::Error> {
+    let area: Rect = terminal.size()?.into();
+    terminal.resize(area)
+}
+
 fn viewport_identity_label(
     browser_label: &str,
     profile: &str,
@@ -3865,9 +3881,148 @@ fn render_quit_button(frame: &mut Frame, area: Rect, state: &QuitControlState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::backend::TestBackend;
-    use ratatui::buffer::Buffer;
+    use ratatui::backend::{Backend, ClearType, TestBackend, WindowSize};
+    use ratatui::buffer::{Buffer, Cell};
+    use ratatui::layout::{Position, Size};
     use ratatui::Terminal;
+    use std::io;
+
+    /// Counts `get_cursor_position` calls so CPR-free paths can be asserted.
+    struct CursorQueryCounter {
+        inner: TestBackend,
+        queries: u32,
+    }
+
+    impl CursorQueryCounter {
+        fn new(width: u16, height: u16) -> Self {
+            Self {
+                inner: TestBackend::new(width, height),
+                queries: 0,
+            }
+        }
+    }
+
+    impl Backend for CursorQueryCounter {
+        type Error = io::Error;
+
+        fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.inner
+                .draw(content)
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn hide_cursor(&mut self) -> io::Result<()> {
+            self.inner
+                .hide_cursor()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn show_cursor(&mut self) -> io::Result<()> {
+            self.inner
+                .show_cursor()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn get_cursor_position(&mut self) -> io::Result<Position> {
+            self.queries = self.queries.saturating_add(1);
+            self.inner
+                .get_cursor_position()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> io::Result<()> {
+            self.inner
+                .set_cursor_position(position)
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn clear(&mut self) -> io::Result<()> {
+            self.inner
+                .clear()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+            self.inner
+                .clear_region(clear_type)
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn size(&self) -> io::Result<Size> {
+            self.inner
+                .size()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn window_size(&mut self) -> io::Result<WindowSize> {
+            self.inner
+                .window_size()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.inner
+                .flush()
+                .map_err(|e| io::Error::other(e.to_string()))
+        }
+    }
+
+    #[test]
+    fn force_full_redraw_does_not_query_cursor_position() {
+        let backend = CursorQueryCounter::new(40, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("before"), frame.area());
+            })
+            .unwrap();
+        // Draw may hide/show cursor; reset after paint so only redraw is counted.
+        terminal.backend_mut().queries = 0;
+
+        force_full_redraw(&mut terminal).expect("force_full_redraw");
+
+        assert_eq!(
+            terminal.backend().queries, 0,
+            "force_full_redraw must not call get_cursor_position (CPR / CSI 6n)"
+        );
+
+        // Next draw still works (buffers were invalidated).
+        terminal
+            .draw(|frame| {
+                frame.render_widget(Paragraph::new("after"), frame.area());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn nav_redraw_source_does_not_call_terminal_clear() {
+        // Structural: production main (before tests) must not call Terminal::clear —
+        // that API issues CPR on ratatui-core 0.1.2+ and races event::read.
+        let main_src = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.rs"));
+        let production = main_src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production section before tests");
+        assert!(
+            production.contains("force_full_redraw"),
+            "expected force_full_redraw helper in production main.rs"
+        );
+        // Match the call form only (not prose comments that mention the API).
+        let call_sites: Vec<_> = production
+            .lines()
+            .filter(|line| {
+                let trimmed = line.trim_start();
+                !trimmed.starts_with("//") && trimmed.contains("terminal.clear")
+            })
+            .collect();
+        assert!(
+            call_sites.is_empty(),
+            "production must not call terminal.clear (found: {call_sites:?})"
+        );
+    }
 
     #[test]
     fn version_flags_are_intercepted_before_runtime_setup() {
