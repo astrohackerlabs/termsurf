@@ -1,0 +1,105 @@
+From b9e066a52c28cfaf142a0462fd0f60b3e7f98cbe Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 2 Aug 2026 09:24:32 -0500
+Subject: [PATCH 9/9] ahsh: port nu-cli to reedline tip
+ CompletionResult/EditCommand APIs
+
+Reedline main added CompletionOrigin on stale results, struct-shaped
+Fresh suggestions, CutSelection granularity, and new selection/case
+edit commands. Map them in completer and reedline_config for path pin.
+---
+ crates/nu-cli/src/completions/completer.rs | 13 +++++++++----
+ crates/nu-cli/src/reedline_config.rs       | 14 ++++++++++++--
+ 2 files changed, 21 insertions(+), 6 deletions(-)
+
+diff --git a/crates/nu-cli/src/completions/completer.rs b/crates/nu-cli/src/completions/completer.rs
+index 4a081c6d8..566907395 100644
+--- a/crates/nu-cli/src/completions/completer.rs
++++ b/crates/nu-cli/src/completions/completer.rs
+@@ -11,7 +11,8 @@ use nu_protocol::{
+ };
+ use nu_utils::time::Instant;
+ use reedline::{
+-    Completer as ReedlineCompleter, CompletionResult, CompletionStatus, Suggestion, Suggestions,
++    Completer as ReedlineCompleter, CompletionOrigin, CompletionResult, CompletionStatus,
++    Suggestion, Suggestions,
+ };
+ use std::sync::{Arc, Mutex, mpsc};
+ use std::thread;
+@@ -1031,7 +1032,9 @@ impl NuCompleter {
+         // mean a compute is still in flight; keep the best-effort `Arc` (empty for
+         // `Pending`) as a fallback while we wait for the settled result.
+         let fallback = match self.complete(line, pos) {
+-            CompletionResult::Fresh(values) => return values,
++            CompletionResult::Fresh {
++                suggestions, ..
++            } => return suggestions,
+             in_flight => in_flight.into_shared().unwrap_or_default(),
+         };
+ 
+@@ -1071,9 +1074,11 @@ impl ReedlineCompleter for NuCompleter {
+             Self::spawn_worker(&self.engine_state, &self.stack, &self.cache)
+         });
+ 
++        let origin = CompletionOrigin::new(line, pos);
++
+         // Already waiting on this exact query; keep showing the fallback.
+         if worker.pending.as_ref().is_some_and(|(q, _)| q == &query) {
+-            return CompletionResult::stale_or_pending(fallback);
++            return CompletionResult::stale_or_pending(fallback, origin);
+         }
+ 
+         worker.next_generation = worker.next_generation.wrapping_add(1);
+@@ -1085,7 +1090,7 @@ impl ReedlineCompleter for NuCompleter {
+             worker.pending = None;
+         }
+ 
+-        CompletionResult::stale_or_pending(fallback)
++        CompletionResult::stale_or_pending(fallback, origin)
+     }
+ 
+     /// Poll the background worker, collapsing the old `has_pending` +
+diff --git a/crates/nu-cli/src/reedline_config.rs b/crates/nu-cli/src/reedline_config.rs
+index f599486d1..e0b7b1cc1 100644
+--- a/crates/nu-cli/src/reedline_config.rs
++++ b/crates/nu-cli/src/reedline_config.rs
+@@ -1216,8 +1216,14 @@ fn edit_from_record(
+             EditCommand::MoveLeftBefore { c: char, select }
+         }
+         Ok(ECD::SelectAll) => EditCommand::SelectAll,
+-        Ok(ECD::CutSelection) => EditCommand::CutSelection,
++        Ok(ECD::CutSelection) => EditCommand::CutSelection {
++            granularity: parse_granularity(record, config, span)?,
++        },
+         Ok(ECD::CopySelection) => EditCommand::CopySelection,
++        Ok(ECD::LowercaseSelection) => EditCommand::LowercaseSelection,
++        Ok(ECD::UppercaseSelection) => EditCommand::UppercaseSelection,
++        Ok(ECD::SwitchcaseSelection) => EditCommand::SwitchcaseSelection,
++        Ok(ECD::CutCharLeft) => EditCommand::CutCharLeft,
+         Ok(ECD::Paste) => EditCommand::Paste,
+         Ok(ECD::CopyFromStart) => EditCommand::CopyFromStart,
+         Ok(ECD::CopyFromStartLinewise) => EditCommand::CopyFromStartLinewise,
+@@ -1358,6 +1364,7 @@ pub(crate) fn display_edit_command(edit: EditCommandDiscriminants) -> Option<&'s
+         ECD::ReplaceChar => "ReplaceChar value: <char>",
+         ECD::Backspace => "Backspace",
+         ECD::Delete => "Delete",
++        ECD::CutCharLeft => "CutCharLeft",
+         ECD::CutChar => "CutChar",
+         ECD::BackspaceWord => "BackspaceWord",
+         ECD::DeleteWord => "DeleteWord",
+@@ -1396,8 +1403,11 @@ pub(crate) fn display_edit_command(edit: EditCommandDiscriminants) -> Option<&'s
+         ECD::CutLeftUntil => "CutLeftUntil value: <char>",
+         ECD::CutLeftBefore => "CutLeftBefore value: <char>",
+         ECD::SelectAll => "SelectAll",
+-        ECD::CutSelection => "CutSelection",
++        ECD::CutSelection => "CutSelection granularity?: <string>",
+         ECD::CopySelection => "CopySelection",
++        ECD::LowercaseSelection => "LowercaseSelection",
++        ECD::UppercaseSelection => "UppercaseSelection",
++        ECD::SwitchcaseSelection => "SwitchcaseSelection",
+         ECD::Paste => "Paste",
+         ECD::CopyFromStart => "CopyFromStart",
+         ECD::CopyFromStartLinewise => "CopyFromStartLinewise",
+-- 
+2.50.1 (Apple Git-155)
+

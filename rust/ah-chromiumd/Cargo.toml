@@ -1,6 +1,6 @@
 [package]
 name = "ah-chromiumd"
-version = "0.1.99"
+version = "0.1.100"
 edition = "2021"
 
 [[bin]]
