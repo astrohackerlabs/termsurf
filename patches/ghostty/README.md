@@ -1,6 +1,29 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080410047087 Exp 3 Austin Night default)
+## Active Pin (Issue 26080410047087 Exp 7 Austin Night sodium yellow)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080410047087-exp7-austin-night-yellow`
+- **Product HEAD:** `cecc0dd0d5cc5843fad3efe4ac6d03fc8f81e5c3`
+- **Product tree:** `59b6702732d0524efc9739bce1da02dc42a3003c`
+- **Issue archives:** `issue-26080213543507/` (**65**) + `issue-26080410047087/` (**2**)
+- **Patches:** **67** total
+- **Archive SHA-256:**
+  `5cc86007786060360e1cc99e6e713f98d120c52831286652d690a3437d16239a`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 7 — Austin Night `palette` 3/11 yellow → **`#e8a84a`**
+  (product sodium warning). Prior Exp 3: theme file + default `Austin Night`
+  + install. TokyoNight remains available.
+- **TREE_MATCH:** tip matches base + 67 patches
+- **Patch SHA-256 (bookends + issue):**
+  - 0001 (series): `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065 (series): `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+  - issue-26080410047087/0001 (Exp 3): `63909efe660c9ec21c9ed0e49616691e9bcc28197f8bc85878584044405f5433`
+  - issue-26080410047087/0002 (Exp 7): `0e3d747baa198e8cb00ba2fa8bb0b08cf5089b83dfb8352d98aea291389c20d9`
+
+## Prior Active Pin (Issue 26080410047087 Exp 3 Austin Night default)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`

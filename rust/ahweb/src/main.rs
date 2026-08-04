@@ -35,7 +35,8 @@ const BORDER: Color = Color::Rgb(0x56, 0x5f, 0x89);
 const DIM: Color = Color::Rgb(0x90, 0x9a, 0xb8);
 const SELECTION: Color = Color::Rgb(0x28, 0x34, 0x57);
 const PURPLE: Color = Color::Rgb(0xbb, 0x9a, 0xf7);
-const YELLOW: Color = Color::Rgb(0xe0, 0xaf, 0x68);
+// Exp 7: sodium warning (matches product --ah-warning #e8a84a)
+const YELLOW: Color = Color::Rgb(0xe8, 0xa8, 0x4a);
 const BLUE: Color = Color::Rgb(0x7a, 0xa2, 0xf7);
 const GREEN: Color = Color::Rgb(0x9e, 0xce, 0x6a);
 const RED: Color = Color::Rgb(0xf7, 0x76, 0x8e);
@@ -4468,6 +4469,8 @@ mod tests {
         assert_eq!(FG, Color::Rgb(0xc0, 0xca, 0xf5));
         assert_eq!(CYAN, Color::Rgb(0x7d, 0xcf, 0xff));
         assert_eq!(BORDER, Color::Rgb(0x56, 0x5f, 0x89));
+        // Exp 7: sodium warning matches product --ah-warning
+        assert_eq!(YELLOW, Color::Rgb(0xe8, 0xa8, 0x4a));
     }
 
     #[test]
