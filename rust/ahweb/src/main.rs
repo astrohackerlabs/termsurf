@@ -26,8 +26,8 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 /// Last-resort open URL when CLI has no URL and Hello homepage is empty.
 const DEFAULT_HOMEPAGE_URL: &str = "https://astrohacker.com/";
 
-// Tokyo Night palette.
-const BG: Color = Color::Rgb(0x1a, 0x1b, 0x26);
+// Product page ground (Austin Night / darker Tokyo Night plate) + accents.
+const BG: Color = Color::Rgb(0x09, 0x09, 0x0d);
 const FG: Color = Color::Rgb(0xc0, 0xca, 0xf5);
 const COMMENT: Color = Color::Rgb(0x73, 0x7a, 0xa2);
 const CYAN: Color = Color::Rgb(0x7d, 0xcf, 0xff);
@@ -4457,6 +4457,17 @@ mod tests {
         assert_eq!(macos_defaults_color_scheme(true, b"Dark\n"), Some(true));
         assert_eq!(macos_defaults_color_scheme(true, b"Light\n"), Some(false));
         assert_eq!(macos_defaults_color_scheme(true, b"Graphite\n"), None);
+    }
+
+    #[test]
+    fn chrome_ground_matches_product_austin_night_plate() {
+        // Exp darker-page-ground / Exp 4: shipped BG is the real chrome ground constant.
+        assert_eq!(BG, Color::Rgb(0x09, 0x09, 0x0d));
+        assert_ne!(BG, Color::Rgb(0x1a, 0x1b, 0x26));
+        // Accents stay Tokyo Night–family (unchanged this exp).
+        assert_eq!(FG, Color::Rgb(0xc0, 0xca, 0xf5));
+        assert_eq!(CYAN, Color::Rgb(0x7d, 0xcf, 0xff));
+        assert_eq!(BORDER, Color::Rgb(0x56, 0x5f, 0x89));
     }
 
     #[test]
