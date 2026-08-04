@@ -1,6 +1,29 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080213543507 Exp 2 Ghostty main tip)
+## Active Pin (Issue 26080410047087 Exp 3 Austin Night default)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080410047087-exp3-austin-night`
+- **Product HEAD:** `3d2dcf54ba3d2aeaa306557ed489194c44abb576`
+- **Product tree:** `dbcc4d6736f07926a997a630e81b40912afcff90`
+- **Issue archives:** `issue-26080213543507/` (**65**) + `issue-26080410047087/` (**1**)
+- **Patches:** **66** total
+- **Archive SHA-256:**
+  `cd9e6d2b700a73349791cc9e5940dc0f76dbe114b3f6dc301dd9d4d5799e5d0f`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Product theme **Austin Night** (TokyoNight palette +
+  `background = #09090d`); default `theme` light/dark → `Austin Night`;
+  install from `src/astrohacker/themes/` into resources themes. TokyoNight
+  remains available. Parent: Exp 2 ghostty main tip series.
+- **TREE_MATCH:** tip matches base + 66 patches (stable patch-id series)
+- **Patch SHA-256 (bookends + Exp 3):**
+  - 0001 (series): `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065 (series): `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+  - issue-26080410047087/0001: `63909efe660c9ec21c9ed0e49616691e9bcc28197f8bc85878584044405f5433`
+
+## Prior Active Pin (Issue 26080213543507 Exp 2 Ghostty main tip)
 
 - **Upstream policy:** latest commit on **`main`**
 - **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
