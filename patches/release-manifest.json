@@ -6,15 +6,15 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6",
-      "branch": "issue-26080410047087-exp7-austin-night-yellow",
-      "expected_head": "cecc0dd0d5cc5843fad3efe4ac6d03fc8f81e5c3",
-      "expected_tree": "59b6702732d0524efc9739bce1da02dc42a3003c",
+      "branch": "issue-26080410047087-exp8-dock-ground",
+      "expected_head": "52d8f871f3866b39fc052bb0736b8dca7d8ede2e",
+      "expected_tree": "f38caf270c2fdb0ec28224a5dac016f312689e6f",
       "patch_directories": [
         "patches/ghostty/patches/issue-26080213543507",
         "patches/ghostty/patches/issue-26080410047087"
       ],
-      "patch_count": 67,
-      "archive_sha256": "5cc86007786060360e1cc99e6e713f98d120c52831286652d690a3437d16239a",
+      "patch_count": 68,
+      "archive_sha256": "9910157c77c4c59b98fab6571a5e0e870698905bfda3a8c714526299c2d8e9bb",
       "allowed_untracked": []
     },
     {

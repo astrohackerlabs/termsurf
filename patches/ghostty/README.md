@@ -1,6 +1,30 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080410047087 Exp 7 Austin Night sodium yellow)
+## Active Pin (Issue 26080410047087 Exp 8 Dock AppIcon plate `#09090d`)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080410047087-exp8-dock-ground`
+- **Product HEAD:** `52d8f871f3866b39fc052bb0736b8dca7d8ede2e`
+- **Product tree:** `f38caf270c2fdb0ec28224a5dac016f312689e6f`
+- **Issue archives:** `issue-26080213543507/` (**65**) + `issue-26080410047087/` (**3**)
+- **Patches:** **68** total
+- **Archive SHA-256:**
+  `9910157c77c4c59b98fab6571a5e0e870698905bfda3a8c714526299c2d8e9bb`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 8 — monogram Dock / AppIcon plate **`#09090d`** (was
+  `#07203A`); cyan mark `#1BFEFF` unchanged. Prior: Austin Night theme +
+  sodium yellow (Exp 3/7).
+- **TREE_MATCH:** tip matches base + 68 patches
+- **Patch SHA-256 (bookends + issue):**
+  - 0001 (series): `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065 (series): `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+  - issue-26080410047087/0001 (Exp 3): `63909efe660c9ec21c9ed0e49616691e9bcc28197f8bc85878584044405f5433`
+  - issue-26080410047087/0002 (Exp 7): `0e3d747baa198e8cb00ba2fa8bb0b08cf5089b83dfb8352d98aea291389c20d9`
+  - issue-26080410047087/0003 (Exp 8): `c8643babe5585fd32be425465e04de57aad1c83b9e7e8fc64fa24a606287caa1`
+
+## Prior Active Pin (Issue 26080410047087 Exp 7 Austin Night sodium yellow)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
