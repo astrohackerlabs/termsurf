@@ -77,9 +77,13 @@ first, then composition, then solo surfaces).
 
 ![TermSurf split window with product help and the Astrohacker calculator in two panes](assets/screenshots/story/ahhelp-ahcalc.webp)
 
-### A real browser engine in the host
+### Browse the web inside your terminal
 
-![Astrohacker TermSurf window showing a browser pane open to the Astrohacker website](assets/screenshots/story/browser-solo.webp)
+![Astrohacker TermSurf window with the product website open in a browser pane](assets/screenshots/story/browser-solo.webp)
+
+This is Astrohacker TermSurf: a normal terminal window with a real Chromium
+browser running as a pane—same app, same window, not a separate browser you
+alt-tab to.
 
 ### Still a terminal when you want one
 

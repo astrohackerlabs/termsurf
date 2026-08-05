@@ -27,7 +27,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 const DEFAULT_HOMEPAGE_URL: &str = "https://astrohacker.com/";
 
 // Product page ground (Austin Night / darker Tokyo Night plate) + accents.
-const BG: Color = Color::Rgb(0x09, 0x09, 0x0d);
+const BG: Color = Color::Rgb(0x11, 0x12, 0x19);
 const FG: Color = Color::Rgb(0xc0, 0xca, 0xf5);
 const COMMENT: Color = Color::Rgb(0x73, 0x7a, 0xa2);
 const CYAN: Color = Color::Rgb(0x7d, 0xcf, 0xff);
@@ -4463,7 +4463,7 @@ mod tests {
     #[test]
     fn chrome_ground_matches_product_austin_night_plate() {
         // Exp darker-page-ground / Exp 4: shipped BG is the real chrome ground constant.
-        assert_eq!(BG, Color::Rgb(0x09, 0x09, 0x0d));
+        assert_eq!(BG, Color::Rgb(0x11, 0x12, 0x19));
         assert_ne!(BG, Color::Rgb(0x1a, 0x1b, 0x26));
         // Accents stay Tokyo Night–family (unchanged this exp).
         assert_eq!(FG, Color::Rgb(0xc0, 0xca, 0xf5));

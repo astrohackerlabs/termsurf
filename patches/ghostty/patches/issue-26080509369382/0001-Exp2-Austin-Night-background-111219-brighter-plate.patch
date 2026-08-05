@@ -1,0 +1,39 @@
+From 5261d874e1bb0b20c7d5d0b86e866f2bdfdf14d8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 5 Aug 2026 04:42:55 -0500
+Subject: [PATCH] Exp2: Austin Night background #111219 (brighter plate)
+
+---
+ src/astrohacker/themes/Austin Night | 2 +-
+ src/config/Config.zig               | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/astrohacker/themes/Austin Night b/src/astrohacker/themes/Austin Night
+index 775fdcd18..43821d234 100644
+--- a/src/astrohacker/themes/Austin Night	
++++ b/src/astrohacker/themes/Austin Night	
+@@ -14,7 +14,7 @@ palette = 12=#7aa2f7
+ palette = 13=#bb9af7
+ palette = 14=#7dcfff
+ palette = 15=#c0caf5
+-background = #09090d
++background = #111219
+ foreground = #c0caf5
+ cursor-color = #c0caf5
+ cursor-text = #15161e
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index f8ba39026..ff3fc2189 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -596,7 +596,7 @@ language: ?[:0]const u8 = null,
+ ///
+ /// Astrohacker TermSurf defaults to the product **Austin Night** theme (exact
+ /// resource name; case-sensitive on case-sensitive filesystems). Austin Night is
+-/// TokyoNight with a darker page ground (#09090d). Set `theme` explicitly to use
++/// TokyoNight with a darker page ground (#111219). Set `theme` explicitly to use
+ /// a different theme (e.g. TokyoNight) or light/dark pair.
+ theme: ?Theme = .{
+     .light = "Austin Night",
+-- 
+2.50.1 (Apple Git-155)
+

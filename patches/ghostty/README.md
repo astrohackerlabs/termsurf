@@ -1,6 +1,51 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080410047087 Exp 8 Dock AppIcon plate `#09090d`)
+## Active Pin (Issue 26080509369382 Exp 3 Dock AppIcon `#111219`)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080509369382-exp3-dock-111219`
+- **Product HEAD:** `0c49ea9300191ca0992470f2b9339ac62f6be662`
+- **Product tree:** `329ff172f1a4c0cb521edd01f9bbc49637054b35`
+- **Issue archives:** `issue-26080213543507/` (**65**) + `issue-26080410047087/` (**3**) + `issue-26080509369382/` (**2**)
+- **Patches:** **70** total
+- **Archive SHA-256:**
+  `b2b4ecd8340202b0eb0c7b3da9b5bab149a0a741b5d5a0751ed8e5268fe73271`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 3 — monogram Dock/AppIcon ladder plate **`#111219`** (was
+  `#09090d` pixels); cyan mark `#1BFEFF` unchanged. Prior Exp 2: Austin Night
+  theme background `#111219`.
+- **TREE_MATCH:** tip matches base + 70 patches
+- **Patch SHA-256 (bookends + issue):**
+  - 0001 (series): `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065 (series): `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+  - issue-26080509369382/0001 (Exp 2): `c8430ba679e7462fc5fca4684b1c1d5d272eb773273895f8facca6ee3e7695ff`
+  - issue-26080509369382/0002 (Exp 3): `1f926db872aa478f08f1d8926deb4aecfd546f0e51408ac7949b1713f9497a61`
+
+## Prior Active Pin (Issue 26080509369382 Exp 2 Austin Night `#111219`)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
+- **Product branch:** `issue-26080509369382-exp2-austin-night-111219`
+- **Product HEAD:** `5261d874e1bb0b20c7d5d0b86e866f2bdfdf14d8`
+- **Product tree:** `5be2824a8242965df750eb54db8fdc8dacde8056`
+- **Issue archives:** `issue-26080213543507/` (**65**) + `issue-26080410047087/` (**3**) + `issue-26080509369382/` (**1**)
+- **Patches:** **69** total
+- **Archive SHA-256:**
+  `fd0ccd33acd67a25c96d9a7af46ed5e0a0c1ecda98bd8662e8e1e34583f771ae`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 2 (brighter page ground) — Austin Night `background` **`#111219`**
+  (Tokyo × ~⅔; was `#09090d`). Config default remains Austin Night.
+- **TREE_MATCH:** tip matches base + 69 patches
+- **Patch SHA-256 (bookends + issue):**
+  - 0001 (series): `e3e0200ca2eb769e6ed49a92898bef589de7ee54af3c09e24cfd016ea276449c`
+  - 0065 (series): `4beedc72042bdd624558364e6eb7b911c79c2df7405e26ddbf8398ccea9f010b`
+  - issue-26080410047087/0003 (Exp 8): `c8643babe5585fd32be425465e04de57aad1c83b9e7e8fc64fa24a606287caa1`
+  - issue-26080509369382/0001 (Exp 2): `c8430ba679e7462fc5fca4684b1c1d5d272eb773273895f8facca6ee3e7695ff`
+
+## Prior Active Pin (Issue 26080410047087 Exp 8 Dock AppIcon plate `#09090d`)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`
