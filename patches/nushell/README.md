@@ -5,22 +5,34 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26080213543507 Exp 5)
+## Current State (Issue 26080510416061 Exp 1)
 
 - Upstream repository: `https://github.com/nushell/nushell`
 - Upstream base commit (main tip): `e08c27a42405c05de629ac50077ce7f759d82a64`
 - Workspace version: `0.114.2` (confirm in workspace `Cargo.toml` if bumped)
-- Product branch: `issue-26080213543507-exp5-nushell-main`
-- Product HEAD: `b9e066a52c28cfaf142a0462fd0f60b3e7f98cbe`
-- Product tree: `d711069b84f67a781b4d09572a30e9e1b83aa77b`
+- Product branch: `issue-26080510416061-exp1-unbind-ctrl-l`
+- Product HEAD: `211b92c2130e4bcdffb70c23b6a979ff6791d1a1`
+- Product tree: `ec00517618c8989d46200603fc026fab2c08ab26`
 - Local fork working tree: `forks/nushell`
-- Issue archive (cumulative, release authority):
+- Issue archive (release authority, multi-dir series):
   - `patches/nushell/patches/issue-26080213543507/` (**9** patches)
+  - `patches/nushell/patches/issue-26080510416061/` (**1** patch) — product
+    unbind Ctrl+L ClearScreen
+- Total patch count: **10**
 - Archive aggregate SHA-256:
-  `cb5be5a6139803d3f55627a0a106be1a02fa2434b05693981d40c1c6cc9c4d7f`
+  `8e2c8bda7a344da524901b83aab05a122f06258ede67ade7fd46682d5f86935f`
 - Reedline path pin: sibling `forks/reedline` at tip
   `60d9967420b5a56745f6ec250b40bc3b6813092b` (`0.49.0`)
 - Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
+
+## Prior State (Issue 26080213543507 Exp 5)
+
+- Product branch: `issue-26080213543507-exp5-nushell-main`
+- Product HEAD: `b9e066a52c28cfaf142a0462fd0f60b3e7f98cbe`
+- Product tree: `d711069b84f67a781b4d09572a30e9e1b83aa77b`
+- Archive: `patches/nushell/patches/issue-26080213543507/` (**9** patches)
+- Archive SHA-256:
+  `cb5be5a6139803d3f55627a0a106be1a02fa2434b05693981d40c1c6cc9c4d7f`
 
 ## Prior State (Issue 26072616587256 Exp 4)
 
@@ -39,6 +51,7 @@ importing Nushell history into the company repo.
 - Nu-first PATH union for alt-shell env merge
 - Port `nu-cli` to reedline tip (`CompletionOrigin` / `CutSelection` granularity
   / new edit-command discriminants)
+- Product unbind Ctrl+L ClearScreen (ahsh / host pane pass-through)
 
 ## Apply (clean base)
 
@@ -46,7 +59,8 @@ importing Nushell history into the company repo.
 BASE=e08c27a42405c05de629ac50077ce7f759d82a64
 git -C forks/nushell worktree add /tmp/astrohacker-nushell-pin "$BASE"
 git -C /tmp/astrohacker-nushell-pin am \
-  "$PWD/patches/nushell/patches/issue-26080213543507/"*.patch
+  "$PWD/patches/nushell/patches/issue-26080213543507/"*.patch \
+  "$PWD/patches/nushell/patches/issue-26080510416061/"*.patch
 ```
 
 ## Prior State (Issue 26072213251282 Exp 2)

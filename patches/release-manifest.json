@@ -22,14 +22,15 @@
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "e08c27a42405c05de629ac50077ce7f759d82a64",
-      "branch": "issue-26080213543507-exp5-nushell-main",
-      "expected_head": "b9e066a52c28cfaf142a0462fd0f60b3e7f98cbe",
-      "expected_tree": "d711069b84f67a781b4d09572a30e9e1b83aa77b",
+      "branch": "issue-26080510416061-exp1-unbind-ctrl-l",
+      "expected_head": "211b92c2130e4bcdffb70c23b6a979ff6791d1a1",
+      "expected_tree": "ec00517618c8989d46200603fc026fab2c08ab26",
       "patch_directories": [
-        "patches/nushell/patches/issue-26080213543507"
+        "patches/nushell/patches/issue-26080213543507",
+        "patches/nushell/patches/issue-26080510416061"
       ],
-      "patch_count": 9,
-      "archive_sha256": "cb5be5a6139803d3f55627a0a106be1a02fa2434b05693981d40c1c6cc9c4d7f",
+      "patch_count": 10,
+      "archive_sha256": "8e2c8bda7a344da524901b83aab05a122f06258ede67ade7fd46682d5f86935f",
       "allowed_untracked": []
     },
     {
