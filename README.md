@@ -31,6 +31,12 @@ Open the product help cheatsheet:
 ahhelp
 ```
 
+Open the KeyPears client:
+
+```bash
+ahkey
+```
+
 This public repository contains the open source client material synced from the
 private Astrohacker monorepo for source releases. It includes:
 

@@ -21,6 +21,7 @@ ahweb
 ahsh
 ahcalc
 ahhelp
+ahkey
 ahnexus
 ah-chromiumd
 <!-- /released-wrappers -->
@@ -31,6 +32,7 @@ paths in the release tarball besides bare CLI binaries):
 <!-- released-payload-roots -->
 ahcalc
 ahhelp
+ahkey
 ahnexus
 ah-chromiumd
 <!-- /released-payload-roots -->
@@ -42,6 +44,7 @@ ah-chromiumd
 | `ahweb` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
 | `ahhelp` | TermSurf product help cheatsheet (full-pane web UI) |
+| `ahkey` | KeyPears local TermSurf client (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
@@ -108,7 +111,8 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, `ahnexus`, engine helpers
+- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, `ahkey`, `ahnexus`,
+  engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
@@ -117,6 +121,9 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - ahhelp package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahhelp/` (when installed as artifact)
   or under Caskroom stage `ahhelp/` (binary links `ahhelp/dist/ahhelp`)
+- ahkey package payload →
+  `/opt/homebrew/opt/astrohacker-terminal-ahkey/` (when installed as artifact)
+  or under Caskroom stage `ahkey/` (binary links `ahkey/dist/ahkey`)
 - ahnexus package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
   or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
@@ -136,6 +143,7 @@ Top-level contents:
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahhelp/` (payload: `dist/ahhelp`, `build/client/` SPA, `public/`)
+- `ahkey/` (payload: `dist/ahkey`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
 
@@ -316,6 +324,7 @@ normal operator interface.
      | `ahsh --version` | `Astrohacker Shell <version>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ahhelp --version` | `Astrohacker Help <version>` |
+     | `ahkey --version` | `Astrohacker KeyPears <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
 
