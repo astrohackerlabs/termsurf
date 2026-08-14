@@ -1,0 +1,234 @@
+From fc438dfe8bf48f12e064f904deb528dfd41cf86d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 14 Aug 2026 07:38:58 -0500
+Subject: [PATCH] fix: 3-way keep-both main AppKit and TermSurf overlay
+
+Port main leadSurrogate, clipboard deinit, selection
+debounce discard, locked CachedValue, and NSString
+insertText onto the TermSurf SurfaceView_AppKit.
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 129 +++++++++++++++---
+ 1 file changed, 108 insertions(+), 21 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 25ca88ab9..e9ea1b33c 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -255,6 +255,8 @@ extension Ghostty {
+ 
+     // This is set to non-null during keyDown to accumulate insertText contents
+     private var keyTextAccumulator: [String]?
++    /// Temporary lead surrogate that's waiting for the trail
++    private var leadSurrogate: LeadSurrogate?
+ 
+     // True when we've consumed a left mouse-down only to move focus and
+     // should suppress the matching mouse-up from being reported.
+@@ -492,13 +494,21 @@ extension Ghostty {
+       accessibilitySelectionCancellable = NotificationCenter.default
+         // The publisher retains its object, so filtering with a weak capture
+         // avoids a cycle between self and the stored cancellable.
++        // But we also need to be careful to do the map below (see
++        // comment below)
+         .publisher(for: .ghosttySelectionDidChange)
+         .filter { [weak self] notification in
+           guard let self else { return false }
+           return notification.object as AnyObject? === self
+         }
++        .map { _ in
++          // Debounce retains its latest upstream value. In this
++          // case its a Notification, which retains its object,
++          // which is a surface. So this creates a retain cycle.
++          // This discards the notification before debounce.
++        }
+         .debounce(for: .milliseconds(100), scheduler: DispatchQueue.main)
+-        .sink { [weak self] _ in
++        .sink { [weak self] in
+           guard let self else { return }
+           NSAccessibility.post(element: self, notification: .selectedTextChanged)
+         }
+@@ -602,6 +612,11 @@ extension Ghostty {
+     }
+ 
+     deinit {
++      // Resolve clipboard callback state while surfaceModel is still
++      // alive. The request's weak SurfaceView reference is already nil
++      // during deinit, so didSet passes this instance explicitly.
++      pendingClipboardConfirmation = nil
++
+       // Remove all of our notificationcenter subscriptions
+       let center = NotificationCenter.default
+       center.removeObserver(self)
+@@ -3319,26 +3334,25 @@ extension Ghostty {
+ 
+       // Note the callback may be executed on a background thread as documented
+       // so we need @MainActor since we're reading/writing view state.
+-      UNUserNotificationCenter.current().add(request) { @MainActor error in
+-        if let error = error {
+-          AppDelegate.logger.error("Error scheduling user notification: \(error, privacy: .public)")
+-          return
+-        }
+-
+-        // We need to keep track of this notification so we can remove it
+-        // under certain circumstances
+-        self.notificationIdentifiers.insert(uuid)
+-
+-        // If we're focused then we schedule to remove the notification
+-        // after a few seconds. If we gain focus we automatically remove it
+-        // in focusDidChange.
+-        if self.focused {
+-          Task { @MainActor [weak self] in
++      Task { @MainActor in
++        do {
++          try await UNUserNotificationCenter.current().add(request)
++
++          // We need to keep track of this notification so we can remove it
++          // under certain circumstances
++          notificationIdentifiers.insert(uuid)
++
++          // If we're focused then we schedule to remove the notification
++          // after a few seconds. If we gain focus we automatically remove it
++          // in focusDidChange.
++          if self.focused {
+             try await Task.sleep(for: .seconds(3))
+-            self?.notificationIdentifiers.remove(uuid)
++            notificationIdentifiers.remove(uuid)
+             UNUserNotificationCenter.current()
+               .removeDeliveredNotifications(withIdentifiers: [uuid])
+           }
++        } catch {
++          AppDelegate.logger.error("Error scheduling user notification: \(error, privacy: .public)")
+         }
+       }
+     }
+@@ -3602,12 +3616,27 @@ extension Ghostty.SurfaceView: NSTextInputClient {
+     switch string {
+     case let v as NSAttributedString:
+       chars = v.string
+-    case let v as String:
+-      chars = v
++    case let v as NSString:
++      if let leadSurrogate = LeadSurrogate(v) {
++        self.leadSurrogate = leadSurrogate
++        chars = ""
++      } else if let trail = TrailSurrogate(v) {
++        // We ignore trail surrogate without a lead like Terminal.app.
++        chars = leadSurrogate?.encode(trail: trail) ?? ""
++        leadSurrogate = nil
++      } else {
++        chars = v as String
++        // Clear whenever other text got inserted.
++        // Ideally we should encode any adjacent lead and trail surrogate into one,
++        // but getting the cursor position and reading could be rather expensive to do.
++        leadSurrogate = nil
++      }
+     default:
+       return
+     }
+ 
++    let hadMarkedText = hasMarkedText()
++
+     // If insertText is called, our preedit must be over.
+     unmarkText()
+ 
+@@ -3619,6 +3648,13 @@ extension Ghostty.SurfaceView: NSTextInputClient {
+       return
+     }
+ 
++    if hadMarkedText, !chars.isEmpty {
++      // Send preedit commits as key events instead of raw text for
++      // keybind interpretation by programs.
++      _ = committedPreeditTextAction(GHOSTTY_ACTION_PRESS, text: chars)
++      return
++    }
++
+     surfaceModel.sendText(chars)
+   }
+ 
+@@ -4046,6 +4082,7 @@ extension Ghostty.SurfaceView {
+ /// We use this to cache our surface content. This probably should be extracted some day
+ /// to a more generic helper.
+ class CachedValue<T> {
++  private let lock = NSLock()
+   private var value: T?
+   private let fetch: () -> T
+   private let duration: Duration
+@@ -4057,10 +4094,15 @@ class CachedValue<T> {
+   }
+ 
+   deinit {
++    lock.lock()
+     expiryTask?.cancel()
++    lock.unlock()
+   }
+ 
+   func get() -> T {
++    lock.lock()
++    defer { lock.unlock() }
++
+     if let value {
+       return value
+     }
+@@ -4075,8 +4117,7 @@ class CachedValue<T> {
+     expiryTask = Task { [weak self] in
+       do {
+         try await Task.sleep(until: expires)
+-        self?.value = nil
+-        self?.expiryTask = nil
++        self?.expire()
+       } catch {
+         // Task was cancelled, do nothing
+       }
+@@ -4084,4 +4125,50 @@ class CachedValue<T> {
+ 
+     return result
+   }
++
++  private func expire() {
++    lock.lock()
++    defer { lock.unlock() }
++
++    value = nil
++    expiryTask = nil
++  }
++}
++
++/// Check if a UTF16 text is a single lead surrogate character
++struct LeadSurrogate {
++  let char: UTF16Char
++
++  init?(_ text: NSString) {
++    guard text.length == 1 else {
++      return nil
++    }
++    let char = text.character(at: 0)
++    if UTF16.isLeadSurrogate(char) {
++      self.char = char
++    } else {
++      return nil
++    }
++  }
++
++  func encode(trail: TrailSurrogate) -> String {
++    String(decoding: [char, trail.char], as: UTF16.self)
++  }
++}
++
++/// Check if a UTF16 text is a single trail surrogate character
++struct TrailSurrogate {
++  let char: UTF16Char
++
++  init?(_ text: NSString) {
++    guard text.length == 1 else {
++      return nil
++    }
++    let char = text.character(at: 0)
++    if UTF16.isTrailSurrogate(char) {
++      self.char = char
++    } else {
++      return nil
++    }
++  }
+ }
+-- 
+2.50.1 (Apple Git-155)
+
