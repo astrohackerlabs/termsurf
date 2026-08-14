@@ -60,21 +60,15 @@
     {
       "name": "chromium",
       "checkout": "forks/chromium/src",
-      "base": "e69b30bba288603e514cffb4c79c359cac68e923",
-      "branch": "150.0.7871.129-issue-26080110296516-exp1-accessory-activation-policy",
-      "expected_head": "62820976b0d448ef11433a40297ac4ba0d1f3473",
-      "expected_tree": "0a30826c3be652b011b0f0016be66301cec2bd73",
+      "base": "36bfd07adec25f5027aaecf2023b35821f30ee4e",
+      "branch": "150.0.7871.224-issue-26081311412273-exp1-electron-pin",
+      "expected_head": "8044bc38cb7e6ab88fe2482fe10d73205be18e8c",
+      "expected_tree": "b9c53610b0902bad341d618e6ef5ec11b83f28b0",
       "patch_directories": [
-        "patches/chromium/patches/issue-26072616587256",
-        "patches/chromium/patches/issue-26072810194224",
-        "patches/chromium/patches/issue-26073010145867",
-        "patches/chromium/patches/issue-26072811532404",
-        "patches/chromium/patches/issue-26073012571498",
-        "patches/chromium/patches/issue-26073112048720",
-        "patches/chromium/patches/issue-26080110296516"
+        "patches/chromium/patches/issue-26081311412273"
       ],
       "patch_count": 144,
-      "archive_sha256": "42afd85622fc40f60fbac77088e4e1b2c0a9c2889f4bf5653ecc689f77d12f4a",
+      "archive_sha256": "e11b0499364240b81e8256f0b7815e2032ac53337bb8fcd3e68722a5cfe9c720",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

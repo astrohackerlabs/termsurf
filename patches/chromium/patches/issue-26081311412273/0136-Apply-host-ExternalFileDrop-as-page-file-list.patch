@@ -1,0 +1,167 @@
+From 52e659d6c01b6008519f4767c5a20c2b5749ce87 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 06:43:58 -0500
+Subject: [PATCH 136/144] Apply host ExternalFileDrop as page file list
+
+Finder paths land through DragTarget enter-drop,
+span-safe paths keep -Wunsafe-buffer at bay.
+Page gets filenames without StartDragging back.
+---
+ .../libtermsurf_chromium.cc                   | 13 ++++
+ .../libtermsurf_chromium.h                    |  7 ++
+ .../ts_file_select_helper.cc                  | 65 +++++++++++++++++++
+ .../ts_file_select_helper.h                   |  8 +++
+ 4 files changed, 93 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 60acdf21bb..8661ece46e 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -470,6 +470,19 @@ bool ts_reply_file_chooser(ts_web_contents_t wc,
+                                      path_count);
+ }
+ 
++bool ts_apply_external_file_drop(ts_web_contents_t wc,
++                                 const char* const* paths,
++                                 size_t path_count,
++                                 double x,
++                                 double y) {
++  if (!wc) {
++    return false;
++  }
++  auto* web_contents = static_cast<content::WebContents*>(wc);
++  return content::TsApplyExternalFileDrop(web_contents, paths, path_count, x,
++                                          y);
++}
++
+ bool ts_reply_http_auth(ts_web_contents_t wc,
+                         uint64_t request_id,
+                         bool accepted,
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 6ed9d5dae4..7d5eb60ec3 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -164,6 +164,13 @@ TS_EXPORT bool ts_reply_file_chooser(ts_web_contents_t wc,
+                                      const char* const* paths,
+                                      size_t path_count);
+ 
++/* Host-mediated OS/Finder file drop onto the page (DIP/view coords). */
++TS_EXPORT bool ts_apply_external_file_drop(ts_web_contents_t wc,
++                                           const char* const* paths,
++                                           size_t path_count,
++                                           double x,
++                                           double y);
++
+ TS_EXPORT bool ts_reply_http_auth(ts_web_contents_t wc,
+                                   uint64_t request_id,
+                                   bool accepted,
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 7956af07f7..a2c44c7b16 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -21,11 +21,18 @@
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
++#include "base/functional/callback_helpers.h"
++#include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/file_select_listener.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/drop_data.h"
++#include "third_party/blink/public/common/page/drag_operation.h"
+ #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
++#include "ui/base/clipboard/file_info.h"
++#include "ui/gfx/geometry/point_f.h"
+ 
+ namespace content {
+ namespace {
+@@ -533,6 +540,64 @@ bool TsReplyFileChooser(WebContents* web_contents,
+   return true;
+ }
+ 
++bool TsApplyExternalFileDrop(WebContents* web_contents,
++                             const char* const* paths,
++                             size_t path_count,
++                             double x,
++                             double y) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!web_contents || !paths || path_count == 0) {
++    return false;
++  }
++
++  // paths is a C array of absolute path C strings from the host drop FFI.
++  base::span<const char* const> path_span =
++      // SAFETY: caller provides |path_count| entries for |paths|.
++      UNSAFE_BUFFERS(base::span(paths, path_count));
++
++  DropData drop_data;
++  drop_data.did_originate_from_renderer = false;
++  for (const char* path_cstr : path_span) {
++    if (!path_cstr || path_cstr[0] == '\0') {
++      continue;
++    }
++    base::FilePath path = base::FilePath::FromUTF8Unsafe(path_cstr);
++    if (!path.IsAbsolute()) {
++      LOG(WARNING) << "[termsurf-file-drop] skip non-absolute path="
++                   << path_cstr;
++      continue;
++    }
++    drop_data.filenames.emplace_back(path, base::FilePath());
++  }
++  if (drop_data.filenames.empty()) {
++    LOG(WARNING) << "[termsurf-file-drop] no valid paths";
++    return false;
++  }
++
++  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
++  if (!view) {
++    LOG(WARNING) << "[termsurf-file-drop] no RWHV";
++    return false;
++  }
++  auto* rwh = static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++  if (!rwh) {
++    return false;
++  }
++
++  const gfx::PointF client_pt(static_cast<float>(x), static_cast<float>(y));
++  const gfx::PointF screen_pt = client_pt;
++  const blink::DragOperationsMask ops = blink::kDragOperationCopy;
++
++  LOG(INFO) << "[termsurf-file-drop] apply count=" << drop_data.filenames.size()
++            << " x=" << x << " y=" << y;
++
++  // Enter then drop so the renderer builds a dataTransfer with files.
++  rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                           base::DoNothing());
++  rwh->DragTargetDrop(drop_data, client_pt, screen_pt, 0, base::DoNothing());
++  return true;
++}
++
+ bool RunTsFileChooser(RenderFrameHost* render_frame_host,
+                       scoped_refptr<FileSelectListener> listener,
+                       const blink::mojom::FileChooserParams& params) {
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+index 851ed86130..bb660831cd 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.h
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -58,6 +58,14 @@ bool TsReplyFileChooser(WebContents* web_contents,
+                         const char* const* paths,
+                         size_t path_count);
+ 
++// Host-mediated Finder/OS file drop onto the page (Issue 26072811532404 Exp 1).
++// Injects DropData.filenames at client point (x,y) in DIP/view space.
++bool TsApplyExternalFileDrop(WebContents* web_contents,
++                             const char* const* paths,
++                             size_t path_count,
++                             double x,
++                             double y);
++
+ // Notify host (implemented in libtermsurf_chromium.cc via C callback).
+ void TsNotifyFileChooserRequest(void* wc_handle,
+                                 uint64_t request_id,
+-- 
+2.50.1 (Apple Git-155)
+

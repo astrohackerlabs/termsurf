@@ -1,0 +1,101 @@
+From 688a4f74959323eb7b4dba0825443281f9a98cff Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 06:11:27 -0500
+Subject: [PATCH 135/144] Make native drag suppress buildable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Drop dead StartDragging body after cancel—
+Werror unreachable no longer can stall.
+SystemDragEnded only; embed policy holds;
+full AppKit drag deferred, not bold.
+---
+ .../web_contents/web_contents_view_mac.mm     | 63 ++++---------------
+ 1 file changed, 12 insertions(+), 51 deletions(-)
+
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 24c3776523..cbd013b46d 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -210,6 +210,15 @@ void SetReadWritePermissionsForFile(base::File& file) {
+     const gfx::Vector2d& cursor_offset,
+     const gfx::Rect& drag_obj_rect,
+     const blink::mojom::DragEventSourceInfo& event_info) {
++  // Unused: product TermSurf Chromium does not start native AppKit drags.
++  // Full host-mediated DnD is deferred (file transfer / later issues).
++  (void)drop_data;
++  (void)allowed_operations;
++  (void)image;
++  (void)cursor_offset;
++  (void)drag_obj_rect;
++  (void)event_info;
++
+   RenderWidgetHostImpl* source_rwh =
+       static_cast<RenderWidgetHostImpl*>(source_rfh.GetRenderWidgetHost());
+   // Disallow reentrant drag which could be an attempt to exploit drag state.
+@@ -217,58 +226,10 @@ void SetReadWritePermissionsForFile(base::File& file) {
+     return;
+   }
+ 
+-  // TermSurf product Chromium is always an embed helper (CALayerHost in the
+-  // host process). Native AppKit drag sessions cannot complete in that
+-  // topology; clear Blink drag-source state instead of starting NSDragging
+-  // (Issue 26073010145867 Exp 2; restores 780 freeze fix without --hidden).
++  // Embed helper (CALayerHost in host process): native NSDragging cannot
++  // complete. Clear Blink drag-source state instead of starting AppKit drag
++  // (Issue 26073010145867 Exp 3; buildable form of Exp 2 / 780 policy).
+   web_contents_->SystemDragEnded(source_rwh);
+-  return;
+-
+-  url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
+-  // By allowing nested tasks, the code below also allows Close(),
+-  // which would deallocate |this|.  The same problem can occur while
+-  // processing -sendEvent:, so Close() is deferred in that case.
+-  // Drags from web content do not come via -sendEvent:, this sets the
+-  // same flag -sendEvent: would.
+-  base::mac::ScopedSendingEvent sending_event_scoper;
+-
+-  // The drag invokes a nested event loop, arrange to continue
+-  // processing events.
+-  base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
+-
+-  ClipboardEndpoint source_endpoint = CreateClipboardEndpoint(source_rfh);
+-
+-  // Checks if the drag operation is allowed by enterprise policies
+-  if (!GetContentClient()->browser()->IsDragAllowedByPolicy(source_endpoint,
+-                                                            drop_data)) {
+-    web_contents_->SystemDragEnded(source_rwh);
+-    return;
+-  }
+-
+-  NSDragOperation mask = static_cast<NSDragOperation>(allowed_operations);
+-
+-  [drag_dest_ initiateDragWithRenderWidgetHost:source_rwh dropData:drop_data];
+-  drag_source_start_rwh_ = source_rwh->GetWeakPtr();
+-
+-  WebContentsDelegate* contents_delegate = web_contents_->GetDelegate();
+-  bool is_privileged =
+-      contents_delegate ? contents_delegate->IsPrivileged() : false;
+-
+-  // TODO(crbug.com/40825138): The param `drag_obj_rect` is unused.
+-
+-  const content::ChildProcessId render_process_id =
+-      source_rfh.GetProcess()->GetID();
+-  const blink::DocumentToken& document_token =
+-      static_cast<RenderFrameHostImpl&>(source_rfh).GetDocumentToken();
+-  if (remote_ns_view_) {
+-    remote_ns_view_->StartDrag(render_process_id, document_token, source_origin,
+-                               drop_data, mask, image, cursor_offset,
+-                               is_privileged);
+-  } else {
+-    in_process_ns_view_bridge_->StartDrag(render_process_id, document_token,
+-                                          source_origin, drop_data, mask, image,
+-                                          cursor_offset, is_privileged);
+-  }
+ }
+ 
+ void WebContentsViewMac::Focus() {
+-- 
+2.50.1 (Apple Git-155)
+

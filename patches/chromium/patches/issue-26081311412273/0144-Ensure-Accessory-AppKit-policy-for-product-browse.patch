@@ -1,0 +1,99 @@
+From 8044bc38cb7e6ab88fe2482fe10d73205be18e8c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 1 Aug 2026 05:35:23 -0500
+Subject: [PATCH 144/144] Ensure Accessory AppKit policy for product browse
+
+ah-chromiumd must not become Regular on SetGuiActive;
+Accessory keeps the bare helper off the Dock.
+ConfigureShellWindow also pins Accessory early.
+---
+ .../ts_browser_main_parts.cc                  |  6 ++---
+ .../ts_shell_window_mac.h                     |  3 ++-
+ .../ts_shell_window_mac.mm                    | 22 ++++++++++++++-----
+ 3 files changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1c23fccc8e..0ee279630d 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -1472,11 +1472,11 @@ void TsBrowserMainParts::SetGuiActive(void* wc_handle,
+   }
+   if (active) {
+     const std::string policy_result =
+-        PromoteAppKitActivationPolicyForTermSurf();
+-    LOG(INFO) << "[termsurf-pdf-input] set-gui-active-policy-promotion "
++        EnsureAppKitActivationPolicyAccessoryForTermSurf();
++    LOG(INFO) << "[termsurf-pdf-input] set-gui-active-policy-ensure-accessory "
+               << policy_result;
+     TracePdfNativePrintFromBrowserMainParts(base::StringPrintf(
+-        "set-gui-active-policy-promotion %s", policy_result.c_str()));
++        "set-gui-active-policy-ensure-accessory %s", policy_result.c_str()));
+     ActivateShellWindowForTermSurf(tab->shell);
+     TracePdfNativePrintFromBrowserMainParts(
+         "set-gui-active-activate-shell-called");
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.h b/content/libtermsurf_chromium/ts_shell_window_mac.h
+index ca2d6e365f..35276cd0fd 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.h
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.h
+@@ -17,7 +17,8 @@ void ConfigureShellWindowForTermSurf(Shell* shell);
+ 
+ std::string DescribeShellWindowActivationStateForTermSurf(Shell* shell);
+ 
+-std::string PromoteAppKitActivationPolicyForTermSurf();
++// Ensure product browse uses Accessory (no Dock). Never leaves Regular.
++std::string EnsureAppKitActivationPolicyAccessoryForTermSurf();
+ 
+ void ActivateShellWindowForTermSurf(Shell* shell);
+ 
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 30057803b0..4083185da3 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -55,6 +55,10 @@ void ApplyTermSurfSpaceCollectionBehavior(NSWindow* window) {
+ }  // namespace
+ 
+ void ConfigureShellWindowForTermSurf(Shell* shell) {
++  // Pin Accessory before first SetGuiActive so bare ah-chromiumd never flashes
++  // a Regular Dock tile (Issue 26080110296516 Exp 1).
++  EnsureAppKitActivationPolicyAccessoryForTermSurf();
++
+   if (!shell) {
+     return;
+   }
+@@ -97,21 +101,27 @@ void ConfigureShellWindowForTermSurf(Shell* shell) {
+   return out.str();
+ }
+ 
+-std::string PromoteAppKitActivationPolicyForTermSurf() {
++std::string EnsureAppKitActivationPolicyAccessoryForTermSurf() {
++  // Product browse must never be Regular (Dock "exec" for bare ah-chromiumd).
++  // Accessory has no Dock tile; covers both Prohibited and Regular baselines.
++  // (Issue 26080110296516 Exp 1.)
+   const NSApplicationActivationPolicy before_policy = NSApp.activationPolicy;
+   BOOL setter_result = YES;
+-  if (before_policy == NSApplicationActivationPolicyProhibited) {
++  const bool attempted =
++      before_policy != NSApplicationActivationPolicyAccessory;
++  if (attempted) {
+     setter_result =
+-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
++        [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+   }
+   const NSApplicationActivationPolicy after_policy = NSApp.activationPolicy;
+ 
+   std::ostringstream out;
+-  out << "policy_before=" << static_cast<int>(before_policy) << " attempted="
+-      << (before_policy == NSApplicationActivationPolicyProhibited ? 1 : 0)
++  out << "policy_before=" << static_cast<int>(before_policy)
++      << " attempted=" << (attempted ? 1 : 0)
+       << " setter_result=" << (setter_result ? 1 : 0)
+       << " policy_after=" << static_cast<int>(after_policy)
+-      << " changed=" << (before_policy != after_policy ? 1 : 0);
++      << " changed=" << (before_policy != after_policy ? 1 : 0)
++      << " target=accessory";
+   return out.str();
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

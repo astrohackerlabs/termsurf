@@ -7,14 +7,13 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26080110296516 Exp 1):** Electron Chromium
-  **`150.0.7871.129`** + prior series + **1** issue patch
-  (`issue-26080110296516/`) = **144** total — see
-  `patches/release-manifest.json`
+- **Active pin (Issue 26081311412273 Exp 1):** Electron Chromium
+  **`150.0.7871.224`** (Electron **43.4.0**) + regenerated **144**-patch
+  series (`issue-26081311412273/`) — see `patches/release-manifest.json`
 - Product branch:
-  `150.0.7871.129-issue-26080110296516-exp1-accessory-activation-policy`
-- Product HEAD: `62820976b0d448ef11433a40297ac4ba0d1f3473`
-- Product tree: `0a30826c3be652b011b0f0016be66301cec2bd73`
+  `150.0.7871.224-issue-26081311412273-exp1-electron-pin`
+- Product HEAD: `8044bc38cb7e6ab88fe2482fe10d73205be18e8c`
+- Product tree: `b9c53610b0902bad341d618e6ef5ec11b83f28b0`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
@@ -22,7 +21,22 @@ branch notes that are safe to commit.
 - Release authority: `patches/release-manifest.json` chromium entry
 
 
-### Issue 26080110296516 Exp 1 / Accessory activation policy (current tip)
+### Issue 26081311412273 Exp 1 / Electron 43.4.0 chrome pin (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.224` / `36bfd07adec25f5027aaecf2023b35821f30ee4e` |
+| Prior base | `150.0.7871.129` / `e69b30bba288603e514cffb4c79c359cac68e923` |
+| Product branch | `150.0.7871.224-issue-26081311412273-exp1-electron-pin` |
+| Product HEAD | `8044bc38cb7e6ab88fe2482fe10d73205be18e8c` |
+| Product tree | `b9c53610b0902bad341d618e6ef5ec11b83f28b0` |
+| Archives | `issue-26081311412273/` (144, regenerated `base..HEAD`) |
+| Patch count | **144** |
+| Archive aggregate SHA-256 | `e11b0499364240b81e8256f0b7815e2032ac53337bb8fcd3e68722a5cfe9c720` |
+| Scope | Rebase product series onto Electron **43.4.0** Chromium **150.0.7871.224** |
+| Build | See experiment Results |
+
+### Issue 26080110296516 Exp 1 / Accessory activation policy (parent tip)
 
 | Field | Value |
 | --- | --- |
@@ -373,7 +387,7 @@ After committing Chromium changes inside `forks/chromium/src`:
 ```bash
 cd forks/chromium/src
 rm -rf ../../../patches/chromium/patches/issue-{N}
-git format-patch f405107495a07cb1bfcf687d4af8d91117098db6..HEAD \
+git format-patch 36bfd07adec25f5027aaecf2023b35821f30ee4e..HEAD \
   -o ../../../patches/chromium/patches/issue-{N}
 ```
 

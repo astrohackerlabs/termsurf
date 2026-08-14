@@ -1,0 +1,163 @@
+From a6425ee7a74dff97ba080c11d4a330bdadb0ffaa Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 31 Jul 2026 07:15:46 -0500
+Subject: [PATCH 141/144] Silent product downloads to OS Downloads directory
+
+Always resolve download targets without a save prompt.
+Default directory is chrome::DIR_DEFAULT_DOWNLOADS
+(~/Downloads), with --termsurf-download-dir override
+and GetUniquePath for name collisions.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  1 +
+ .../ts_download_support.cc                    | 41 ++++++++++++++++++-
+ .../shell_download_manager_delegate.cc        | 30 ++++++++------
+ 3 files changed, 58 insertions(+), 14 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 4b1742931b..618a0784b1 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -105,6 +105,7 @@ shared_library("libtermsurf_chromium") {
+   deps = [
+     "//chrome/browser:resources",
+     "//chrome/browser/resources/pdf:resources",
++    "//chrome/common:constants",
+     "//chrome/common:resources",
+     "//chrome/common/extensions",
+     "//chrome/common/extensions/api",
+diff --git a/content/libtermsurf_chromium/ts_download_support.cc b/content/libtermsurf_chromium/ts_download_support.cc
+index 48693925b7..360737793f 100644
+--- a/content/libtermsurf_chromium/ts_download_support.cc
++++ b/content/libtermsurf_chromium/ts_download_support.cc
+@@ -4,25 +4,63 @@
+ 
+ #include "content/libtermsurf_chromium/ts_download_support.h"
+ 
++#include "base/base_paths.h"
+ #include "base/command_line.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/logging.h"
++#include "base/path_service.h"
++#include "chrome/common/chrome_paths.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_download_manager_delegate.h"
+ 
+ namespace content {
+ namespace {
+ 
++// Automation / test override for the product default OS Downloads directory.
++// Example: --termsurf-download-dir=/tmp/termsurf-dl
+ constexpr char kTermSurfDownloadDirSwitch[] = "termsurf-download-dir";
+ 
++base::FilePath OsDefaultDownloadsDirectory() {
++  // Ensure chrome path keys (DIR_DEFAULT_DOWNLOADS) resolve.
++  static bool registered = []() {
++    chrome::RegisterPathProvider();
++    return true;
++  }();
++  (void)registered;
++
++  base::FilePath download_dir;
++  if (base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &download_dir) &&
++      !download_dir.empty()) {
++    return download_dir;
++  }
++
++  // Fallback: ~/Downloads (typical macOS / Linux layout).
++  base::FilePath home;
++  if (base::PathService::Get(base::DIR_HOME, &home) && !home.empty()) {
++    return home.Append(FILE_PATH_LITERAL("Downloads"));
++  }
++
++  return base::FilePath();
++}
++
+ base::FilePath DownloadDirectoryForContext(
+     ShellBrowserContext* browser_context) {
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+   if (command_line->HasSwitch(kTermSurfDownloadDirSwitch)) {
+     return command_line->GetSwitchValuePath(kTermSurfDownloadDirSwitch);
+   }
+-  return browser_context->GetPath().Append(FILE_PATH_LITERAL("Downloads"));
++
++  base::FilePath os_downloads = OsDefaultDownloadsDirectory();
++  if (!os_downloads.empty()) {
++    return os_downloads;
++  }
++
++  // Last resort: profile-internal Downloads (should be rare).
++  if (browser_context) {
++    return browser_context->GetPath().Append(FILE_PATH_LITERAL("Downloads"));
++  }
++  return base::FilePath();
+ }
+ 
+ }  // namespace
+@@ -46,6 +84,7 @@ void ConfigureTsDownloads(ShellBrowserContext* browser_context) {
+ 
+   auto* delegate = static_cast<ShellDownloadManagerDelegate*>(
+       browser_context->GetDownloadManagerDelegate());
++  // Product silent policy + default directory (API name is historical).
+   delegate->SetDownloadBehaviorForTesting(download_dir);
+   LOG(INFO) << "[termsurf-download] configured path="
+             << download_dir.AsUTF8Unsafe() << " off_the_record="
+diff --git a/content/shell/browser/shell_download_manager_delegate.cc b/content/shell/browser/shell_download_manager_delegate.cc
+index b5069bac74..240a01ae8b 100644
+--- a/content/shell/browser/shell_download_manager_delegate.cc
++++ b/content/shell/browser/shell_download_manager_delegate.cc
+@@ -45,7 +45,9 @@
+ namespace content {
+ 
+ ShellDownloadManagerDelegate::ShellDownloadManagerDelegate()
+-    : download_manager_(nullptr), suppress_prompting_(false) {}
++    : download_manager_(nullptr),
++      // Product default: silent downloads (Issue 26073112048720).
++      suppress_prompting_(true) {}
+ 
+ ShellDownloadManagerDelegate::~ShellDownloadManagerDelegate() {
+   if (download_manager_) {
+@@ -136,7 +138,9 @@ void ShellDownloadManagerDelegate::GenerateFilename(
+   if (!base::PathExists(suggested_directory))
+     base::CreateDirectory(suggested_directory);
+ 
+-  base::FilePath suggested_path(suggested_directory.Append(generated_name));
++  // Prefer a unique path so repeated downloads do not clobber the prior file.
++  base::FilePath suggested_path =
++      base::GetUniquePath(suggested_directory.Append(generated_name));
+   GetUIThreadTaskRunner({})->PostTask(
+       FROM_HERE, base::BindOnce(std::move(callback), suggested_path));
+ }
+@@ -146,18 +150,18 @@ void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
+     download::DownloadTargetCallback callback,
+     const base::FilePath& suggested_path) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  if (suppress_prompting_) {
+-    // Testing exit.
+-    download::DownloadTargetInfo target_info;
+-    target_info.target_path = suggested_path;
+-    target_info.intermediate_path =
+-        suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
+-
+-    std::move(callback).Run(std::move(target_info));
+-    return;
+-  }
++  // TermSurf product policy (Issue 26073112048720 Exp 1): always resolve a
++  // full target path silently. Do not call ChooseDownloadPath (Mac:
++  // NOTIMPLEMENTED). suppress_prompting_ is retained for test API compatibility
++  // but the product path never prompts regardless.
++  (void)download_id;
++  (void)suppress_prompting_;
++  download::DownloadTargetInfo target_info;
++  target_info.target_path = suggested_path;
++  target_info.intermediate_path =
++      suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
+ 
+-  ChooseDownloadPath(download_id, std::move(callback), suggested_path);
++  std::move(callback).Run(std::move(target_info));
+ }
+ 
+ void ShellDownloadManagerDelegate::ChooseDownloadPath(
+-- 
+2.50.1 (Apple Git-155)
+

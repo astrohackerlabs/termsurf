@@ -1,0 +1,62 @@
+From 93d013d7d2131f0bdd3a757a72893961df6b794c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 07:15:58 -0500
+Subject: [PATCH 138/144] Page-handled external file drop enter-over-drop
+
+document_is_handling_drag stops navigate-to-file;
+Over between Enter and Drop matches stock style.
+BaseName display names; FilterDropData kept.
+---
+ .../ts_file_select_helper.cc                    | 17 +++++++++++++----
+ 1 file changed, 13 insertions(+), 4 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index d197d440d3..999ccd2f8a 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -557,6 +557,10 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+ 
+   DropData drop_data;
+   drop_data.did_originate_from_renderer = false;
++  // Page-handled drop (not default navigate-to-file). Stock external-drop
++  // tests and web_drag_dest_mac set this before enter/drop (Exp 3).
++  drop_data.operation = ui::mojom::DragOperation::kCopy;
++  drop_data.document_is_handling_drag = true;
+   for (const char* path_cstr : path_span) {
+     if (!path_cstr || path_cstr[0] == '\0') {
+       continue;
+@@ -567,7 +571,7 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+                    << path_cstr;
+       continue;
+     }
+-    drop_data.filenames.emplace_back(path, base::FilePath());
++    drop_data.filenames.emplace_back(path, path.BaseName());
+   }
+   if (drop_data.filenames.empty()) {
+     LOG(WARNING) << "[termsurf-file-drop] no valid paths";
+@@ -590,14 +594,19 @@ bool TsApplyExternalFileDrop(WebContents* web_contents,
+ 
+   const gfx::PointF client_pt(static_cast<float>(x), static_cast<float>(y));
+   const gfx::PointF screen_pt = client_pt;
+-  const blink::DragOperationsMask ops = blink::kDragOperationCopy;
++  // Match stock external-drop browsertests (kDragOperationEvery on enter/over).
++  const blink::DragOperationsMask ops = blink::kDragOperationEvery;
+ 
+   LOG(INFO) << "[termsurf-file-drop] apply count=" << drop_data.filenames.size()
+-            << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id;
++            << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id
++            << " document_is_handling_drag="
++            << drop_data.document_is_handling_drag;
+ 
+-  // Enter then drop so the renderer builds a dataTransfer with files.
++  // Enter → Over → Drop so the renderer builds dataTransfer.files for the page
++  // (not bare enter+drop which navigated to the file body — Exp 2 Fail).
+   rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
+                            base::DoNothing());
++  rwh->DragTargetDragOver(client_pt, screen_pt, ops, 0, base::DoNothing());
+   rwh->DragTargetDrop(drop_data, client_pt, screen_pt, 0, base::DoNothing());
+   return true;
+ }
+-- 
+2.50.1 (Apple Git-155)
+
