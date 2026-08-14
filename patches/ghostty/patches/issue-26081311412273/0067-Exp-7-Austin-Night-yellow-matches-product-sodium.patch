@@ -1,0 +1,35 @@
+From 944582e993094825ce946f78243c47df47dabe14 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 4 Aug 2026 06:12:43 -0500
+Subject: [PATCH 67/75] Exp 7: Austin Night yellow matches product sodium
+
+palette 3/11 #e0af68 -> #e8a84a (Exp 6 warning).
+---
+ src/astrohacker/themes/Austin Night | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/astrohacker/themes/Austin Night b/src/astrohacker/themes/Austin Night
+index 95e0b7241..775fdcd18 100644
+--- a/src/astrohacker/themes/Austin Night	
++++ b/src/astrohacker/themes/Austin Night	
+@@ -1,7 +1,7 @@
+ palette = 0=#15161e
+ palette = 1=#f7768e
+ palette = 2=#9ece6a
+-palette = 3=#e0af68
++palette = 3=#e8a84a
+ palette = 4=#7aa2f7
+ palette = 5=#bb9af7
+ palette = 6=#7dcfff
+@@ -9,7 +9,7 @@ palette = 7=#a9b1d6
+ palette = 8=#414868
+ palette = 9=#f7768e
+ palette = 10=#9ece6a
+-palette = 11=#e0af68
++palette = 11=#e8a84a
+ palette = 12=#7aa2f7
+ palette = 13=#bb9af7
+ palette = 14=#7dcfff
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,84 @@
+From 827cc6cb034f6ca9880474ddc51b43ffc7bb35ea Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 14 Aug 2026 07:03:12 -0500
+Subject: [PATCH 75/75] fix: Needle, dragHandle, and NSApplication after rebase
+
+Port SurfaceView search/grab overlay onto main AppKit APIs so
+ahterm --release type-checks after the 89a26a39 rebase.
+---
+ .../Ghostty/Surface View/SurfaceView.swift       | 16 ++++++++++------
+ .../Surface View/SurfaceView_AppKit.swift        |  1 +
+ 2 files changed, 11 insertions(+), 6 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 755b0c7ad..51414ee3e 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -1,4 +1,5 @@
+ import SwiftUI
++import AppKit
+ import UserNotifications
+ import GhosttyKit
+ import System
+@@ -400,7 +401,10 @@ extension Ghostty {
+                 // top Z-index os it isn't faded by the unfocused overlay.
+                 //
+                 // This is disabled except on macOS because it uses AppKit drag/drop APIs.
+-                SurfaceGrabHandle(surfaceView: surfaceView)
++                SurfaceGrabHandle(
++                    surfaceView: surfaceView,
++                    dragHandle: ghostty.config.dragHandle
++                )
+                 #endif
+             }
+         }
+@@ -574,8 +578,8 @@ extension Ghostty {
+                 HStack(spacing: 4) {
+                     BackportSelectionTextField(
+                         "Search",
+-                        text: $searchState.needle,
+-                        selection: $searchState.needleSelection
++                        text: $searchState.needle.text,
++                        selection: $searchState.needle.selection
+                     )
+                     .textFieldStyle(.plain)
+                     .frame(width: 180)
+@@ -600,12 +604,12 @@ extension Ghostty {
+                                 .padding(.trailing, 8)
+                         }
+                     }
+-                    .onChange(of: searchState.needle) { _ in
++                    .onChange(of: searchState.needle.text) { _ in
+                         searchState.writePasteboardNeedle()
+                     }
+                     .onReceive(
+                         NotificationCenter.default.publisher(
+-                            for: OSApplication.didBecomeActiveNotification
++                            for: NSApplication.didBecomeActiveNotification
+                         )
+                     ) { _ in
+                         // When the app becomes active, we want to check for external changes
+@@ -617,7 +621,7 @@ extension Ghostty {
+                     }
+ #if canImport(AppKit)
+                     .onExitCommand {
+-                        if searchState.needle.isEmpty {
++                        if searchState.needle.text.isEmpty {
+                             onClose()
+                         } else {
+                             Ghostty.moveFocus(to: surfaceView)
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index f445f4227..25ca88ab9 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -104,6 +104,7 @@ extension Ghostty {
+           // needle is less than 3 chars, we debounce it for a few hundred ms to
+           // avoid kicking off expensive searches.
+           searchNeedleCancellable = searchState.$needle
++            .map(\.text)
+             .removeDuplicates()
+             .map { needle -> AnyPublisher<String, Never> in
+               if needle.isEmpty || needle.count >= 3 {
+-- 
+2.50.1 (Apple Git-155)
+

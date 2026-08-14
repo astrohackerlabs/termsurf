@@ -1,0 +1,99 @@
+From b919d7f0b0c6fd9b22476f4861c0e804efe6a853 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 14 Aug 2026 06:56:44 -0500
+Subject: [PATCH 74/75] fix: clipboard, OSSize, and splitDivider after rebase
+
+Main taught the surface a new confirm,
+And two colors tried to share one name.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 21 -------------------
+ .../Ghostty/Surface View/SurfaceView.swift    |  4 ++--
+ .../Surface View/SurfaceView_AppKit.swift     | 14 +++++++++++++
+ 3 files changed, 16 insertions(+), 23 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 2024c5eea..0023326d9 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -691,27 +691,6 @@ extension Ghostty {
+             return value
+         }
+ 
+-
+-        var splitDividerColor: Color {
+-            let backgroundColor = NSColor(backgroundColor)
+-            let isLightBackground = backgroundColor.isLightColor
+-            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
+-
+-            guard let config = self.config else { return Color(newColor) }
+-
+-            var color: ghostty_config_color_s = .init()
+-            let key = "split-divider-color"
+-            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return Color(newColor)
+-            }
+-
+-            return .init(
+-                red: Double(color.r) / 255,
+-                green: Double(color.g) / 255,
+-                blue: Double(color.b) / 255
+-            )
+-        }
+-
+         var quickTerminalPosition: QuickTerminalPosition {
+             guard let config = self.config else { return .top }
+             var v: UnsafePointer<Int8>?
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 58a7fb84c..755b0c7ad 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -1447,12 +1447,12 @@ extension FocusedValues {
+         typealias Value = String
+     }
+ 
+-    var ghosttySurfaceCellSize: OSSize? {
++    var ghosttySurfaceCellSize: CGSize? {
+         get { self[FocusedGhosttySurfaceCellSize.self] }
+         set { self[FocusedGhosttySurfaceCellSize.self] = newValue }
+     }
+ 
+     struct FocusedGhosttySurfaceCellSize: FocusedValueKey {
+-        typealias Value = OSSize
++        typealias Value = CGSize
+     }
+ }
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 512249ee3..f445f4227 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -165,6 +165,13 @@ extension Ghostty {
+     /// True when the bell is active. This is set inactive on focus or event.
+     @Published private(set) var bell: Bool = false
+ 
++        /// A clipboard confirmation waiting to be handled by its controller.
++        @Published var pendingClipboardConfirmation: ClipboardConfirmationRequest? {
++            didSet {
++                pendingClipboardConfirmationDidChange(from: oldValue)
++            }
++        }
++
+     // An initial size to request for a window. This will only affect
+     // then the view is moved to a new window.
+     var initialSize: NSSize?
+@@ -3420,6 +3427,13 @@ extension Ghostty {
+       try container.encode(title, forKey: .title)
+       try container.encode(titleFromTerminal != nil, forKey: .isUserSetTitle)
+     }
++
++    private func pendingClipboardConfirmationDidChange(
++        from previous: ClipboardConfirmationRequest?
++    ) {
++      guard previous !== pendingClipboardConfirmation else { return }
++      previous?.cancel(from: self)
++    }
+   }
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

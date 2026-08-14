@@ -1,0 +1,27 @@
+From 23cf816ef5135e61bce4fed2fa3845a125060cad Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 08:44:46 -0500
+Subject: [PATCH 17/75] Ignore zig-pkg package dump in Ghostty tree
+
+Local Zig builds can materialize package sources under zig-pkg/, which
+release_forks treats as unexpected untracked paths. Ignore the directory
+like zig-cache so release hygiene stays clean.
+---
+ .gitignore | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/.gitignore b/.gitignore
+index bf57717b3..5f698ec08 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -8,6 +8,7 @@
+ .envrc.local
+ .flatpak-builder/
+ zig-cache/
++zig-pkg/
+ .zig-cache/
+ zig-pkg/
+ zig-out/
+-- 
+2.50.1 (Apple Git-155)
+

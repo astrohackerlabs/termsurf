@@ -1,0 +1,463 @@
+From 4e3e9502e1ad997c0babafb915a549dc104a67fa Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 06:42:24 -0500
+Subject: [PATCH 44/75] Rename product XDG paths to astrohacker/termsurf
+
+Config, data, state, and cache defaults now use the
+termsurf product segment instead of terminal.
+---
+ .../Features/Settings/SettingsView.swift      |  4 +--
+ macos/Sources/Ghostty/Ghostty.Config.swift    |  2 +-
+ src/apprt/termsurf.zig                        | 16 +++++-----
+ src/build/GhosttyResources.zig                |  2 +-
+ src/build/mdgen/ghostty_1_footer.md           |  2 +-
+ src/build/mdgen/ghostty_5_footer.md           |  2 +-
+ src/build/mdgen/ghostty_5_header.md           |  4 +--
+ src/cli/edit_config.zig                       |  8 ++---
+ src/cli/list_themes.zig                       |  4 +--
+ src/cli/ssh-cache/DiskCache.zig               |  6 ++--
+ src/cli/ssh.zig                               |  2 +-
+ src/cli/ssh_cache.zig                         |  2 +-
+ src/config/Config.zig                         | 14 ++++-----
+ src/config/file_load.zig                      | 31 +++++++++++++++++--
+ src/config/theme.zig                          |  2 +-
+ src/config/url.zig                            |  8 ++---
+ src/crash/dir.zig                             | 15 ++++++++-
+ src/crash/sentry.zig                          |  2 +-
+ src/extra/vim.zig                             |  2 +-
+ 19 files changed, 82 insertions(+), 46 deletions(-)
+
+diff --git a/macos/Sources/Features/Settings/SettingsView.swift b/macos/Sources/Features/Settings/SettingsView.swift
+index 15c260dde..d238fa47b 100644
+--- a/macos/Sources/Features/Settings/SettingsView.swift
++++ b/macos/Sources/Features/Settings/SettingsView.swift
+@@ -14,8 +14,8 @@ struct SettingsView: View {
+             VStack(alignment: .leading) {
+                 Text("Coming Soon. 🚧").font(.title)
+                 Text("You can't configure Astrohacker TermSurf settings in the GUI yet. " +
+-                     "Edit $XDG_CONFIG_HOME/astrohacker/terminal/config and restart Astrohacker TermSurf. " +
+-                     "If XDG_CONFIG_HOME is unset, use ~/.config/astrohacker/terminal/config.")
++                     "Edit $XDG_CONFIG_HOME/astrohacker/termsurf/config and restart Astrohacker TermSurf. " +
++                     "If XDG_CONFIG_HOME is unset, use ~/.config/astrohacker/termsurf/config.")
+                 .multilineTextAlignment(.leading)
+                 .lineLimit(nil)
+             }
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index bcdc4c186..5ffe818a1 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -433,7 +433,7 @@ extension Ghostty {
+ 
+         var macosCustomIcon: String {
+             #if os(macOS)
+-            let defaultValue = NSString("~/.config/astrohacker/terminal/Astrohacker TermSurf.icns").expandingTildeInPath
++            let defaultValue = NSString("~/.config/astrohacker/termsurf/Astrohacker TermSurf.icns").expandingTildeInPath
+             guard let config = self.config else { return defaultValue }
+             var v: UnsafePointer<Int8>?
+             let key = "macos-custom-icon"
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index ad217fae1..bf7b8c067 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4628,7 +4628,7 @@ fn buildUserDataDir(buf: []u8, browser: []const u8, profile: []const u8) ?[:0]u8
+         return null;
+     };
+ 
+-    const path = std.fmt.bufPrintZ(buf, "{s}/astrohacker/terminal/{s}/{s}", .{ base, profile_dir, profile }) catch {
++    const path = std.fmt.bufPrintZ(buf, "{s}/astrohacker/termsurf/{s}/{s}", .{ base, profile_dir, profile }) catch {
+         log.warn("browser spawn skipped: user-data-dir path too long", .{});
+         return null;
+     };
+@@ -4649,9 +4649,9 @@ fn buildBrowserLogFile(buf: []u8) ?[:0]u8 {
+     const state_home = std.posix.getenv("XDG_STATE_HOME");
+     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+     const dir = if (state_home) |base|
+-        std.fmt.bufPrintZ(&dir_buf, "{s}/astrohacker/terminal", .{base}) catch return null
++        std.fmt.bufPrintZ(&dir_buf, "{s}/astrohacker/termsurf", .{base}) catch return null
+     else
+-        std.fmt.bufPrintZ(&dir_buf, "{s}/.local/state/astrohacker/terminal", .{home}) catch return null;
++        std.fmt.bufPrintZ(&dir_buf, "{s}/.local/state/astrohacker/termsurf", .{home}) catch return null;
+     std.fs.cwd().makePath(dir) catch |err| {
+         log.warn("browser log directory create failed path={s} err={}", .{ dir, err });
+     };
+@@ -5090,7 +5090,7 @@ test "termsurf server register matches profile and browser" {
+     try testing.expectEqual(@as(u64, 0), panes[1].ca_context_id);
+ }
+ 
+-test "browser profile data uses astrohacker terminal xdg data home" {
++test "browser profile data uses astrohacker termsurf xdg data home" {
+     try testWithRestoredEnv("HOME", struct {
+         fn run() !void {
+             try testWithRestoredEnv("XDG_DATA_HOME", struct {
+@@ -5106,14 +5106,14 @@ test "browser profile data uses astrohacker terminal xdg data home" {
+ 
+                     var buf: [std.fs.max_path_bytes]u8 = undefined;
+                     const actual = buildUserDataDir(&buf, "chromium", "default") orelse return error.UserDataDirFailed;
+-                    try std.testing.expectEqualStrings(data_home ++ "/astrohacker/terminal/chromium-profiles/default", actual);
++                    try std.testing.expectEqualStrings(data_home ++ "/astrohacker/termsurf/chromium-profiles/default", actual);
+                 }
+             }.inner);
+         }
+     }.run);
+ }
+ 
+-test "browser log state uses astrohacker terminal xdg state home" {
++test "browser log state uses astrohacker termsurf xdg state home" {
+     try testWithRestoredEnv("HOME", struct {
+         fn run() !void {
+             try testWithRestoredEnv("XDG_STATE_HOME", struct {
+@@ -5129,8 +5129,8 @@ test "browser log state uses astrohacker terminal xdg state home" {
+ 
+                     var buf: [std.fs.max_path_bytes]u8 = undefined;
+                     const actual = buildBrowserLogFile(&buf) orelse return error.BrowserLogFileFailed;
+-                    try std.testing.expectEqualStrings(state_home ++ "/astrohacker/terminal/chromium-server.log", actual);
+-                    try std.fs.accessAbsolute(state_home ++ "/astrohacker/terminal", .{});
++                    try std.testing.expectEqualStrings(state_home ++ "/astrohacker/termsurf/chromium-server.log", actual);
++                    try std.fs.accessAbsolute(state_home ++ "/astrohacker/termsurf", .{});
+                 }
+             }.inner);
+         }
+diff --git a/src/build/GhosttyResources.zig b/src/build/GhosttyResources.zig
+index 151af9501..6ed4fcab4 100644
+--- a/src/build/GhosttyResources.zig
++++ b/src/build/GhosttyResources.zig
+@@ -228,7 +228,7 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
+     // 'ghostty.sublime-syntax' file from zig-out to the '~.config/bat/syntaxes'
+     // directory. The syntax then needs to be mapped to the correct language in
+     // the config file within the '~.config/bat' directory
+-    // (ex: --map-syntax "/Users/user/.config/astrohacker/terminal/config:Astrohacker Terminal Config").
++    // (ex: --map-syntax "/Users/user/.config/astrohacker/termsurf/config:Astrohacker Terminal Config").
+     {
+         const run = b.addRunArtifact(build_data_exe);
+         run.addArg("+sublime");
+diff --git a/src/build/mdgen/ghostty_1_footer.md b/src/build/mdgen/ghostty_1_footer.md
+index 1e5ee3e1a..d0c3bc8e4 100644
+--- a/src/build/mdgen/ghostty_1_footer.md
++++ b/src/build/mdgen/ghostty_1_footer.md
+@@ -1,6 +1,6 @@
+ # FILES
+ 
+-_\$XDG_CONFIG_HOME/astrohacker/terminal/config_
++_\$XDG_CONFIG_HOME/astrohacker/termsurf/config_
+ 
+ : Location of the default configuration file.
+ 
+diff --git a/src/build/mdgen/ghostty_5_footer.md b/src/build/mdgen/ghostty_5_footer.md
+index 2a8f75259..a589d2342 100644
+--- a/src/build/mdgen/ghostty_5_footer.md
++++ b/src/build/mdgen/ghostty_5_footer.md
+@@ -1,6 +1,6 @@
+ # FILES
+ 
+-_\$XDG_CONFIG_HOME/astrohacker/terminal/config_
++_\$XDG_CONFIG_HOME/astrohacker/termsurf/config_
+ 
+ : Location of the default configuration file.
+ 
+diff --git a/src/build/mdgen/ghostty_5_header.md b/src/build/mdgen/ghostty_5_header.md
+index ba9ab0b99..0f577cf2e 100644
+--- a/src/build/mdgen/ghostty_5_header.md
++++ b/src/build/mdgen/ghostty_5_header.md
+@@ -8,8 +8,8 @@
+ 
+ To configure Ghostty, you must use a configuration file. GUI-based configuration
+ is on the roadmap but not yet supported. In Astrohacker Terminal, the
+-configuration file must be placed at `$XDG_CONFIG_HOME/astrohacker/terminal/config`, which
+-defaults to `~/.config/astrohacker/terminal/config` if the
++configuration file must be placed at `$XDG_CONFIG_HOME/astrohacker/termsurf/config`, which
++defaults to `~/.config/astrohacker/termsurf/config` if the
+ [XDG environment is not set](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html).
+ 
+ Astrohacker Terminal does not load inherited Ghostty XDG paths or macOS
+diff --git a/src/cli/edit_config.zig b/src/cli/edit_config.zig
+index e25e52054..b6cffa169 100644
+--- a/src/cli/edit_config.zig
++++ b/src/cli/edit_config.zig
+@@ -30,12 +30,8 @@ pub const Options = struct {
+ /// plan to auto-reload in the future, but the app isn't capable of this yet.
+ ///
+ /// The filepath opened is the default user-specific configuration
+-/// file, which is typically located at `$XDG_CONFIG_HOME/astrohacker/terminal/config.ghostty`.
+-/// On macOS, this may also be located at
+-/// `~/Library/Application Support/com.mitchellh.ghostty/config.ghostty`.
+-/// On macOS, whichever path exists and is non-empty will be prioritized,
+-/// prioritizing the Application Support directory if neither are
+-/// non-empty.
++/// file, which is located at `$XDG_CONFIG_HOME/astrohacker/termsurf/config`
++/// (`~/.config/astrohacker/termsurf/config` by default).
+ ///
+ /// This command prefers the `$VISUAL` environment variable over `$EDITOR`,
+ /// if both are set. If neither are set, it will print an error
+diff --git a/src/cli/list_themes.zig b/src/cli/list_themes.zig
+index d8320defe..cef87f319 100644
+--- a/src/cli/list_themes.zig
++++ b/src/cli/list_themes.zig
+@@ -81,8 +81,8 @@ const ThemeListElement = struct {
+ /// Two different directories will be searched for themes.
+ ///
+ /// The first directory is the `themes` subdirectory of your Astrohacker TermSurf
+-/// configuration directory. This is `$XDG_CONFIG_HOME/astrohacker/terminal/themes` or
+-/// `~/.config/astrohacker/terminal/themes`.
++/// configuration directory. This is `$XDG_CONFIG_HOME/astrohacker/termsurf/themes` or
++/// `~/.config/astrohacker/termsurf/themes`.
+ ///
+ /// The second directory is the `themes` subdirectory of the Astrohacker TermSurf resources
+ /// directory. Astrohacker TermSurf ships with a multitude of themes that will be installed
+diff --git a/src/cli/ssh-cache/DiskCache.zig b/src/cli/ssh-cache/DiskCache.zig
+index f99fbfa48..3e2d4ca9a 100644
+--- a/src/cli/ssh-cache/DiskCache.zig
++++ b/src/cli/ssh-cache/DiskCache.zig
+@@ -447,13 +447,13 @@ fn isValidUser(user: []const u8) bool {
+     return true;
+ }
+ 
+-test "disk cache default path supports astrohacker terminal namespace" {
++test "disk cache default path supports astrohacker termsurf namespace" {
+     const testing = std.testing;
+     const alloc = std.testing.allocator;
+ 
+-    const path = try DiskCache.defaultPath(alloc, "astrohacker/terminal");
++    const path = try DiskCache.defaultPath(alloc, "astrohacker/termsurf");
+     defer alloc.free(path);
+-    try testing.expect(std.mem.endsWith(u8, path, "astrohacker/terminal/ssh_cache"));
++    try testing.expect(std.mem.endsWith(u8, path, "astrohacker/termsurf/ssh_cache"));
+ }
+ 
+ test "disk cache clear" {
+diff --git a/src/cli/ssh.zig b/src/cli/ssh.zig
+index 82f7ba779..d319a2846 100644
+--- a/src/cli/ssh.zig
++++ b/src/cli/ssh.zig
+@@ -244,7 +244,7 @@ fn runInner(
+         };
+ 
+         const cache: ?DiskCache = if (opts.cache) cache: {
+-            const path = DiskCache.defaultPath(alloc, "astrohacker/terminal") catch |err| {
++            const path = DiskCache.defaultPath(alloc, "astrohacker/termsurf") catch |err| {
+                 warnPrint(stderr, "ghostty terminfo cache unavailable: {t}", .{err});
+                 break :session .{ .term = "xterm-256color" };
+             };
+diff --git a/src/cli/ssh_cache.zig b/src/cli/ssh_cache.zig
+index 14419dd93..82f9d789d 100644
+--- a/src/cli/ssh_cache.zig
++++ b/src/cli/ssh_cache.zig
+@@ -134,7 +134,7 @@ pub fn run(alloc_gpa: Allocator) !u8 {
+     }
+ 
+     // Setup our disk cache to the standard location
+-    const cache_path = DiskCache.defaultPath(alloc, "astrohacker/terminal") catch |err| {
++    const cache_path = DiskCache.defaultPath(alloc, "astrohacker/termsurf") catch |err| {
+         try stderr.print(
+             "Error: unable to determine the cache path: {t}\n",
+             .{err},
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index d2180eef8..851d7ef8a 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -555,8 +555,8 @@ language: ?[:0]const u8 = null,
+ /// include path separators unless it is an absolute pathname.
+ ///
+ /// The first directory is the `themes` subdirectory of your Astrohacker TermSurf
+-/// configuration directory. This is `$XDG_CONFIG_HOME/astrohacker/terminal/themes` or
+-/// `~/.config/astrohacker/terminal/themes`.
++/// configuration directory. This is `$XDG_CONFIG_HOME/astrohacker/termsurf/themes` or
++/// `~/.config/astrohacker/termsurf/themes`.
+ ///
+ /// The second directory is the `themes` subdirectory of the Ghostty resources
+ /// directory. Ghostty ships with a multitude of themes that will be installed
+@@ -2643,7 +2643,7 @@ keybind: Keybinds = .{},
+ 
+ /// When this is true, the default configuration file paths will be loaded.
+ /// The default configuration file paths are currently only the XDG
+-/// config path ($XDG_CONFIG_HOME/astrohacker/terminal/config).
++/// config path ($XDG_CONFIG_HOME/astrohacker/termsurf/config).
+ ///
+ /// If this is false, the default configuration paths will not be loaded.
+ /// This is targeted directly at using Ghostty from the CLI in a way
+@@ -3597,7 +3597,7 @@ keybind: Keybinds = .{},
+ /// The absolute path to the custom icon file.
+ /// Supported formats include PNG, JPEG, and ICNS.
+ ///
+-/// Defaults to `~/.config/astrohacker/terminal/Astrohacker TermSurf.icns`
++/// Defaults to `~/.config/astrohacker/termsurf/Astrohacker TermSurf.icns`
+ @"macos-custom-icon": ?[:0]const u8 = null,
+ 
+ /// The material to use for the frame of the macOS app icon.
+@@ -4129,7 +4129,7 @@ test "handle bom in config files" {
+         try cfg.loadReader(
+             alloc,
+             &reader,
+-            "/home/astrohacker/.config/astrohacker/terminal/config",
++            "/home/astrohacker/.config/astrohacker/termsurf/config",
+         );
+         try cfg.finalize();
+ 
+@@ -4148,7 +4148,7 @@ test "handle bom in config files" {
+         try cfg.loadReader(
+             alloc,
+             &reader,
+-            "/home/astrohacker/.config/astrohacker/terminal/config",
++            "/home/astrohacker/.config/astrohacker/termsurf/config",
+         );
+         try cfg.finalize();
+ 
+@@ -4203,7 +4203,7 @@ fn writeConfigTemplate(path: []const u8) !void {
+ }
+ 
+ /// Load configurations from the default configuration files. The default
+-/// configuration file is at `$XDG_CONFIG_HOME/astrohacker/terminal/config`.
++/// configuration file is at `$XDG_CONFIG_HOME/astrohacker/termsurf/config`.
+ pub fn loadDefaultFiles(self: *Config, alloc: Allocator) !void {
+     const xdg_path = try file_load.defaultXdgPath(alloc);
+     defer alloc.free(xdg_path);
+diff --git a/src/config/file_load.zig b/src/config/file_load.zig
+index fe51f95eb..63ab43c27 100644
+--- a/src/config/file_load.zig
++++ b/src/config/file_load.zig
+@@ -16,7 +16,7 @@ pub fn defaultXdgPath(alloc: Allocator) ![]const u8 {
+         global.io(),
+         alloc,
+         &environ_map,
+-        .{ .subdir = "astrohacker/terminal/config.ghostty" },
++        .{ .subdir = "astrohacker/termsurf/config.ghostty" },
+     );
+ }
+ 
+@@ -29,7 +29,7 @@ pub fn legacyDefaultXdgPath(alloc: Allocator) ![]const u8 {
+         global.io(),
+         alloc,
+         &environ_map,
+-        .{ .subdir = "astrohacker/terminal/config" },
++        .{ .subdir = "astrohacker/termsurf/config" },
+     );
+ }
+ 
+@@ -174,3 +174,30 @@ pub fn open(io: std.Io, path: []const u8) OpenFileError!std.Io.File {
+ 
+     return file;
+ }
++
++test "astrohacker termsurf xdg config path is the default" {
++    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
++
++    const alloc = std.testing.allocator;
++    const xdg_config_home = "/tmp/astrohacker-terminal-test-xdg-config";
++    const saved_xdg_config_home = if (std.posix.getenv("XDG_CONFIG_HOME")) |value|
++        try alloc.dupeZ(u8, value)
++    else
++        null;
++    defer {
++        if (saved_xdg_config_home) |value| {
++            _ = env_os.setenv("XDG_CONFIG_HOME", value);
++            alloc.free(value);
++        } else {
++            _ = env_os.unsetenv("XDG_CONFIG_HOME");
++        }
++    }
++
++    _ = env_os.setenv("XDG_CONFIG_HOME", xdg_config_home);
++
++    const path = try defaultXdgPath(alloc);
++    defer alloc.free(path);
++    const expected = try std.fs.path.join(alloc, &.{ xdg_config_home, "astrohacker", "termsurf", "config" });
++    defer alloc.free(expected);
++    try std.testing.expectEqualStrings(expected, path);
++}
+diff --git a/src/config/theme.zig b/src/config/theme.zig
+index fb525d253..1bd0133b2 100644
+--- a/src/config/theme.zig
++++ b/src/config/theme.zig
+@@ -29,7 +29,7 @@ pub const Location = enum {
+         return switch (self) {
+             .user => user: {
+                 const subdir = std.fs.path.join(arena_alloc, &.{
+-                    "astrohacker", "terminal", "themes",
++                    "astrohacker", "termsurf", "themes",
+                 }) catch return error.OutOfMemory;
+ 
+                 break :user internal_os.xdg.config(
+diff --git a/src/config/url.zig b/src/config/url.zig
+index e36c1500a..dcaffdf51 100644
+--- a/src/config/url.zig
++++ b/src/config/url.zig
+@@ -405,8 +405,8 @@ test "url regex" {
+             .expect = "~/Documents/notes.md",
+         },
+         .{
+-            .input = "~/.config/astrohacker/terminal/config",
+-            .expect = "~/.config/astrohacker/terminal/config",
++            .input = "~/.config/astrohacker/termsurf/config",
++            .expect = "~/.config/astrohacker/termsurf/config",
+         },
+         .{
+             .input = "directory: ~/src/ghostty-org/ghostty",
+@@ -430,8 +430,8 @@ test "url regex" {
+             .expect = ".foo/bar/$VAR",
+         },
+         .{
+-            .input = ".config/astrohacker/terminal/config",
+-            .expect = ".config/astrohacker/terminal/config",
++            .input = ".config/astrohacker/termsurf/config",
++            .expect = ".config/astrohacker/termsurf/config",
+         },
+         .{
+             .input = "loaded from .local/share/ghostty/state.db now",
+diff --git a/src/crash/dir.zig b/src/crash/dir.zig
+index 350231545..348935e68 100644
+--- a/src/crash/dir.zig
++++ b/src/crash/dir.zig
+@@ -5,7 +5,8 @@ const internal_os = @import("../os/main.zig");
+ /// Returns a Dir for the default directory. The Dir.path field must be
+ /// freed with the given allocator.
+ pub fn defaultDir(io: std.Io, alloc: Allocator, environ_map: *const std.process.Environ.Map) !Dir {
+-    const crash_dir = try internal_os.xdg.state(io, alloc, environ_map, .{ .subdir = "astrohacker/terminal/crash" });
++    const crash_dir = try internal_os.xdg.state(io, alloc, environ_map, .{ .subdir = "astrohacker/termsurf/crash" });
++>>>>>>> 874255e6f (Rename product XDG paths to astrohacker/termsurf)
+     errdefer alloc.free(crash_dir);
+     return .{ .path = crash_dir };
+ }
+@@ -64,3 +65,15 @@ pub const Report = struct {
+     name: []const u8,
+     mtime: i128,
+ };
++<<<<<<< HEAD
++=======
++
++test "default crash directory uses astrohacker termsurf state namespace" {
++    const alloc = std.testing.allocator;
++
++    const dir = try defaultDir(alloc);
++    defer alloc.free(dir.path);
++
++    try std.testing.expect(std.mem.endsWith(u8, dir.path, "astrohacker/termsurf/crash"));
++}
++>>>>>>> 874255e6f (Rename product XDG paths to astrohacker/termsurf)
+diff --git a/src/crash/sentry.zig b/src/crash/sentry.zig
+index 3f732a429..5589bcf6c 100644
+--- a/src/crash/sentry.zig
++++ b/src/crash/sentry.zig
+@@ -203,7 +203,7 @@ fn cacheDir(io: std.Io, alloc: Allocator, environ_map: *const std.process.Enviro
+         io,
+         alloc,
+         environ_map,
+-        .{ .subdir = "astrohacker/terminal/sentry" },
++        .{ .subdir = "astrohacker/termsurf/sentry" },
+     );
+ }
+ 
+diff --git a/src/extra/vim.zig b/src/extra/vim.zig
+index 169908248..cf1ffb4f1 100644
+--- a/src/extra/vim.zig
++++ b/src/extra/vim.zig
+@@ -10,7 +10,7 @@ pub const ftdetect =
+     \\"
+     \\" THIS FILE IS AUTO-GENERATED
+     \\
+-    \\au BufRead,BufNewFile */astrohacker/terminal/config,*/astrohacker/terminal/themes/*,*/ghostty/config,*/*.ghostty/config,*/ghostty/themes/*,*.ghostty setf ghostty
++    \\au BufRead,BufNewFile */astrohacker/termsurf/config,*/astrohacker/termsurf/themes/*,*/ghostty/config,*/*.ghostty/config,*/ghostty/themes/*,*.ghostty setf ghostty
+     \\
+ ;
+ pub const ftplugin =
+-- 
+2.50.1 (Apple Git-155)
+

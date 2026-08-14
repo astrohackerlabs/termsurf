@@ -1,6 +1,30 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26080509369382 Exp 3 Dock AppIcon `#111219`)
+## Active Pin (Issue 26081311412273 Exp 3 Ghostty `main` tip)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `89a26a39eb01a7cf34a64f9329da8304bebd4d8e`
+- **Product branch:** `issue-26081311412273-exp3-ghostty-main`
+- **Product HEAD:** `827cc6cb034f6ca9880474ddc51b43ffc7bb35ea`
+- **Product tree:** `76d3329e7847f2522a5dc4866f78217c79387479`
+- **Issue archives:** regenerated `issue-26081311412273/` (**75** from
+  `base..HEAD`; prior `issue-26080213543507` / `issue-26080410047087` /
+  `issue-26080509369382` archives stay historical on old base `e85bf9fb…`)
+- **Patches:** **75** total (70 rebased product commits + 5 rebase fixups)
+- **Archive SHA-256:**
+  `df0abfe2a07caad08b7cacd13882d0525398924cacf4c68c295093e51676a8a2`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 3 — rebase the product series onto upstream `main` tip
+  `89a26a39…` (moved past prior pin `e85bf9fb…`). Local
+  `scripts/build.sh ahterm --release` exit 0. Homebrew publish remains
+  operator-owned (Exp 3 Result is **Fail** until that oracle).
+- **TREE_MATCH:** tip matches base + 75 patches
+- **Patch SHA-256 (bookends):**
+  - 0001: `abe19fecb5ef0a8a695cfd19e232ddf0c335c71d9e48a8397fb838eeed5ccd8b`
+  - 0075: `623eae579dd1fbc1641eddc94e8f3d81ad45b193bf2e12c255783e68844d3aa8`
+
+## Prior Active Pin (Issue 26080509369382 Exp 3 Dock AppIcon `#111219`)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `e85bf9fb2d36ad9cfb6dd879716ad9300c2e8ea6`

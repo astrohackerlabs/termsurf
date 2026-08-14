@@ -1,0 +1,133 @@
+From 6b7c4d73eb64bdfae69b348965a73935ba336234 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 14:48:26 -0500
+Subject: [PATCH 21/75] Clip progress bar to rounded pane; theme palette colors
+
+Progress overlay uses the same inner continuous clip as the
+surface when split borders are rounded, and bar colors come
+from palette 6/1/3 with system fallbacks.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 18 +++++++++++----
+ .../Surface View/SurfaceProgressBar.swift     | 22 ++++++++++++++----
+ .../Ghostty/Surface View/SurfaceView.swift    | 23 ++++++++++++++++---
+ 3 files changed, 52 insertions(+), 11 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index a67008da0..f062909cc 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -569,10 +569,9 @@ extension Ghostty {
+             )
+         }
+ 
+-        /// Theme-relative defaults for split borders when config colors are unset.
+-        /// Index 6 = ANSI cyan (focused); index 8 = ANSI bright black (unfocused).
+-        private func paletteColor(index: Int) -> Color? {
+-        var focusedSplitBorderColor: Color? {
++        /// Theme palette color at ANSI/extended index (0…255), or nil if unavailable.
++        /// Index 6 = ANSI cyan (focused split border default); index 8 = bright black.
++        func paletteColor(index: Int) -> Color? {
+             guard let config = self.config else { return nil }
+             guard index >= 0 && index < 256 else { return nil }
+             var palette: ghostty_config_palette_s = .init()
+@@ -591,6 +590,17 @@ extension Ghostty {
+             )
+         }
+ 
++        /// Surface progress bar colors from the active theme palette.
++        /// Indices: normal 6 (cyan), error 1 (red), pause 3 (yellow).
++        /// Fallbacks match prior system colors when palette is unavailable.
++        var progressBarColors: (normal: Color, error: Color, pause: Color) {
++            (
++                normal: paletteColor(index: 6) ?? .accentColor,
++                error: paletteColor(index: 1) ?? .red,
++                pause: paletteColor(index: 3) ?? .orange
++            )
++        }
++
+         private func configColorOrPalette(
+             key: String,
+             paletteIndex: Int
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift b/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift
+index 0478bf2bf..88645b4a0 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift	
+@@ -5,12 +5,27 @@ import SwiftUI
+ /// control.
+ struct SurfaceProgressBar: View {
+     let report: Ghostty.Action.ProgressReport
++    /// Theme palette colors (normal / error / pause). Callers supply palette-backed values with
++    /// system fallbacks when the palette is unavailable.
++    let colors: (normal: Color, error: Color, pause: Color)
++
++    init(
++        report: Ghostty.Action.ProgressReport,
++        colors: (normal: Color, error: Color, pause: Color) = (
++            normal: .accentColor,
++            error: .red,
++            pause: .orange
++        )
++    ) {
++        self.report = report
++        self.colors = colors
++    }
+ 
+     private var color: Color {
+         switch report.state {
+-        case .error: return .red
+-        case .pause: return .orange
+-        default: return .accentColor
++        case .error: return colors.error
++        case .pause: return colors.pause
++        default: return colors.normal
+         }
+     }
+ 
+@@ -109,4 +124,3 @@ private struct BouncingProgressBar: View {
+         }
+     }
+ }
+-
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index e94d35d93..eab74610c 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -337,15 +337,32 @@ extension Ghostty {
+                     )
+                 )
+ 
+-                // Progress report
++                // Progress report (OSC / TermSurf load). Clip to the same inner
++                // rounded content region as the surface so the bar does not leak
++                // past rounded split borders. Colors follow the theme palette.
+                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
+-                    let borderInset = CGFloat(isSplit ? ghostty.config.splitBorderWidth : 0)
++                    let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
++                    let borderInset = CGFloat(isSplit ? borderWidth : 0)
++                    let progressInnerR = isSplit
++                        ? innerBorderRadius(
++                            effectiveRadius: effectiveSplitBorderCornerRadius,
++                            borderWidth: borderWidth)
++                        : 0
+                     VStack(spacing: 0) {
+-                        SurfaceProgressBar(report: progressReport)
++                        SurfaceProgressBar(
++                            report: progressReport,
++                            colors: ghostty.config.progressBarColors
++                        )
+                         Spacer()
+                     }
+                     .padding(borderInset)
+                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
++                    .clipShape(
++                        RoundedRectangle(
++                            cornerRadius: progressInnerR,
++                            style: .continuous
++                        )
++                    )
+                     .allowsHitTesting(false)
+                     .transition(.opacity)
+                 }
+-- 
+2.50.1 (Apple Git-155)
+

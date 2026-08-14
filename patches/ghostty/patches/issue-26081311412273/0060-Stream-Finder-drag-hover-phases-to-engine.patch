@@ -1,0 +1,389 @@
+From 1946b615d98168c4e497319e814ea46e77e525cb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 07:28:56 -0500
+Subject: [PATCH 60/75] Stream Finder drag hover phases to engine
+
+Entered updated exited feed enter over leave;
+drop still ships paths so the page can receive.
+---
+ include/ghostty.h                             |   6 +-
+ .../Surface View/SurfaceView_AppKit.swift     | 114 +++++++++++++-----
+ src/apprt/termsurf.zig                        |  25 ++--
+ src/main_c.zig                                |  30 +++--
+ src/protobuf/termsurf.pb-c.c                  |  19 ++-
+ src/protobuf/termsurf.pb-c.h                  |   7 +-
+ 6 files changed, 147 insertions(+), 54 deletions(-)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index e299df9bd..8ca0f8ec3 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1120,13 +1120,15 @@ GHOSTTY_API void termsurf_file_chooser_complete(
+     const char** paths,
+     size_t path_count);
+ 
+-// Finder/OS file drop onto browser overlay → engine ExternalFileDrop (Exp 1).
++// Finder/OS file drag phase onto browser overlay → ExternalFileDrop.
++// phase: "enter"|"over"|"leave"|"drop" (NULL => "drop"). Exp 4 hover stream.
+ GHOSTTY_API int termsurf_external_file_drop(
+     const char* pane_id,
+     const char** paths,
+     size_t path_count,
+     double x,
+-    double y);
++    double y,
++    const char* phase);
+ 
+ GHOSTTY_API ghostty_config_t ghostty_config_new();
+ GHOSTTY_API void ghostty_config_free(ghostty_config_t);
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index a90850d05..708a659db 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -3804,6 +3804,53 @@ extension Ghostty.SurfaceView {
+     .URL,
+   ]
+ 
++  /// Browser-overlay client point for host-mediated file drag (top-left origin DIP).
++  private func termsurfBrowserWebPoint(for sender: any NSDraggingInfo) -> CGPoint? {
++    guard let overlayFrame = termsurfOverlayFrame else { return nil }
++    let viewPoint = convert(sender.draggingLocation, from: nil)
++    let topOriginPoint = CGPoint(x: viewPoint.x, y: bounds.height - viewPoint.y)
++    return CGPoint(
++      x: topOriginPoint.x - overlayFrame.minX,
++      y: topOriginPoint.y - overlayFrame.minY)
++  }
++
++  private func termsurfFilePaths(from pb: NSPasteboard) -> [String] {
++    guard let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL] else {
++      return []
++    }
++    return urls.filter { $0.isFileURL }.map { $0.path }
++  }
++
++  /// Forward Finder file drag phase into Chromium (Exp 4 hover + Exp 3 drop).
++  @discardableResult
++  private func termsurfSendExternalFileDrag(
++    phase: String,
++    filePaths: [String],
++    webPoint: CGPoint
++  ) -> Bool {
++    var cPaths: [UnsafeMutablePointer<CChar>?] = filePaths.map { strdup($0) }
++    defer {
++      for ptr in cPaths {
++        if let ptr { free(ptr) }
++      }
++    }
++    let ok = cPaths.withUnsafeMutableBufferPointer { ptrBuf -> Int32 in
++      // Zig export expects const char**; match file-chooser path.
++      let constBuf = UnsafeMutableRawPointer(ptrBuf.baseAddress)
++        .map { $0.assumingMemoryBound(to: UnsafePointer<CChar>?.self) }
++      return phase.withCString { phaseC in
++        termsurf_external_file_drop(
++          self.id.uuidString,
++          constBuf,
++          ptrBuf.count,
++          Double(webPoint.x),
++          Double(webPoint.y),
++          phaseC)
++      }
++    }
++    return ok != 0
++  }
++
+   override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+     guard let types = sender.draggingPasteboard.types else { return [] }
+ 
+@@ -3814,44 +3861,53 @@ extension Ghostty.SurfaceView {
+       return []
+     }
+ 
++    // Browser overlay: stream enter so the page can highlight drop targets.
++    if let webPoint = termsurfBrowserWebPoint(for: sender) {
++      let filePaths = termsurfFilePaths(from: sender.draggingPasteboard)
++      if !filePaths.isEmpty {
++        _ = termsurfSendExternalFileDrag(
++          phase: "enter", filePaths: filePaths, webPoint: webPoint)
++      }
++    }
++
+     // We use copy to get the proper icon
+     return .copy
+   }
+ 
++  override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
++    guard let types = sender.draggingPasteboard.types else { return [] }
++    if Set(types).isDisjoint(with: Self.dropTypes) {
++      return []
++    }
++
++    if let webPoint = termsurfBrowserWebPoint(for: sender) {
++      let filePaths = termsurfFilePaths(from: sender.draggingPasteboard)
++      // over may reuse session paths in the engine when pasteboard is empty.
++      _ = termsurfSendExternalFileDrag(
++        phase: "over", filePaths: filePaths, webPoint: webPoint)
++    }
++    return .copy
++  }
++
++  override func draggingExited(_ sender: (any NSDraggingInfo)?) {
++    guard let sender else { return }
++    if let webPoint = termsurfBrowserWebPoint(for: sender) {
++      _ = termsurfSendExternalFileDrag(
++        phase: "leave", filePaths: [], webPoint: webPoint)
++    }
++  }
++
+   override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+     let pb = sender.draggingPasteboard
+ 
+-    // Browser overlay: route OS/Finder file drops into Chromium (file transfer Exp 1).
++    // Browser overlay: route OS/Finder file drops into Chromium (file transfer).
+     // Page-initiated drag remains suppressed in the engine.
+-    if termsurfOverlayFrame != nil,
+-      let urls = pb.readObjects(forClasses: [NSURL.self]) as? [URL],
+-      !urls.isEmpty
+-    {
+-      let filePaths = urls.filter { $0.isFileURL }.map { $0.path }
++    if let webPoint = termsurfBrowserWebPoint(for: sender) {
++      let filePaths = termsurfFilePaths(from: pb)
+       if !filePaths.isEmpty {
+-        let viewPoint = convert(sender.draggingLocation, from: nil)
+-        let topOriginPoint = CGPoint(x: viewPoint.x, y: bounds.height - viewPoint.y)
+-        let overlayFrame = termsurfOverlayFrame!
+-        let webPoint = CGPoint(
+-          x: topOriginPoint.x - overlayFrame.minX,
+-          y: topOriginPoint.y - overlayFrame.minY)
+-        var cPaths: [UnsafeMutablePointer<CChar>?] = filePaths.map { strdup($0) }
+-        defer {
+-          for ptr in cPaths {
+-            if let ptr { free(ptr) }
+-          }
+-        }
+-        let ok = cPaths.withUnsafeMutableBufferPointer { ptrBuf -> Int32 in
+-          let constBuf = UnsafeMutableRawPointer(ptrBuf.baseAddress)
+-            .map { $0.assumingMemoryBound(to: UnsafePointer<CChar>?.self) }
+-          return termsurf_external_file_drop(
+-            self.id.uuidString,
+-            constBuf,
+-            ptrBuf.count,
+-            Double(webPoint.x),
+-            Double(webPoint.y))
+-        }
+-        if ok != 0 {
++        if termsurfSendExternalFileDrag(
++          phase: "drop", filePaths: filePaths, webPoint: webPoint)
++        {
+           return true
+         }
+         // Fall through to terminal path insert if engine rejected.
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index f6195fd29..8a9e3e91a 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -5330,14 +5330,19 @@ pub fn fileChooserComplete(
+     };
+ }
+ 
+-/// Finder/OS file drop onto browser overlay (Issue 26072811532404 Exp 1).
++/// Finder/OS file drag phase onto browser overlay (Issue 26072811532404).
++/// phase: "enter" | "over" | "leave" | "drop". leave may pass empty paths.
+ pub fn externalFileDrop(
+     pane_id: []const u8,
+     paths: []const []const u8,
+     x: f64,
+     y: f64,
++    phase: []const u8,
+ ) bool {
+-    if (paths.len == 0) return false;
++    // leave/over may have empty paths; enter/drop need paths (drop may use session).
++    if (paths.len == 0 and !std.mem.eql(u8, phase, "leave") and !std.mem.eql(u8, phase, "over")) {
++        return false;
++    }
+     const snapshot = snapshotBrowserInput(pane_id, false) orelse {
+         log.warn("ExternalFileDrop: no browser snapshot pane_id={s}", .{pane_id});
+         return false;
+@@ -5349,7 +5354,7 @@ pub fn externalFileDrop(
+         for (owned_paths) |p| allocator.free(p);
+         allocator.free(owned_paths);
+     }
+-    var path_c_ptrs: [][*]u8 = allocator.alloc([*]u8, paths.len) catch return false;
++    var path_c_ptrs: [][*]u8 = allocator.alloc([*]u8, @max(paths.len, 1)) catch return false;
+     defer allocator.free(path_c_ptrs);
+ 
+     for (paths, 0..) |path, i| {
+@@ -5357,13 +5362,17 @@ pub fn externalFileDrop(
+         path_c_ptrs[i] = owned_paths[i].ptr;
+     }
+ 
++    const phase_z = allocator.dupeZ(u8, phase) catch return false;
++    defer allocator.free(phase_z);
++
+     var drop: c.Termsurf__ExternalFileDrop = undefined;
+     c.termsurf__external_file_drop__init(&drop);
+     drop.tab_id = snapshot.tab_id;
+     drop.n_paths = paths.len;
+-    drop.paths = @ptrCast(path_c_ptrs.ptr);
++    drop.paths = if (paths.len > 0) @ptrCast(path_c_ptrs.ptr) else null;
+     drop.x = x;
+     drop.y = y;
++    drop.phase = phase_z.ptr;
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+     c.termsurf__term_surf_message__init(&wrapper);
+@@ -5372,14 +5381,14 @@ pub fn externalFileDrop(
+ 
+     sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
+         log.warn(
+-            "ExternalFileDrop send failed pane_id={s} tab_id={} err={}",
+-            .{ snapshot.paneId(), snapshot.tab_id, err },
++            "ExternalFileDrop send failed pane_id={s} tab_id={} phase={s} err={}",
++            .{ snapshot.paneId(), snapshot.tab_id, phase, err },
+         );
+         return false;
+     };
+     log.info(
+-        "ExternalFileDrop: pane_id={s} tab_id={} paths={} x={d:.1} y={d:.1}",
+-        .{ snapshot.paneId(), snapshot.tab_id, paths.len, x, y },
++        "ExternalFileDrop: pane_id={s} tab_id={} phase={s} paths={} x={d:.1} y={d:.1}",
++        .{ snapshot.paneId(), snapshot.tab_id, phase, paths.len, x, y },
+     );
+     return true;
+ }
+diff --git a/src/main_c.zig b/src/main_c.zig
+index a9fbb2c43..dc8d4312c 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -351,27 +351,37 @@ pub export fn termsurf_file_chooser_complete(
+     }
+ }
+ 
+-/// Finder/OS file drop onto browser overlay → ExternalFileDrop on engine.
++/// Finder/OS file drag phase onto browser overlay → ExternalFileDrop on engine.
++/// phase: "enter"|"over"|"leave"|"drop" (NULL => "drop").
+ pub export fn termsurf_external_file_drop(
+     pane_id: [*:0]const u8,
+     paths: ?[*]?[*:0]const u8,
+     path_count: usize,
+     x: f64,
+     y: f64,
++    phase: ?[*:0]const u8,
+ ) c_int {
+     var path_slices: [64][]const u8 = undefined;
+     const n = @min(path_count, path_slices.len);
+-    if (paths == null or n == 0) return 0;
+-    const path_array = paths.?;
+-    var i: usize = 0;
+-    while (i < n) : (i += 1) {
+-        if (path_array[i]) |p| {
+-            path_slices[i] = std.mem.span(p);
+-        } else {
+-            path_slices[i] = "";
++    if (paths != null and n > 0) {
++        const path_array = paths.?;
++        var i: usize = 0;
++        while (i < n) : (i += 1) {
++            if (path_array[i]) |p| {
++                path_slices[i] = std.mem.span(p);
++            } else {
++                path_slices[i] = "";
++            }
+         }
+     }
+-    return if (termsurf.externalFileDrop(std.mem.span(pane_id), path_slices[0..n], x, y))
++    const phase_slice: []const u8 = if (phase) |p| std.mem.span(p) else "drop";
++    return if (termsurf.externalFileDrop(
++        std.mem.span(pane_id),
++        if (n > 0) path_slices[0..n] else &.{},
++        x,
++        y,
++        phase_slice,
++    ))
+         1
+     else
+         0;
+diff --git a/src/protobuf/termsurf.pb-c.c b/src/protobuf/termsurf.pb-c.c
+index e21eb879f..8b9a0588e 100644
+--- a/src/protobuf/termsurf.pb-c.c
++++ b/src/protobuf/termsurf.pb-c.c
+@@ -4935,7 +4935,7 @@ const ProtobufCMessageDescriptor termsurf__file_chooser_reply__descriptor =
+   (ProtobufCMessageInit) termsurf__file_chooser_reply__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
+-static const ProtobufCFieldDescriptor termsurf__external_file_drop__field_descriptors[4] =
++static const ProtobufCFieldDescriptor termsurf__external_file_drop__field_descriptors[5] =
+ {
+   {
+     "tab_id",
+@@ -4985,9 +4985,22 @@ static const ProtobufCFieldDescriptor termsurf__external_file_drop__field_descri
+     0,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "phase",
++    5,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_STRING,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__ExternalFileDrop, phase),
++    NULL,
++    &protobuf_c_empty_string,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__external_file_drop__field_indices_by_name[] = {
+   1,   /* field[1] = paths */
++  4,   /* field[4] = phase */
+   0,   /* field[0] = tab_id */
+   2,   /* field[2] = x */
+   3,   /* field[3] = y */
+@@ -4995,7 +5008,7 @@ static const unsigned termsurf__external_file_drop__field_indices_by_name[] = {
+ static const ProtobufCIntRange termsurf__external_file_drop__number_ranges[1 + 1] =
+ {
+   { 1, 0 },
+-  { 0, 4 }
++  { 0, 5 }
+ };
+ const ProtobufCMessageDescriptor termsurf__external_file_drop__descriptor =
+ {
+@@ -5005,7 +5018,7 @@ const ProtobufCMessageDescriptor termsurf__external_file_drop__descriptor =
+   "Termsurf__ExternalFileDrop",
+   "termsurf",
+   sizeof(Termsurf__ExternalFileDrop),
+-  4,
++  5,
+   termsurf__external_file_drop__field_descriptors,
+   termsurf__external_file_drop__field_indices_by_name,
+   1,  termsurf__external_file_drop__number_ranges,
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index cf0e10aa7..a6d4d3617 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -688,7 +688,9 @@ struct  Termsurf__FileChooserReply
+ 
+ 
+ /*
+- * Host → engine: OS/Finder dropped file paths onto the overlay at client (x,y).
++ * Host → engine: OS/Finder file drag phases onto the overlay at client (x,y).
++ * phase: "enter" | "over" | "leave" | "drop" (empty/omitted treated as "drop").
++ * Exp 4 streams enter/over/leave for page hover highlight; drop completes upload.
+  */
+ struct  Termsurf__ExternalFileDrop
+ {
+@@ -698,10 +700,11 @@ struct  Termsurf__ExternalFileDrop
+   char **paths;
+   double x;
+   double y;
++  char *phase;
+ };
+ #define TERMSURF__EXTERNAL_FILE_DROP__INIT \
+  { PROTOBUF_C_MESSAGE_INIT (&termsurf__external_file_drop__descriptor) \
+-, 0, 0,NULL, 0, 0 }
++, 0, 0,NULL, 0, 0, (char *)protobuf_c_empty_string }
+ 
+ 
+ struct  Termsurf__ConsoleMessage
+-- 
+2.50.1 (Apple Git-155)
+
