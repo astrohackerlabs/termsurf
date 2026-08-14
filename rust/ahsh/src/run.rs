@@ -21,6 +21,7 @@ pub(crate) fn run_commands(
     use_color: bool,
     commands: &Spanned<String>,
     input: PipelineData,
+    args_to_script: Vec<String>,
     entire_start_time: nu_utils::time::Instant,
 ) {
     trace!("run_commands");
@@ -89,6 +90,7 @@ pub(crate) fn run_commands(
         engine_state,
         &mut stack,
         input,
+        args_to_script,
         EvaluateCommandsOpts {
             table_mode: parsed_nu_cli_args.table_mode,
             error_style: parsed_nu_cli_args.error_style,

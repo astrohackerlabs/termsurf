@@ -573,6 +573,7 @@ fn main() -> Result<()> {
             use_color,
             &commands,
             input,
+            args_to_script,
             entire_start_time,
         );
 

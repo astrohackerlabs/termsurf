@@ -1,6 +1,6 @@
 [package]
 name = "ahsh"
-version = "0.1.119"
+version = "0.1.120"
 edition = "2024"
 description = "Astrohacker Shell: Nushell default with zsh environment and alt mode"
 license = "MIT"
@@ -14,7 +14,7 @@ name = "ahsh"
 path = "src/main.rs"
 
 [dependencies]
-reedline = { version = "0.49.0", path = "../../forks/reedline", features = ["sqlite", "bashisms"] }
+reedline = { version = "0.49.0", path = "../../forks/reedline", default-features = false, features = ["sqlite", "bashisms"] }
 
 nu-cli = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cli", package = "shannon-nu-cli", default-features = false, features = ["plugin"] }
 nu-cmd-base = { version = "0.114.2", path = "../../forks/nushell/crates/nu-cmd-base" }

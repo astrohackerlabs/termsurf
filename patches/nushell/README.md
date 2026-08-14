@@ -5,25 +5,36 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26080510416061 Exp 1)
+## Current State (Issue 26081311412273 Exp 5)
 
 - Upstream repository: `https://github.com/nushell/nushell`
-- Upstream base commit (main tip): `e08c27a42405c05de629ac50077ce7f759d82a64`
+- Upstream base commit (main tip): `c68420afd55f8dd3a3ec09e14f779ff48aebc8e5`
 - Workspace version: `0.114.2` (confirm in workspace `Cargo.toml` if bumped)
+- Product branch: `issue-26081311412273-exp5-nushell-main`
+- Product HEAD: `07823d55131289ead112821171c118c87825adbf`
+- Product tree: `9f58c51bd9c3efb85a86a29a9f5736497308a0dd`
+- Local fork working tree: `forks/nushell`
+- Issue archive (release authority):
+  `patches/nushell/patches/issue-26081311412273/` (**8** from `base..HEAD`;
+  prior `issue-26080213543507` / `issue-26080510416061` stay historical)
+- Total patch count: **8**
+- Archive aggregate SHA-256:
+  `25a8e0a3efd0fe0d9a6779fecaa4482810bf04a8c3fb641be499f0c442c3d464`
+- Reedline path pin: sibling `forks/reedline` at tip
+  `464efb2ed5b8d294f81b787e70418006d48428f3` (`0.49.0`, helix default off
+  via `default-features = false`)
+- Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
+
+## Prior State (Issue 26080510416061 Exp 1)
+
+- Upstream base: `e08c27a42405c05de629ac50077ce7f759d82a64`
 - Product branch: `issue-26080510416061-exp1-unbind-ctrl-l`
 - Product HEAD: `211b92c2130e4bcdffb70c23b6a979ff6791d1a1`
 - Product tree: `ec00517618c8989d46200603fc026fab2c08ab26`
-- Local fork working tree: `forks/nushell`
-- Issue archive (release authority, multi-dir series):
-  - `patches/nushell/patches/issue-26080213543507/` (**9** patches)
-  - `patches/nushell/patches/issue-26080510416061/` (**1** patch) — product
-    unbind Ctrl+L ClearScreen
-- Total patch count: **10**
-- Archive aggregate SHA-256:
+- Archives: `issue-26080213543507/` (**9**) + `issue-26080510416061/` (**1**)
+- Archive SHA-256:
   `8e2c8bda7a344da524901b83aab05a122f06258ede67ade7fd46682d5f86935f`
-- Reedline path pin: sibling `forks/reedline` at tip
-  `60d9967420b5a56745f6ec250b40bc3b6813092b` (`0.49.0`)
-- Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
+- Reedline path pin: `60d9967420b5a56745f6ec250b40bc3b6813092b` (`0.49.0`)
 
 ## Prior State (Issue 26080213543507 Exp 5)
 
@@ -56,11 +67,10 @@ importing Nushell history into the company repo.
 ## Apply (clean base)
 
 ```sh
-BASE=e08c27a42405c05de629ac50077ce7f759d82a64
+BASE=c68420afd55f8dd3a3ec09e14f779ff48aebc8e5
 git -C forks/nushell worktree add /tmp/astrohacker-nushell-pin "$BASE"
 git -C /tmp/astrohacker-nushell-pin am \
-  "$PWD/patches/nushell/patches/issue-26080213543507/"*.patch \
-  "$PWD/patches/nushell/patches/issue-26080510416061/"*.patch
+  "$PWD/patches/nushell/patches/issue-26081311412273/"*.patch
 ```
 
 ## Prior State (Issue 26072213251282 Exp 2)

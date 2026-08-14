@@ -1,0 +1,216 @@
+From 370452fb3aaf8cd07845f78cb853507fec66de31 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 5 Aug 2026 05:48:48 -0500
+Subject: [PATCH 7/8] ahsh: unbind Ctrl+L ClearScreen in product key maps
+
+Product setup_keybindings removes reedline Ctrl+L ClearScreen after
+Nu defaults so host goto_split can own the chord on pass-through.
+Issue 26080510416061 Exp 1. Tests drive build_product_keybindings.
+---
+ crates/nu-cli/src/alt_shell_env.rs |  15 ++-
+ crates/nu-cli/src/repl.rs          | 147 +++++++++++++++++++++++++----
+ 2 files changed, 138 insertions(+), 24 deletions(-)
+
+diff --git a/crates/nu-cli/src/alt_shell_env.rs b/crates/nu-cli/src/alt_shell_env.rs
+index f0a56291b..d55450b7c 100644
+--- a/crates/nu-cli/src/alt_shell_env.rs
++++ b/crates/nu-cli/src/alt_shell_env.rs
+@@ -189,16 +189,15 @@ mod tests {
+         assert!(!out.contains_key("FOO"), "must not overwrite Nu FOO");
+         assert_eq!(out.get("BAR").map(String::as_str), Some("zsh"));
+         let path = out.get(path_key()).expect("PATH written");
+-        let parts: Vec<&str> = std::env::split_paths(path)
+-            .map(|p| p.to_string_lossy().into_owned())
+-            .collect::<Vec<_>>()
+-            .iter()
+-            .map(|s| s.as_str())
+-            .collect();
++        let parts = split_path_string(path);
+         // Allow platform path form; order Nu then zsh
+         assert!(
+-            parts.iter().position(|p| p.ends_with("nu/bin") || *p == "/nu/bin")
+-                < parts.iter().position(|p| p.ends_with("zsh/bin") || *p == "/zsh/bin"),
++            parts
++                .iter()
++                .position(|p| p.ends_with("nu/bin") || p == "/nu/bin")
++                < parts
++                    .iter()
++                    .position(|p| p.ends_with("zsh/bin") || p == "/zsh/bin"),
+             "nu before zsh in {parts:?}"
+         );
+     }
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 07feae237..f1bd6cfbc 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -1439,32 +1439,62 @@ fn setup_history(
+     Ok(line_editor)
+ }
+ 
++/// Product Astrohacker Shell keybinding overrides applied after Nu/reedline maps.
++///
++/// - Shift+BackTab → Shannon mode switch (existing product)
++/// - Unbind Ctrl+L ClearScreen so host `goto_split` right can own the chord when
++///   the key reaches the shell (rightmost pane pass-through). Issue 26080510416061.
++fn apply_astrohacker_product_keybinding_overrides(keybindings: &mut reedline::Keybindings) {
++    use crossterm::event::{KeyCode, KeyModifiers};
++    use reedline::ReedlineEvent;
++
++    keybindings.add_binding(
++        KeyModifiers::SHIFT,
++        KeyCode::BackTab,
++        ReedlineEvent::ExecuteHostCommand("__shannon_switch".into()),
++    );
++    // Reedline default maps Ctrl+L → ClearScreen in add_common_control_bindings.
++    let _ = keybindings.remove_binding(KeyModifiers::CONTROL, KeyCode::Char('l'));
++}
++
++/// Build product key maps: Nu `create_keybindings` then Astrohacker overrides.
++///
++/// This is the same path `setup_keybindings` uses for the REPL. Exposed for
++/// unit tests that must drive the real product setup (not a parallel table).
++pub(crate) fn build_product_keybindings(config: &Config) -> Result<KeybindingsMode, ShellError> {
++    match create_keybindings(config)? {
++        KeybindingsMode::Emacs(mut keybindings) => {
++            apply_astrohacker_product_keybinding_overrides(&mut keybindings);
++            Ok(KeybindingsMode::Emacs(keybindings))
++        }
++        KeybindingsMode::Vi {
++            mut insert_keybindings,
++            mut normal_keybindings,
++        } => {
++            apply_astrohacker_product_keybinding_overrides(&mut insert_keybindings);
++            apply_astrohacker_product_keybinding_overrides(&mut normal_keybindings);
++            Ok(KeybindingsMode::Vi {
++                insert_keybindings,
++                normal_keybindings,
++            })
++        }
++    }
++}
++
+ ///
+ /// Setup Reedline keybindingds based on the provided config
+ ///
+ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedline {
+-    match create_keybindings(engine_state.get_config()) {
++    match build_product_keybindings(engine_state.get_config()) {
+         Ok(keybindings) => match keybindings {
+-            KeybindingsMode::Emacs(mut keybindings) => {
+-                keybindings.add_binding(
+-                    crossterm::event::KeyModifiers::SHIFT,
+-                    crossterm::event::KeyCode::BackTab,
+-                    reedline::ReedlineEvent::ExecuteHostCommand("__shannon_switch".into()),
+-                );
++            KeybindingsMode::Emacs(keybindings) => {
+                 let edit_mode = Box::new(Emacs::new(keybindings));
+                 line_editor.with_edit_mode(edit_mode)
+             }
+             KeybindingsMode::Vi {
+-                mut insert_keybindings,
+-                mut normal_keybindings,
++                insert_keybindings,
++                normal_keybindings,
+             } => {
+-                for keybindings in [&mut insert_keybindings, &mut normal_keybindings] {
+-                    keybindings.add_binding(
+-                        crossterm::event::KeyModifiers::SHIFT,
+-                        crossterm::event::KeyCode::BackTab,
+-                        reedline::ReedlineEvent::ExecuteHostCommand("__shannon_switch".into()),
+-                    );
+-                }
+                 let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings));
+                 line_editor.with_edit_mode(edit_mode)
+             }
+@@ -2067,3 +2097,88 @@ mod test_auto_cd {
+         assert_eq!(input, actual);
+     }
+ }
++
++/// Issue 26080510416061 Exp 1: product path must unbind Ctrl+L ClearScreen.
++#[cfg(test)]
++mod product_keybinding_tests {
++    use super::{build_product_keybindings, KeybindingsMode};
++    use crate::reedline_config::create_keybindings;
++    use crossterm::event::{KeyCode, KeyModifiers};
++    use nu_protocol::{Config, config::EditBindings};
++    use reedline::ReedlineEvent;
++
++    fn assert_ctrl_l_unbound(kb: &reedline::Keybindings, label: &str) {
++        match kb.find_binding(KeyModifiers::CONTROL, KeyCode::Char('l')) {
++            None => {}
++            Some(ReedlineEvent::ClearScreen) => {
++                panic!("{label}: Ctrl+L still bound to ClearScreen")
++            }
++            Some(other) => panic!("{label}: Ctrl+L unexpectedly bound to {other:?}"),
++        }
++    }
++
++    fn assert_baseline_has_clear_screen(kb: &reedline::Keybindings, label: &str) {
++        match kb.find_binding(KeyModifiers::CONTROL, KeyCode::Char('l')) {
++            Some(ReedlineEvent::ClearScreen) => {}
++            other => panic!("{label}: expected baseline ClearScreen, got {other:?}"),
++        }
++    }
++
++    #[test]
++    fn product_emacs_unbinds_ctrl_l_clear_screen() {
++        let config = Config::default();
++        assert_eq!(config.edit_mode, EditBindings::Emacs);
++
++        // Baseline (Nu/reedline defaults without product strip) still clears.
++        match create_keybindings(&config).expect("baseline keybindings") {
++            KeybindingsMode::Emacs(kb) => {
++                assert_baseline_has_clear_screen(&kb, "emacs baseline");
++            }
++            _other => panic!("expected emacs baseline, got non-emacs mode"),
++        }
++
++        // Product path (same helper setup_keybindings uses) removes ClearScreen.
++        match build_product_keybindings(&config).expect("product keybindings") {
++            KeybindingsMode::Emacs(kb) => {
++                assert_ctrl_l_unbound(&kb, "emacs product");
++                // Shannon switch still present
++                assert!(
++                    matches!(
++                        kb.find_binding(KeyModifiers::SHIFT, KeyCode::BackTab),
++                        Some(ReedlineEvent::ExecuteHostCommand(_))
++                    ),
++                    "Shift+BackTab product bind missing"
++                );
++            }
++            _other => panic!("expected emacs product maps, got non-emacs"),
++        }
++    }
++
++    #[test]
++    fn product_vi_unbinds_ctrl_l_clear_screen() {
++        let mut config = Config::default();
++        config.edit_mode = EditBindings::Vi;
++
++        match create_keybindings(&config).expect("baseline keybindings") {
++            KeybindingsMode::Vi {
++                insert_keybindings,
++                normal_keybindings,
++            } => {
++                assert_baseline_has_clear_screen(&insert_keybindings, "vi insert baseline");
++                assert_baseline_has_clear_screen(&normal_keybindings, "vi normal baseline");
++            }
++            _other => panic!("expected vi baseline"),
++        }
++
++        match build_product_keybindings(&config).expect("product keybindings") {
++            KeybindingsMode::Vi {
++                insert_keybindings,
++                normal_keybindings,
++            } => {
++                assert_ctrl_l_unbound(&insert_keybindings, "vi insert product");
++                assert_ctrl_l_unbound(&normal_keybindings, "vi normal product");
++            }
++            _other => panic!("expected vi product maps"),
++        }
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+
