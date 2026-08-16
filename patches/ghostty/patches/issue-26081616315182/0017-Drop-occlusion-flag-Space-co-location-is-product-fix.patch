@@ -1,0 +1,69 @@
+From 01b2ba25df55437990aa7bc7dbe6a653d02cc622 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 21 Jul 2026 06:25:36 -0500
+Subject: [PATCH 17/33] Drop occlusion flag; Space co-location is product fix
+
+---
+ src/apprt/termsurf.zig | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 0cffd2c7f..867cef535 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4532,6 +4532,9 @@ fn buildBrowserSpawnArgv(
+         return null;
+     }
+ 
++    // Exp 2: do NOT pass --disable-backgrounding-occluded-windows. Space
++    // co-location on helper NSWindows is the product fix (issue 26072110403572).
++
+     if (renderSurfaceSideChannelBrowser(browser_name)) {
+         const service_name = buildRenderSurfaceServiceName(&out.render_service_name_buf, ghostboard_pid, profile, browser_name) orelse return null;
+         out.render_service_len = service_name.len;
+@@ -5678,6 +5681,11 @@ test "Girlbat spawn argv carries render surface service only for Girlbat" {
+     try testing.expectEqual(@as(usize, 0), countArgPrefix(roamium_argv, "--render-surface-service="));
+     try testing.expect(roamium_args.renderService() == null);
+     try expectBaseBrowserArgv(roamium_argv, "/tmp/ah-chromiumd", "chromium");
++    // Exp 2: diagnostic occlusion flag must not ship on chromium spawn.
++    try testing.expectEqual(
++        @as(usize, 0),
++        countExactArg(roamium_argv, "--disable-backgrounding-occluded-windows"),
++    );
+ 
+     var surfari_args: BrowserSpawnArgv = .{};
+     const surfari_argv = buildBrowserSpawnArgv(
+@@ -5692,6 +5700,15 @@ test "Girlbat spawn argv carries render surface service only for Girlbat" {
+     try testing.expectEqual(@as(usize, 0), countArgPrefix(surfari_argv, "--render-surface-service="));
+     try testing.expect(surfari_args.renderService() == null);
+     try expectBaseBrowserArgv(surfari_argv, "/tmp/ah-webkitd", "webkit");
++    try testing.expectEqual(
++        @as(usize, 0),
++        countExactArg(surfari_argv, "--disable-backgrounding-occluded-windows"),
++    );
++
++    try testing.expectEqual(
++        @as(usize, 0),
++        countExactArg(girlbat_argv, "--disable-backgrounding-occluded-windows"),
++    );
+ }
+ 
+ test "render side-channel state is Girlbat gated and cleanup is idempotent" {
+@@ -5731,6 +5748,14 @@ fn countArgPrefix(argv: []const []const u8, prefix: []const u8) usize {
+     return count;
+ }
+ 
++fn countExactArg(argv: []const []const u8, needle: []const u8) usize {
++    var count: usize = 0;
++    for (argv) |arg| {
++        if (std.mem.eql(u8, arg, needle)) count += 1;
++    }
++    return count;
++}
++
+ fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, browser: []const u8) !void {
+     const testing = std.testing;
+     try testing.expectEqual(@as(usize, 9), argv.len);
+-- 
+2.50.1 (Apple Git-155)
+

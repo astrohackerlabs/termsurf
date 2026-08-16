@@ -1,0 +1,515 @@
+From eb776509ce3a15dfb371f927b1aa010e5bcf258d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 06:05:01 -0500
+Subject: [PATCH 08/33] Default product config (borders, theme, font, ahsh,
+ homepage)
+
+---
+ .../Terminal/BaseTerminalController.swift     |  11 +-
+ macos/Sources/Ghostty/Ghostty.Config.swift    |  96 +++++++-
+ src/apprt/termsurf.zig                        |   2 +-
+ src/config/Config.zig                         | 231 ++++++++++++++++--
+ 4 files changed, 305 insertions(+), 35 deletions(-)
+
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index a08375e21..7d54d53d7 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -338,17 +338,14 @@ class BaseTerminalController: NSWindowController,
+     ///
+     /// Subclasses should call super first.
+     func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
+-<<<<<<< HEAD
+-        for surfaceView in from where !to.contains(surfaceView) {
+-            cancelPendingClipboardConfirmation(for: surfaceView)
+-        }
+-
+-=======
+         termSurfLogSplitTree(
+             event: "surface_tree_changed",
+             tree: to,
+             note: "old:\(termSurfSplitTreeDescription(from))")
+->>>>>>> 1da4393f0 (Trace the split tree's eclipse)
++        for surfaceView in from where !to.contains(surfaceView) {
++            cancelPendingClipboardConfirmation(for: surfaceView)
++        }
++
+         // If our surface tree becomes empty then we have no focused surface.
+         if to.isEmpty {
+             focusedSurface = nil
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index ace126905..5fc36ca58 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -175,6 +175,38 @@ extension Ghostty {
+             return .milliseconds(v)
+         }
+ 
++        var homepage: String {
++            let defaultValue = "https://astrohacker.com/welcome"
++            guard let config = self.config else { return defaultValue }
++            var v: UnsafePointer<Int8>?
++            let key = "homepage"
++            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return defaultValue }
++            guard let ptr = v else { return defaultValue }
++            let value = String(cString: ptr)
++            return value.isEmpty ? defaultValue : value
++        }
++
++        var browserList: [String] {
++            let defaultValue = ["chromium"]
++            guard let config = self.config else { return defaultValue }
++
++            let key = "browser"
++            let keyLen = UInt(key.lengthOfBytes(using: .utf8))
++            let count = ghostty_config_get_repeatable_string_count(config, key, keyLen)
++            guard count > 0 else { return defaultValue }
++
++            var browsers: [String] = []
++            for idx in 0..<count {
++                guard let ptr = ghostty_config_get_repeatable_string_value(config, key, keyLen, idx) else { continue }
++                let value = String(cString: ptr)
++                if !value.isEmpty {
++                    browsers.append(value)
++                }
++            }
++
++            return browsers.isEmpty ? defaultValue : browsers
++        }
++
+         var splitPreserveZoom: SplitPreserveZoom {
+             guard let config = self.config else { return .init() }
+             var v: CUnsignedInt = 0
+@@ -492,8 +524,9 @@ extension Ghostty {
+         }
+ 
+         var unfocusedSplitOpacity: Double {
+-            guard let config = self.config else { return 1 }
+-            var opacity: Double = 0.85
++            guard let config = self.config else { return 0 }
++            // Config default is 1 (no dimming); overlay alpha is 1 - opacity.
++            var opacity: Double = 1
+             let key = "unfocused-split-opacity"
+             _ = ghostty_config_get(config, &opacity, key, UInt(key.lengthOfBytes(using: .utf8)))
+             return 1 - opacity
+@@ -516,13 +549,19 @@ extension Ghostty {
+             )
+         }
+ 
+-        var focusedSplitBorderColor: Color? {
+-            guard let config = self.config else { return nil }
++        var splitDividerColor: Color {
++            let backgroundColor = OSColor(backgroundColor)
++            let isLightBackground = backgroundColor.isLightColor
++            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
++
++            guard let config = self.config else { return Color(newColor) }
++
+             var color: ghostty_config_color_s = .init()
+-            let key = "focused-split-border-color"
++            let key = "split-divider-color"
+             if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return nil
++                return Color(newColor)
+             }
++
+             return .init(
+                 red: Double(color.r) / 255,
+                 green: Double(color.g) / 255,
+@@ -530,13 +569,21 @@ extension Ghostty {
+             )
+         }
+ 
+-        var unfocusedSplitBorderColor: Color? {
++        /// Theme-relative defaults for split borders when config colors are unset.
++        /// Index 6 = ANSI cyan (focused); index 8 = ANSI bright black (unfocused).
++        private func paletteColor(index: Int) -> Color? {
++        var focusedSplitBorderColor: Color? {
+             guard let config = self.config else { return nil }
+-            var color: ghostty_config_color_s = .init()
+-            let key = "unfocused-split-border-color"
+-            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
++            guard index >= 0 && index < 256 else { return nil }
++            var palette: ghostty_config_palette_s = .init()
++            let key = "palette"
++            guard ghostty_config_get(config, &palette, key, UInt(key.lengthOfBytes(using: .utf8))) else {
+                 return nil
+             }
++            // C fixed arrays import as Swift tuples; rebind to index by Int.
++            let color: ghostty_config_color_s = withUnsafeBytes(of: palette.colors) { raw in
++                raw.bindMemory(to: ghostty_config_color_s.self)[index]
++            }
+             return .init(
+                 red: Double(color.r) / 255,
+                 green: Double(color.g) / 255,
+@@ -544,9 +591,34 @@ extension Ghostty {
+             )
+         }
+ 
++        private func configColorOrPalette(
++            key: String,
++            paletteIndex: Int
++        ) -> Color? {
++            guard let config = self.config else { return nil }
++            var color: ghostty_config_color_s = .init()
++            if ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
++                return .init(
++                    red: Double(color.r) / 255,
++                    green: Double(color.g) / 255,
++                    blue: Double(color.b) / 255
++                )
++            }
++            return paletteColor(index: paletteIndex)
++        }
++
++        var focusedSplitBorderColor: Color? {
++            configColorOrPalette(key: "focused-split-border-color", paletteIndex: 6)
++        }
++
++        var unfocusedSplitBorderColor: Color? {
++            configColorOrPalette(key: "unfocused-split-border-color", paletteIndex: 8)
++        }
++
+         var splitBorderWidth: Double {
+-            guard let config = self.config else { return 0 }
+-            var value: Double = 0
++            // Match Config.zig default (2). Zero still disables borders.
++            guard let config = self.config else { return 2 }
++            var value: Double = 2
+             let key = "split-border-width"
+             _ = ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8)))
+             return value
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index f915f15e7..200360dbc 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -39,7 +39,7 @@ const max_health_response_len: usize = 2048;
+ const max_homepage_len: usize = max_url_len;
+ const max_listen_socket_len: usize = std.fs.max_path_bytes;
+ const default_browser = "chromium";
+-const default_homepage = "https://termsurf.com/welcome";
++const default_homepage = "https://astrohacker.com/welcome";
+ const fallback_cell_width: u64 = 10;
+ const fallback_cell_height: u64 = 20;
+ const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 5c02cb588..62806cce6 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -265,9 +265,8 @@ language: ?[:0]const u8 = null,
+ /// text-specific scaling factors, which are often managed by your desktop
+ /// environment (e.g. the GNOME display scale and large text settings).
+ @"font-size": f32 = switch (builtin.os.tag) {
+-    // On macOS we default a little bigger since this tends to look better. This
+-    // is purely subjective but this is easy to modify.
+-    .macos => 13,
++    // Astrohacker Terminal: 12pt on all platforms (was 13 on macOS upstream).
++    .macos => 12,
+     else => 12,
+ },
+ 
+@@ -594,7 +593,14 @@ language: ?[:0]const u8 = null,
+ /// be fixed in a future update:
+ ///
+ ///   - macOS: titlebar tabs style is not updated when switching themes.
+-theme: ?Theme = null,
++///
++/// Astrohacker Terminal defaults to the built-in **TokyoNight** theme (exact
++/// resource name; case-sensitive on case-sensitive filesystems). Set `theme`
++/// explicitly to use a different theme or light/dark pair.
++theme: ?Theme = .{
++    .light = "TokyoNight",
++    .dark = "TokyoNight",
++},
+ 
+ /// Background color for the window.
+ /// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+@@ -1053,15 +1059,18 @@ palette: Palette = .{},
+ @"background-blur": BackgroundBlur = .false,
+ 
+ /// The opacity level (opposite of transparency) of an unfocused split.
+-/// Unfocused splits by default are slightly faded out to make it easier to see
+-/// which split is focused. To disable this feature, set this value to 1.
++///
++/// Astrohacker Terminal defaults to **1** (no dimming). Focused vs unfocused
++/// panes are distinguished by split borders (see `split-border-width` and
++/// focused/unfocused border colors), not by fading inactive content. Upstream
++/// Ghostty used 0.7; set a value below 1 if you want that dimming effect.
+ ///
+ /// A value of 1 is fully opaque and a value of 0 is fully transparent. Because
+ /// "0" is not useful (it makes the window look very weird), the minimum value
+ /// is 0.15. This value still looks weird but you can at least see what's going
+ /// on. A value outside of the range 0.15 to 1 will be clamped to the nearest
+ /// valid value.
+-@"unfocused-split-opacity": f64 = 0.7,
++@"unfocused-split-opacity": f64 = 1,
+ 
+ /// The color to dim the unfocused split. Unfocused splits are dimmed by
+ /// rendering a semi-transparent rectangle over the split. This sets the color of
+@@ -1078,16 +1087,23 @@ palette: Palette = .{},
+ /// Available since: 1.1.0
+ @"split-divider-color": ?Color = null,
+ 
+-/// The border color of the focused split pane. If not set, no border is drawn.
+-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++/// The border color of the focused split pane. Specified as either hex
++/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++///
++/// When unset, the macOS UI falls back to the active theme palette index 6
++/// (ANSI cyan) so borders stay theme-relative by default.
+ @"focused-split-border-color": ?Color = null,
+ 
+-/// The border color of unfocused split panes. If not set, no border is drawn.
+-/// Specified as either hex (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++/// The border color of unfocused split panes. Specified as either hex
++/// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
++///
++/// When unset, the macOS UI falls back to the active theme palette index 8
++/// (ANSI bright black) so borders stay theme-relative by default.
+ @"unfocused-split-border-color": ?Color = null,
+ 
+-/// The width of the split pane border in points. Set to 0 to disable borders.
+-@"split-border-width": f64 = 0,
++/// The width of the split pane border in points. Defaults to 2 so multi-pane
++/// windows show borders without config. Set to 0 to disable borders.
++@"split-border-width": f64 = 2,
+ 
+ /// The color saturation of unfocused split panes. 1.0 is full color, 0.0 is
+ /// full grayscale. Only applies when in a split layout.
+@@ -1142,7 +1158,11 @@ palette: Palette = .{},
+ /// be looked up in the `PATH`. If this is not set, a default will be looked up
+ /// from your system. The rules for the default lookup are:
+ ///
+-///   * `SHELL` environment variable
++///   * Astrohacker Terminal: packaged `ahsh` if present at
++///     `/opt/homebrew/bin/ahsh` or `/usr/local/bin/ahsh` (GUI apps do not
++///     inherit Homebrew PATH, so we use absolute paths)
++///
++///   * `SHELL` environment variable (when launched from a CLI environment)
+ ///
+ ///   * `passwd` entry (user information)
+ ///
+@@ -1311,10 +1331,14 @@ command: ?Command = null,
+ /// browser.
+ ///
+ /// Available since: 1.2.0
++///
++/// Astrohacker Terminal: if neither the process environment nor this map sets
++/// `XDG_CONFIG_HOME`, finalize injects `$HOME/.config` so session children
++/// (including ahsh) use the XDG layout on macOS as well as Linux.
+ env: RepeatableStringMap = .{},
+ 
+ /// The default homepage URL opened by `web` when no URL is supplied.
+-homepage: [:0]const u8 = "https://termsurf.com/welcome",
++homepage: [:0]const u8 = "https://astrohacker.com/welcome",
+ 
+ /// The browser names advertised to `web`.
+ ///
+@@ -3992,6 +4016,14 @@ pub fn default(alloc_gpa: Allocator) Allocator.Error!Config {
+     // Add our default keybindings
+     try result.keybind.init(alloc);
+ 
++    // Astrohacker Terminal: stock monospace + Nerd Font icons.
++    // Empty font-family falls back to the system default; set product face here.
++    // Use list.append (not parseCLI) so the error set stays Allocator.Error.
++    try result.@"font-family".list.append(
++        alloc,
++        try alloc.dupeZ(u8, "JetBrainsMono Nerd Font"),
++    );
++
+     // Add our default command palette entries
+     try result.@"command-palette-entry".init(alloc);
+ 
+@@ -4601,6 +4633,48 @@ pub fn finalize(self: *Config) !void {
+     // specific variable use sites for more details.
+     const probable_cli = probableCliEnvironment();
+ 
++    // Astrohacker Terminal: default XDG_CONFIG_HOME to $HOME/.config when the
++    // process and config do not already set it. Dock-launched .app processes
++    // often lack XDG_*; ahsh and other tools then prefer platform dirs.
++    // User `env = XDG_CONFIG_HOME=…` and a pre-set process env both win.
++    {
++        const process_xdg = std.posix.getenv("XDG_CONFIG_HOME");
++        const process_empty = process_xdg == null or process_xdg.?.len == 0;
++        const config_has_xdg = self.env.map.get("XDG_CONFIG_HOME") != null;
++        if (process_empty and !config_has_xdg) {
++            const home: ?[]const u8 = home: {
++                if (std.posix.getenv("HOME")) |h| {
++                    if (h.len > 0) break :home h;
++                }
++                if ((comptime !builtin.target.cpu.arch.isWasm()) and
++                    (comptime !builtin.is_test) and
++                    builtin.os.tag != .windows)
++                {
++                    if (internal_os.passwd.get(alloc)) |pw| {
++                        if (pw.home) |h| {
++                            if (h.len > 0) break :home h;
++                        }
++                    } else |_| {}
++                }
++                break :home null;
++            };
++            if (home) |h| {
++                const xdg = try std.fmt.allocPrintSentinel(
++                    alloc,
++                    "{s}/.config",
++                    .{h},
++                    0,
++                );
++                try self.env.map.put(
++                    alloc,
++                    try alloc.dupeZ(u8, "XDG_CONFIG_HOME"),
++                    xdg,
++                );
++                log.info("default XDG_CONFIG_HOME={s}", .{xdg});
++            }
++        }
++    }
++
+     // If we have a font-family set and don't set the others, default
+     // the others to the font family. This way, if someone does
+     // --font-family=foo, then we try to get the stylized versions of
+@@ -4637,6 +4711,25 @@ pub fn finalize(self: *Config) !void {
+         (comptime !builtin.is_test))
+     {
+         if (self.command == null or wd == .home) command: {
++            // Astrohacker Terminal: prefer packaged ahsh via absolute paths.
++            // GUI-launched .app processes do not inherit Homebrew PATH, so a
++            // bare `ahsh` name is unreliable; fall through to SHELL/passwd if
++            // neither candidate exists.
++            if (self.command == null and !internal_os.isFlatpak()) {
++                const ahsh_candidates = [_][]const u8{
++                    "/opt/homebrew/bin/ahsh",
++                    "/usr/local/bin/ahsh",
++                };
++                for (ahsh_candidates) |path| {
++                    if (std.fs.accessAbsolute(path, .{})) {
++                        const copy = try alloc.dupeZ(u8, path);
++                        self.command = .{ .shell = copy };
++                        log.info("default shell src=ahsh value={s}", .{path});
++                        break;
++                    } else |_| {}
++                }
++            }
++
+             // First look up the command using the SHELL env var if needed.
+             // We don't do this in flatpak because SHELL in Flatpak is always
+             // set to /bin/sh.
+@@ -7233,6 +7326,114 @@ pub const Keybinds = struct {
+                 .{ .key = .{ .physical = .arrow_right }, .mods = .{ .alt = true } },
+                 .{ .esc = "f" },
+             );
++
++            // --- Astrohacker Terminal product keybinds (macOS) ---
++            // Last put wins: these replace earlier defaults on the same trigger
++            // (e.g. cmd+k was clear_screen; cmd+j was scroll_to_selection).
++            // Splits (cmd = super)
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'j' }, .mods = .{ .super = true } },
++                .{ .new_split = .down },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'k' }, .mods = .{ .super = true } },
++                .{ .new_split = .up },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .super = true } },
++                .{ .new_split = .right },
++            );
++            try self.set.put(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .super = true } },
++                .{ .new_split = .left },
++            );
++            // Navigate splits (pane focus)
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .right },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .left },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'k' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .up },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'j' }, .mods = .{ .ctrl = true } },
++                .{ .goto_split = .down },
++                .{ .performable = true },
++            );
++            // Resize splits
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_left }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .left, 80 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_right }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .right, 80 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_up }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .up, 40 } },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_down }, .mods = .{ .ctrl = true, .alt = true } },
++                .{ .resize_split = .{ .down, 40 } },
++                .{ .performable = true },
++            );
++            // Move tab left/right
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_left }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .move_tab = -1 },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .physical = .arrow_right }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .move_tab = 1 },
++                .{ .performable = true },
++            );
++            // Switch tab focus
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'h' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .previous_tab = {} },
++                .{ .performable = true },
++            );
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'l' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .next_tab = {} },
++                .{ .performable = true },
++            );
++            // Zoom current split (toggle)
++            try self.set.putFlags(
++                alloc,
++                .{ .key = .{ .unicode = 'z' }, .mods = .{ .ctrl = true, .shift = true } },
++                .{ .toggle_split_zoom = {} },
++                .{ .performable = true },
++            );
+         }
+     }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

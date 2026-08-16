@@ -1,0 +1,673 @@
+From 9f109982af1ce233be08133d8e95f41884190722 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 17:24:38 -0500
+Subject: [PATCH 10/33] Split pane chrome (radius, progress clip, gap, divider)
+
+---
+ macos/Sources/Features/Splits/SplitView.swift |  67 +++++++---
+ .../Splits/TerminalSplitTreeView.swift        |   1 +
+ macos/Sources/Ghostty/Ghostty.Config.swift    |  59 +++++++--
+ .../Ghostty/Surface View/InspectorView.swift  |   7 +-
+ .../Surface View/SurfaceProgressBar.swift     |  22 +++-
+ .../Ghostty/Surface View/SurfaceView.swift    | 123 ++++++++++++++++--
+ src/config/Config.zig                         | 107 +++++++++++++++
+ src/config/c_get.zig                          |  27 ++++
+ 8 files changed, 366 insertions(+), 47 deletions(-)
+
+diff --git a/macos/Sources/Features/Splits/SplitView.swift b/macos/Sources/Features/Splits/SplitView.swift
+index a19fdca6a..c29042200 100644
+--- a/macos/Sources/Features/Splits/SplitView.swift
++++ b/macos/Sources/Features/Splits/SplitView.swift
+@@ -3,15 +3,20 @@ import SwiftUI
+ /// A split view shows a left and right (or top and bottom) view with a divider in the middle to do resizing.
+ /// The terminlogy "left" and "right" is always used but for vertical splits "left" is "top" and "right" is "bottom".
+ ///
+-/// This view is purpose built for our use case and I imagine we'll continue to make it more configurable
+-/// as time goes on. For example, the splitter divider size and styling is all hardcoded.
++/// Inter-pane **margin** is `paneGap` (`split-pane-gap`): empty layout space so
++/// pane borders stay fully visible. Painted divider stays a 1 pt hairline
++/// (`split-divider-color`) and must not fill the gap (Exp 1 Fail lesson).
+ struct SplitView<L: View, R: View>: View {
+     /// Direction of the split
+     let direction: SplitViewDirection
+ 
+-    /// Divider color
++    /// Divider hairline color
+     let dividerColor: Color
+ 
++    /// Empty space between pane frames in points (`split-pane-gap`).
++    /// `0` keeps the historical tight hairline-only geometry.
++    let paneGap: CGFloat
++
+     /// Minimum increment (in points) that this split can be resized by, in
+     /// each direction. Both `height` and `width` should be whole numbers
+     /// greater than or equal to 1.0
+@@ -30,10 +35,27 @@ struct SplitView<L: View, R: View>: View {
+     /// The current fractional width of the split view. 0.5 means L/R are equally sized, for example.
+     @Binding var split: CGFloat
+ 
+-    /// The visible size of the splitter, in points. The invisible size is a transparent hitbox that can still
+-    /// be used for getting a resize handle. The total width/height of the splitter is the sum of both.
+-    private let splitterVisibleSize: CGFloat = 1
+-    private let splitterInvisibleSize: CGFloat = 6
++    /// Painted hairline only — never scales with `paneGap`.
++    private let splitterPaintSize: CGFloat = 1
++
++    /// Minimum drag hit thickness.
++    private let splitterHitMinimum: CGFloat = 6
++
++    /// Layout separation between pane frames.
++    /// gap == 0 → historical 1 pt paint reservation; gap > 0 → empty margin.
++    private var layoutSeparation: CGFloat {
++        paneGap > 0 ? paneGap : splitterPaintSize
++    }
++
++    private var splitterVisibleSize: CGFloat {
++        splitterPaintSize
++    }
++
++    /// Transparent hit beyond the hairline so total hit ≥ max(6, separation).
++    private var splitterInvisibleSize: CGFloat {
++        let hit = max(splitterHitMinimum, layoutSeparation)
++        return max(0, hit - splitterVisibleSize)
++    }
+ 
+     var body: some View {
+         GeometryReader { geo in
+@@ -42,6 +64,7 @@ struct SplitView<L: View, R: View>: View {
+             let splitterPoint = self.splitterPoint(for: geo.size, leftRect: leftRect)
+ 
+             ZStack(alignment: .topLeading) {
++                // Empty gap shows host/window background — do not fill with divider color.
+                 left
+                     .frame(width: leftRect.size.width, height: leftRect.size.height)
+                     .offset(x: leftRect.origin.x, y: leftRect.origin.y)
+@@ -73,6 +96,7 @@ struct SplitView<L: View, R: View>: View {
+         _ direction: SplitViewDirection,
+         _ split: Binding<CGFloat>,
+         dividerColor: Color,
++        paneGap: CGFloat = 4,
+         resizeIncrements: NSSize = .init(width: 1, height: 1),
+         @ViewBuilder left: (() -> L),
+         @ViewBuilder right: (() -> R),
+@@ -81,6 +105,7 @@ struct SplitView<L: View, R: View>: View {
+         self.direction = direction
+         self._split = split
+         self.dividerColor = dividerColor
++        self.paneGap = max(0, paneGap)
+         self.resizeIncrements = resizeIncrements
+         self.left = left()
+         self.right = right()
+@@ -106,15 +131,16 @@ struct SplitView<L: View, R: View>: View {
+     private func leftRect(for size: CGSize) -> CGRect {
+         // Initially the rect is the full size
+         var result = CGRect(x: 0, y: 0, width: size.width, height: size.height)
++        let half = layoutSeparation / 2
+         switch direction {
+         case .horizontal:
+             result.size.width *= split
+-            result.size.width -= splitterVisibleSize / 2
++            result.size.width -= half
+             result.size.width -= result.size.width.truncatingRemainder(dividingBy: self.resizeIncrements.width)
+ 
+         case .vertical:
+             result.size.height *= split
+-            result.size.height -= splitterVisibleSize / 2
++            result.size.height -= half
+             result.size.height -= result.size.height.truncatingRemainder(dividingBy: self.resizeIncrements.height)
+         }
+ 
+@@ -125,31 +151,36 @@ struct SplitView<L: View, R: View>: View {
+     private func rightRect(for size: CGSize, leftRect: CGRect) -> CGRect {
+         // Initially the rect is the full size
+         var result = CGRect(x: 0, y: 0, width: size.width, height: size.height)
++        // Full layoutSeparation between left trailing edge and right leading edge.
++        // (Historical tight path used paint/2 offsets; for gap==0 separation==paint so
++        // left+paint still leaves a 1pt hairline reservation matching prior feel.)
+         switch direction {
+         case .horizontal:
+-            // For horizontal layouts we offset the starting X by the left rect
+-            // and make the width fit the remaining space.
+-            result.origin.x += leftRect.size.width
+-            result.origin.x += splitterVisibleSize / 2
++            result.origin.x = leftRect.size.width + layoutSeparation
+             result.size.width -= result.origin.x
+ 
+         case .vertical:
+-            result.origin.y += leftRect.size.height
+-            result.origin.y += splitterVisibleSize / 2
++            result.origin.y = leftRect.size.height + layoutSeparation
+             result.size.height -= result.origin.y
+         }
+ 
+         return result
+     }
+ 
+-    /// Calculates the point at which the splitter should be rendered.
++    /// Hairline centered in the layout gap between panes.
+     private func splitterPoint(for size: CGSize, leftRect: CGRect) -> CGPoint {
+         switch direction {
+         case .horizontal:
+-            return CGPoint(x: leftRect.size.width, y: size.height / 2)
++            return CGPoint(
++                x: leftRect.size.width + layoutSeparation / 2,
++                y: size.height / 2
++            )
+ 
+         case .vertical:
+-            return CGPoint(x: size.width / 2, y: leftRect.size.height)
++            return CGPoint(
++                x: size.width / 2,
++                y: leftRect.size.height + layoutSeparation / 2
++            )
+         }
+     }
+ 
+diff --git a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+index 5fa12edeb..f8a46bc23 100644
+--- a/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
++++ b/macos/Sources/Features/Splits/TerminalSplitTreeView.swift
+@@ -70,6 +70,7 @@ private struct TerminalSplitSubtreeView: View {
+                     action(.resize(.init(node: node, ratio: $0)))
+                 }),
+                 dividerColor: ghostty.config.splitDividerColor,
++                paneGap: CGFloat(ghostty.config.splitPaneGap),
+                 resizeIncrements: .init(width: 1, height: 1),
+                 left: {
+                     TerminalSplitSubtreeView(node: split.left, action: action)
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 5fc36ca58..0d35cc5a0 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -549,17 +549,16 @@ extension Ghostty {
+             )
+         }
+ 
++        /// Inter-pane hairline color. Explicit `split-divider-color` wins; when
++        /// unset, match theme `background` (no darken — avoids a black 1pt line
++        /// on dark themes while keeping the drag seam paint).
+         var splitDividerColor: Color {
+-            let backgroundColor = OSColor(backgroundColor)
+-            let isLightBackground = backgroundColor.isLightColor
+-            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
+-
+-            guard let config = self.config else { return Color(newColor) }
++            guard let config = self.config else { return backgroundColor }
+ 
+             var color: ghostty_config_color_s = .init()
+             let key = "split-divider-color"
+             if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return Color(newColor)
++                return backgroundColor
+             }
+ 
+             return .init(
+@@ -569,10 +568,9 @@ extension Ghostty {
+             )
+         }
+ 
+-        /// Theme-relative defaults for split borders when config colors are unset.
+-        /// Index 6 = ANSI cyan (focused); index 8 = ANSI bright black (unfocused).
+-        private func paletteColor(index: Int) -> Color? {
+-        var focusedSplitBorderColor: Color? {
++        /// Theme palette color at ANSI/extended index (0…255), or nil if unavailable.
++        /// Index 6 = ANSI cyan (focused split border default); index 8 = bright black.
++        func paletteColor(index: Int) -> Color? {
+             guard let config = self.config else { return nil }
+             guard index >= 0 && index < 256 else { return nil }
+             var palette: ghostty_config_palette_s = .init()
+@@ -591,6 +589,17 @@ extension Ghostty {
+             )
+         }
+ 
++        /// Surface progress bar colors from the active theme palette.
++        /// Indices: normal 6 (cyan), error 1 (red), pause 3 (yellow).
++        /// Fallbacks match prior system colors when palette is unavailable.
++        var progressBarColors: (normal: Color, error: Color, pause: Color) {
++            (
++                normal: paletteColor(index: 6) ?? .accentColor,
++                error: paletteColor(index: 1) ?? .red,
++                pause: paletteColor(index: 3) ?? .orange
++            )
++        }
++
+         private func configColorOrPalette(
+             key: String,
+             paletteIndex: Int
+@@ -624,6 +633,36 @@ extension Ghostty {
+             return value
+         }
+ 
++        /// Empty inter-pane margin in points (`split-pane-gap`). Default 4.
++        /// Does not thicken the painted divider hairline.
++        var splitPaneGap: Double {
++            guard let config = self.config else { return 4 }
++            var value: Double = 4
++            let key = "split-pane-gap"
++            _ = ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8)))
++            return value
++        }
++
++        /// Corner radius for multi-pane split borders.
++        ///
++        /// - `nil` = `auto` (match window `_cornerRadius` / product fallback)
++        /// - `0` = square corners
++        /// - `>0` = fixed continuous radius in points
++        ///
++        /// Zig uses cval sentinel `-1` for auto.
++        var splitBorderCornerRadius: Double? {
++            guard let config = self.config else { return nil }
++            var value: Double = -1
++            let key = "split-border-corner-radius"
++            guard ghostty_config_get(config, &value, key, UInt(key.lengthOfBytes(using: .utf8))) else {
++                return nil
++            }
++            if value < 0 {
++                return nil
++            }
++            return value
++        }
++
+         var unfocusedSplitSaturation: Double {
+             guard let config = self.config else { return 1.0 }
+             var value: Double = 1.0
+diff --git a/macos/Sources/Ghostty/Surface View/InspectorView.swift b/macos/Sources/Ghostty/Surface View/InspectorView.swift
+index e7320c782..891e445f4 100644
+--- a/macos/Sources/Ghostty/Surface View/InspectorView.swift	
++++ b/macos/Sources/Ghostty/Surface View/InspectorView.swift	
+@@ -26,7 +26,12 @@ extension Ghostty {
+                 if !surfaceView.inspectorVisible {
+                     SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
+                 } else {
+-                    SplitView(.vertical, $split, dividerColor: ghostty.config.splitDividerColor, left: {
++                    SplitView(
++                        .vertical,
++                        $split,
++                        dividerColor: ghostty.config.splitDividerColor,
++                        paneGap: CGFloat(ghostty.config.splitPaneGap),
++                        left: {
+                         SurfaceWrapper(surfaceView: surfaceView, isSplit: isSplit)
+                     }, right: {
+                         InspectorViewRepresentable(surfaceView: surfaceView)
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift b/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift
+index 0478bf2bf..88645b4a0 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceProgressBar.swift	
+@@ -5,12 +5,27 @@ import SwiftUI
+ /// control.
+ struct SurfaceProgressBar: View {
+     let report: Ghostty.Action.ProgressReport
++    /// Theme palette colors (normal / error / pause). Callers supply palette-backed values with
++    /// system fallbacks when the palette is unavailable.
++    let colors: (normal: Color, error: Color, pause: Color)
++
++    init(
++        report: Ghostty.Action.ProgressReport,
++        colors: (normal: Color, error: Color, pause: Color) = (
++            normal: .accentColor,
++            error: .red,
++            pause: .orange
++        )
++    ) {
++        self.report = report
++        self.colors = colors
++    }
+ 
+     private var color: Color {
+         switch report.state {
+-        case .error: return .red
+-        case .pause: return .orange
+-        default: return .accentColor
++        case .error: return colors.error
++        case .pause: return colors.pause
++        default: return colors.normal
+         }
+     }
+ 
+@@ -109,4 +124,3 @@ private struct BouncingProgressBar: View {
+         }
+     }
+ }
+-
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 17f698458..d6a443b7a 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -226,6 +226,49 @@ extension Ghostty {
+ #endif
+         }
+ 
++
++        /// Fallback when `_cornerRadius` is unavailable (pre-Tahoe / private API).
++        /// Modest continuous radius so Sequoia-class windows still improve slightly.
++        private static let splitBorderCornerRadiusFallback: CGFloat = 10
++
++        /// System window corner radius via private `_cornerRadius` (same source as
++        /// TerminalViewContainer.glass), with product fallback.
++        private var resolvedWindowCornerRadius: CGFloat {
++#if canImport(AppKit)
++            if let window = surfaceView.window,
++               window.responds(to: Selector(("_cornerRadius"))),
++               let radius = window.value(forKey: "_cornerRadius") as? CGFloat,
++               radius > 0 {
++                return radius
++            }
++#endif
++            return Self.splitBorderCornerRadiusFallback
++        }
++
++        /// Effective split-border corner radius from config:
++        /// - auto (`nil`): window `_cornerRadius` or product fallback
++        /// - `0`: square
++        /// - `>0`: fixed points
++        /// Used for **all four** corners of each split pane (including internal
++        /// T-junctions).
++        private var effectiveSplitBorderCornerRadius: CGFloat {
++            if let fixed = ghostty.config.splitBorderCornerRadius {
++                return CGFloat(fixed)
++            }
++            return resolvedWindowCornerRadius
++        }
++
++        /// Outer stroke radius for every corner of this pane.
++        private func outerBorderRadius(effectiveRadius: CGFloat) -> CGFloat {
++            effectiveRadius
++        }
++
++        /// Inner content/dim clip: max(0, R - borderWidth) for concentric stroke.
++        /// When R is 0, returns 0 (square clip / no rounding).
++        private func innerBorderRadius(effectiveRadius: CGFloat, borderWidth: CGFloat) -> CGFloat {
++            max(0, effectiveRadius - borderWidth)
++        }
++
+         var body: some View {
+             let center = NotificationCenter.default
+ 
+@@ -283,16 +326,49 @@ extension Ghostty {
+                     }
+                 }
+                 .ghosttySurfaceView(surfaceView)
++                .clipShape(
++                    RoundedRectangle(
++                        cornerRadius: isSplit
++                            ? innerBorderRadius(
++                                effectiveRadius: effectiveSplitBorderCornerRadius,
++                                borderWidth: CGFloat(ghostty.config.splitBorderWidth))
++                            : 0,
++                        style: .continuous
++                    )
++                )
+ 
+-                // Progress report
++                // Progress report (OSC / TermSurf load). Colors follow the theme
++                // palette. Clip geometry must be **concentric** with the border:
++                // inset content box by w, radius max(0, R−w) — not R−w on the
++                // full pane (that is looser in the corners and leaks past the
++                // stroke).
+                 if let progressReport = surfaceView.progressReport, progressReport.state != .remove {
+-                    let borderInset = CGFloat(isSplit ? ghostty.config.splitBorderWidth : 0)
+-                    VStack(spacing: 0) {
+-                        SurfaceProgressBar(report: progressReport)
+-                        Spacer()
++                    let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
++                    let borderInset = CGFloat(isSplit ? borderWidth : 0)
++                    let progressInnerR = isSplit
++                        ? innerBorderRadius(
++                            effectiveRadius: effectiveSplitBorderCornerRadius,
++                            borderWidth: borderWidth)
++                        : 0
++                    GeometryReader { geo in
++                        let contentW = max(10, geo.size.width - borderInset * 2)
++                        let contentH = max(10, geo.size.height - borderInset * 2)
++                        VStack(spacing: 0) {
++                            SurfaceProgressBar(
++                                report: progressReport,
++                                colors: ghostty.config.progressBarColors
++                            )
++                            Spacer(minLength: 0)
++                        }
++                        .frame(width: contentW, height: contentH, alignment: .top)
++                        .clipShape(
++                            RoundedRectangle(
++                                cornerRadius: progressInnerR,
++                                style: .continuous
++                            )
++                        )
++                        .offset(x: borderInset, y: borderInset)
+                     }
+-                    .padding(borderInset)
+-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                     .allowsHitTesting(false)
+                     .transition(.opacity)
+                 }
+@@ -390,10 +466,20 @@ extension Ghostty {
+                 if isSplit && !isFocusedSurface {
+                     let overlayOpacity = ghostty.config.unfocusedSplitOpacity
+                     if overlayOpacity > 0 {
+-                        Rectangle()
+-                            .fill(ghostty.config.unfocusedSplitFill)
+-                            .allowsHitTesting(false)
+-                            .opacity(overlayOpacity)
++                        let borderWidth = CGFloat(ghostty.config.splitBorderWidth)
++                        let effectiveR = effectiveSplitBorderCornerRadius
++                        let innerR = innerBorderRadius(effectiveRadius: effectiveR, borderWidth: borderWidth)
++                        Group {
++                            if innerR > 0 {
++                                RoundedRectangle(cornerRadius: innerR, style: .continuous)
++                                    .fill(ghostty.config.unfocusedSplitFill)
++                            } else {
++                                Rectangle()
++                                    .fill(ghostty.config.unfocusedSplitFill)
++                            }
++                        }
++                        .allowsHitTesting(false)
++                        .opacity(overlayOpacity)
+                     }
+                 }
+ 
+@@ -405,6 +491,7 @@ extension Ghostty {
+                     let borderColor = isFocused ? focusedColor : unfocusedColor
+                     let colorKey = isFocused ? "focused-split-border-color" : "unfocused-split-border-color"
+                     let borderDrawn = borderWidth > 0 && borderColor != nil
++                    let effectiveR = effectiveSplitBorderCornerRadius
+                     let _: Void = traceSplitBorderConfig(
+                         isFocused: isFocused,
+                         borderWidth: borderWidth,
+@@ -419,9 +506,17 @@ extension Ghostty {
+                             borderWidth: borderWidth,
+                             colorKey: colorKey
+                         )
+-                        Rectangle()
+-                            .strokeBorder(color, lineWidth: CGFloat(borderWidth))
+-                            .allowsHitTesting(false)
++                        let outerR = outerBorderRadius(effectiveRadius: effectiveR)
++                        Group {
++                            if outerR > 0 {
++                                RoundedRectangle(cornerRadius: outerR, style: .continuous)
++                                    .strokeBorder(color, lineWidth: CGFloat(borderWidth))
++                            } else {
++                                Rectangle()
++                                    .strokeBorder(color, lineWidth: CGFloat(borderWidth))
++                            }
++                        }
++                        .allowsHitTesting(false)
+                     }
+                 }
+ 
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 62806cce6..4154267fc 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1087,6 +1087,17 @@ palette: Palette = .{},
+ /// Available since: 1.1.0
+ @"split-divider-color": ?Color = null,
+ 
++/// Empty layout space between adjacent split panes on macOS, in points.
++///
++/// This is **margin / air** between pane frames so full split borders remain
++/// visible. It is **not** the thickness of the painted divider hairline (that
++/// stays ~1 pt and uses `split-divider-color`). Do not confuse with
++/// `split-border-width` (in-pane stroke).
++///
++/// Defaults to **4**. Set to `0` for the historical tight hairline-only seam.
++/// Values outside `0`…`20` are clamped.
++@"split-pane-gap": f64 = 4,
++
+ /// The border color of the focused split pane. Specified as either hex
+ /// (`#RRGGBB` or `RRGGBB`) or a named X11 color.
+ ///
+@@ -1105,6 +1116,17 @@ palette: Palette = .{},
+ /// windows show borders without config. Set to 0 to disable borders.
+ @"split-border-width": f64 = 2,
+ 
++/// Corner radius of multi-pane split borders, in points.
++///
++/// - `auto` (default): match the macOS window corner radius when available
++///   (private `_cornerRadius`), otherwise a modest product fallback (10).
++/// - `0`: square corners (no rounding).
++/// - positive number: fixed continuous radius on all four corners of each pane.
++///
++/// Independent of `split-border-width`: width `0` still disables border chrome;
++/// radius `0` keeps a square border when width is positive.
++@"split-border-corner-radius": SplitBorderCornerRadius = .auto,
++
+ /// The color saturation of unfocused split panes. 1.0 is full color, 0.0 is
+ /// full grayscale. Only applies when in a split layout.
+ @"unfocused-split-saturation": f64 = 1.0,
+@@ -4841,6 +4863,17 @@ pub fn finalize(self: *Config) !void {
+     // Clamp our split border width
+     self.@"split-border-width" = @min(10.0, @max(0, self.@"split-border-width"));
+ 
++    // Clamp inter-pane empty gap (macOS layout margin)
++    self.@"split-pane-gap" = @min(20.0, @max(0, self.@"split-pane-gap"));
++
++    // Clamp fixed split border corner radius (auto is unchanged)
++    switch (self.@"split-border-corner-radius") {
++        .auto => {},
++        .fixed => |v| self.@"split-border-corner-radius" = .{
++            .fixed = @min(40.0, @max(0, v)),
++        },
++    }
++
+     // Clamp our split saturation
+     self.@"unfocused-split-saturation" = @min(1.0, @max(0, self.@"unfocused-split-saturation"));
+ 
+@@ -9922,6 +9955,80 @@ pub const AutoUpdate = enum {
+     download,
+ };
+ 
++/// See split-border-corner-radius
++pub const SplitBorderCornerRadius = union(enum) {
++    /// Match macOS window `_cornerRadius` (or product fallback) on all corners.
++    auto,
++    /// Fixed continuous radius in points. `0` means square (no rounding).
++    fixed: f64,
++
++    pub fn parseCLI(self: *SplitBorderCornerRadius, input: ?[]const u8) !void {
++        const input_ = input orelse {
++            self.* = .auto;
++            return;
++        };
++
++        if (std.mem.eql(u8, input_, "auto")) {
++            self.* = .auto;
++            return;
++        }
++
++        const value = std.fmt.parseFloat(f64, input_) catch return error.InvalidValue;
++        if (!std.math.isFinite(value) or value < 0) return error.InvalidValue;
++        self.* = .{ .fixed = value };
++    }
++
++    /// C bridge: negative sentinel means auto; non-negative is fixed points.
++    pub fn cval(self: SplitBorderCornerRadius) f64 {
++        return switch (self) {
++            .auto => -1,
++            .fixed => |v| v,
++        };
++    }
++
++    pub fn formatEntry(
++        self: SplitBorderCornerRadius,
++        formatter: anytype,
++    ) !void {
++        switch (self) {
++            .auto => try formatter.formatEntry([]const u8, "auto"),
++            .fixed => |v| try formatter.formatEntry(f64, v),
++        }
++    }
++
++    test "parse SplitBorderCornerRadius" {
++        const testing = std.testing;
++        var v: SplitBorderCornerRadius = undefined;
++
++        try v.parseCLI(null);
++        try testing.expectEqual(SplitBorderCornerRadius.auto, v);
++
++        try v.parseCLI("auto");
++        try testing.expectEqual(SplitBorderCornerRadius.auto, v);
++
++        try v.parseCLI("0");
++        try testing.expectEqual(@as(f64, 0), v.fixed);
++
++        try v.parseCLI("12");
++        try testing.expectEqual(@as(f64, 12), v.fixed);
++
++        try v.parseCLI("6.5");
++        try testing.expectEqual(@as(f64, 6.5), v.fixed);
++
++        try testing.expectError(error.InvalidValue, v.parseCLI(""));
++        try testing.expectError(error.InvalidValue, v.parseCLI("aaaa"));
++        try testing.expectError(error.InvalidValue, v.parseCLI("-1"));
++        try testing.expectError(error.InvalidValue, v.parseCLI("inf"));
++    }
++
++    test "cval SplitBorderCornerRadius" {
++        const testing = std.testing;
++        try testing.expectEqual(@as(f64, -1), (SplitBorderCornerRadius{ .auto = {} }).cval());
++        try testing.expectEqual(@as(f64, 0), (SplitBorderCornerRadius{ .fixed = 0 }).cval());
++        try testing.expectEqual(@as(f64, 12), (SplitBorderCornerRadius{ .fixed = 12 }).cval());
++    }
++};
++
+ /// See background-blur
+ pub const BackgroundBlur = union(enum) {
+     false,
+diff --git a/src/config/c_get.zig b/src/config/c_get.zig
+index 254cda55b..818d8f451 100644
+--- a/src/config/c_get.zig
++++ b/src/config/c_get.zig
+@@ -266,3 +266,30 @@ test "c_get: split-preserve-zoom" {
+     try testing.expect(get(&c, .@"split-preserve-zoom", @ptrCast(&bits)));
+     try testing.expectEqual(@as(c_uint, 1), bits);
+ }
++
++test "c_get: split-border-corner-radius" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var c = try Config.default(alloc);
++    defer c.deinit();
++
++    {
++        // Default is auto → sentinel -1
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, -1), cval);
++    }
++    {
++        c.@"split-border-corner-radius" = .{ .fixed = 0 };
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, 0), cval);
++    }
++    {
++        c.@"split-border-corner-radius" = .{ .fixed = 12 };
++        var cval: f64 = undefined;
++        try testing.expect(get(&c, .@"split-border-corner-radius", @ptrCast(&cval)));
++        try testing.expectEqual(@as(f64, 12), cval);
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+

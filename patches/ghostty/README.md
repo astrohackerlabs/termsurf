@@ -1,6 +1,28 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26081615463315 Exp 1 Ghostty `main` tip)
+## Active Pin (Issue 26081616315182 Exp 2 merge-helpful squash)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26081616315182-exp2-ghostty-squash`
+- **Product HEAD:** `88cceb210d16b350525d8c4323651ff4e7a6704b`
+- **Product tree:** `a00966fe0bbddd3484b8b76f79d5d08db897f8df`
+- **Issue archives:** `issue-26081616315182/` (**33** from `base..HEAD`)
+- **Patches:** **33** total (was 75; same tree). AppKit keep-both stays
+  in `0003` (window carries Back). Dock PNG theater folded; Zig 0.16
+  papercuts folded.
+- **Archive SHA-256:**
+  `37955a55f97ddd4d7be58e9e3a3c478d77327ac56bddd9aa4b42681a54ffe5cf`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 2 — merge-helpful squash of the 75-commit series into
+  33 chapters on the same `0ba62503…` tree. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 33 patches
+- **Patch SHA-256 (bookends):**
+  - 0001: `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0033: `d7c1a4b460f4a5b1b5bdbc23d4022030b3dc98d0c9dec47d027000b2eb733b47`
+
+## Prior Active Pin (Issue 26081615463315 Exp 1 Ghostty `main` tip)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`

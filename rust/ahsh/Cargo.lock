@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "ahsh"
-version = "0.1.123"
+version = "0.1.124"
 dependencies = [
  "chrono",
  "crossterm",

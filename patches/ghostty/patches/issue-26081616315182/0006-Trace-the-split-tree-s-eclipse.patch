@@ -1,0 +1,121 @@
+From 382b12db8f903538ec9077806198315b3d49fac1 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 16 Jul 2026 07:02:57 -0500
+Subject: [PATCH 06/33] Trace the split tree's eclipse
+
+---
+ .../Terminal/BaseTerminalController.swift     | 69 +++++++++++++++++++
+ 1 file changed, 69 insertions(+)
+
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index b0fd818f8..a08375e21 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -290,6 +290,10 @@ class BaseTerminalController: NSWindowController,
+         // Create a new surface view
+         guard let ghostty_app = ghostty.app else { return nil }
+         let newView = Ghostty.SurfaceView(ghostty_app, baseConfig: config)
++        termSurfLogSplitTree(
++            event: "split_requested",
++            tree: surfaceTree,
++            note: "target:\(oldView.id.uuidString) new:\(newView.id.uuidString) direction:\(termSurfSplitDirection(direction))")
+ 
+         // Do the split
+         let newTree: SplitTree<Ghostty.SurfaceView>
+@@ -334,10 +338,17 @@ class BaseTerminalController: NSWindowController,
+     ///
+     /// Subclasses should call super first.
+     func surfaceTreeDidChange(from: SplitTree<Ghostty.SurfaceView>, to: SplitTree<Ghostty.SurfaceView>) {
++<<<<<<< HEAD
+         for surfaceView in from where !to.contains(surfaceView) {
+             cancelPendingClipboardConfirmation(for: surfaceView)
+         }
+ 
++=======
++        termSurfLogSplitTree(
++            event: "surface_tree_changed",
++            tree: to,
++            note: "old:\(termSurfSplitTreeDescription(from))")
++>>>>>>> 1da4393f0 (Trace the split tree's eclipse)
+         // If our surface tree becomes empty then we have no focused surface.
+         if to.isEmpty {
+             focusedSurface = nil
+@@ -562,10 +573,22 @@ class BaseTerminalController: NSWindowController,
+     ) {
+         // Setup our new split tree
+         let oldTree = surfaceTree
++        termSurfLogSplitTree(
++            event: "surface_tree_replace_before",
++            tree: oldTree,
++            note: "new:\(termSurfSplitTreeDescription(newTree)) move_focus_to:\(newView?.id.uuidString ?? "none") move_focus_from:\(oldView?.id.uuidString ?? "none")")
+         surfaceTree = newTree
++        termSurfLogSplitTree(
++            event: "surface_tree_replace_after",
++            tree: surfaceTree,
++            note: "old:\(termSurfSplitTreeDescription(oldTree)) move_focus_to:\(newView?.id.uuidString ?? "none") move_focus_from:\(oldView?.id.uuidString ?? "none")")
+         if let newView {
+             DispatchQueue.main.async {
+                 Ghostty.moveFocus(to: newView, from: oldView)
++                self.termSurfLogSplitTree(
++                    event: "surface_focus_settled",
++                    tree: self.surfaceTree,
++                    note: "requested:\(newView.id.uuidString) actual:\(self.focusedSurface?.id.uuidString ?? "none")")
+             }
+         }
+ 
+@@ -599,6 +622,52 @@ class BaseTerminalController: NSWindowController,
+         }
+     }
+ 
++    private func termSurfLogSplitTree(
++        event: String,
++        tree: SplitTree<Ghostty.SurfaceView>,
++        note: String
++    ) {
++        guard termsurfGeometryTraceEnabled() else { return }
++        let windowID = window?.windowNumber ?? 0
++        let focused = focusedSurface?.id.uuidString ?? "none"
++        termsurfLogGeometry(
++            "layer=split event=\(event) scenario=\(termsurfGeometryScenario()) window_id:\(windowID) focused_pane:\(focused) topology=\(termSurfSplitTreeDescription(tree)) note=\(note)"
++        )
++    }
++
++    private func termSurfSplitTreeDescription(
++        _ tree: SplitTree<Ghostty.SurfaceView>
++    ) -> String {
++        guard let root = tree.root else { return "empty" }
++        return termSurfSplitNodeDescription(root)
++    }
++
++    private func termSurfSplitNodeDescription(
++        _ node: SplitTree<Ghostty.SurfaceView>.Node
++    ) -> String {
++        switch node {
++        case .leaf(let view):
++            return "leaf(\(view.id.uuidString))"
++        case .split(let split):
++            let direction: String = switch split.direction {
++            case .horizontal: "horizontal"
++            case .vertical: "vertical"
++            }
++            return "\(direction)(\(termSurfSplitNodeDescription(split.left)),\(termSurfSplitNodeDescription(split.right)))"
++        }
++    }
++
++    private func termSurfSplitDirection(
++        _ direction: SplitTree<Ghostty.SurfaceView>.NewDirection
++    ) -> String {
++        switch direction {
++        case .left: "left"
++        case .right: "right"
++        case .down: "down"
++        case .up: "up"
++        }
++    }
++
+     // MARK: Notifications
+ 
+     @objc private func didChangeScreenParametersNotification(_ notification: Notification) {
+-- 
+2.50.1 (Apple Git-155)
+

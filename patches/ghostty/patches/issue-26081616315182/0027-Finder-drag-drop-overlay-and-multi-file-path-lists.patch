@@ -1,0 +1,751 @@
+From 03107a8595abef5de3a5f1d24194d95c05992f09 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 31 Jul 2026 05:31:51 -0500
+Subject: [PATCH 27/33] Finder drag-drop overlay and multi-file path lists
+
+---
+ include/ghostty.h                            |  12 ++
+ macos/Sources/App/AppDelegate+TermSurf.swift |  11 +-
+ src/apprt/termsurf.zig                       | 123 +++++++++++++--
+ src/main_c.zig                               | 109 +++++++++++--
+ src/protobuf/termsurf.pb-c.c                 | 154 ++++++++++++++++++-
+ src/protobuf/termsurf.pb-c.h                 |  49 ++++++
+ 6 files changed, 427 insertions(+), 31 deletions(-)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index b80016e9b..84f8d152f 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1113,13 +1113,25 @@ GHOSTTY_API size_t termsurf_copy_current_url(const char*, uint8_t*, size_t);
+ // Host-mediated file chooser (Exp 3): Zig → AppKit request; AppKit → Zig complete.
+ // termsurf_request_file_chooser is implemented in Swift (@_cdecl).
+ // termsurf_file_chooser_complete is implemented in Zig (engine IPC reply).
++// pane_id scopes multi-engine pending slots (Issue 26073012571498 Exp 1).
+ GHOSTTY_API void termsurf_file_chooser_complete(
++    const char* pane_id,
+     int64_t tab_id,
+     uint64_t request_id,
+     int accepted,
+     const char** paths,
+     size_t path_count);
+ 
++// Finder/OS file drag phase onto browser overlay → ExternalFileDrop.
++// phase: "enter"|"over"|"leave"|"drop" (NULL => "drop"). Exp 4 hover stream.
++GHOSTTY_API int termsurf_external_file_drop(
++    const char* pane_id,
++    const char** paths,
++    size_t path_count,
++    double x,
++    double y,
++    const char* phase);
++
+ GHOSTTY_API ghostty_config_t ghostty_config_new();
+ GHOSTTY_API void ghostty_config_free(ghostty_config_t);
+ GHOSTTY_API ghostty_config_t ghostty_config_clone(ghostty_config_t);
+diff --git a/macos/Sources/App/AppDelegate+TermSurf.swift b/macos/Sources/App/AppDelegate+TermSurf.swift
+index 191bbfbdd..6caddbeb7 100644
+--- a/macos/Sources/App/AppDelegate+TermSurf.swift
++++ b/macos/Sources/App/AppDelegate+TermSurf.swift
+@@ -590,7 +590,7 @@ func termsurf_request_file_chooser(
+ ) {
+   guard let paneIDPointer else {
+     termsurfLogFileChooser("TermSurf file chooser rejected: missing pane id")
+-    termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++    termsurf_file_chooser_complete(nil, tabID, requestID, 0, nil, 0)
+     return
+   }
+ 
+@@ -607,17 +607,17 @@ func termsurf_request_file_chooser(
+   DispatchQueue.main.async {
+     guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: missing app delegate")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+     guard let uuid = UUID(uuidString: paneID) else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: invalid pane id \(paneID)")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+     guard let target = appDelegate.findSurface(forUUID: uuid) else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: no surface for pane id \(paneID)")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+ 
+@@ -660,6 +660,7 @@ func termsurf_request_file_chooser(
+           let constBuf = UnsafeMutableRawPointer(ptrBuf.baseAddress)
+             .map { $0.assumingMemoryBound(to: UnsafePointer<CChar>?.self) }
+           termsurf_file_chooser_complete(
++            paneID,
+             tabID,
+             requestID,
+             1,
+@@ -671,7 +672,7 @@ func termsurf_request_file_chooser(
+         termsurfLogFileChooser(
+           "TermSurf file chooser cancelled tab_id=\(tabID) request_id=\(requestID)"
+         )
+-        termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++        termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       }
+     }
+ 
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 0e8691dc0..5f6e99389 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4318,8 +4318,12 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+     var server_shutdown: ?ServerShutdownSnapshot = null;
+     var navigation_states: [max_panes]NavigationStateSnapshot = undefined;
+     var navigation_state_count: usize = 0;
++    var cleared_choosers: usize = 0;
+ 
+     state_mutex.lockUncancelable(global.io());
++    // Drop pending host chooser slots for this engine so a late panel cannot
++    // reply into a dead FD (Issue 26073012571498 Exp 1).
++    cleared_choosers = clearPendingFileChoosersForBrowserFd(fd);
+     if (findServerByFd(fd)) |server_index| {
+         const server = &servers[server_index];
+         for (&panes) |*pane| {
+@@ -4358,6 +4362,13 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+     }
+     state_mutex.unlock(global.io());
+ 
++    if (cleared_choosers > 0) {
++        log.info(
++            "Browser disconnect: cleared {} pending file chooser slot(s) fd={}",
++            .{ cleared_choosers, fd },
++        );
++    }
++
+     for (navigation_states[0..navigation_state_count]) |*state| {
+         sendNavigationStateToTui(state) catch |err| {
+             log.warn(
+@@ -5133,15 +5144,20 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_RENDERER_CRASHED => "RendererCrashed",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_FILE_CHOOSER_REQUEST => "FileChooserRequest",
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_FILE_CHOOSER_REPLY => "FileChooserReply",
++        c.TERMSURF__TERM_SURF_MESSAGE__MSG_EXTERNAL_FILE_DROP => "ExternalFileDrop",
+         else => "Other",
+     };
+ }
+ 
++/// Pending chooser identity is (browser_fd, tab_id, request_id). Never replace
++/// browser_fd across different engines with the same tab/request counters
++/// (Issue 26073012571498 Exp 1 multi-engine isolation).
+ fn reservePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix.fd_t) bool {
+-    // Replace an existing slot for the same tab/request if present.
+     for (&pending_file_choosers) |*slot| {
+-        if (slot.in_use and slot.tab_id == tab_id and slot.request_id == request_id) {
+-            slot.browser_fd = browser_fd;
++        if (slot.in_use and slot.browser_fd == browser_fd and slot.tab_id == tab_id and
++            slot.request_id == request_id)
++        {
++            // Same connection re-request: keep the slot.
+             return true;
+         }
+     }
+@@ -5159,11 +5175,13 @@ fn reservePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix
+     return false;
+ }
+ 
+-fn takePendingFileChooser(tab_id: i64, request_id: u64) ?PendingFileChooser {
++fn takePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix.fd_t) ?PendingFileChooser {
+     for (&pending_file_choosers) |*slot| {
+         if (!slot.in_use) continue;
+         if (slot.tab_id != tab_id) continue;
+         if (request_id != 0 and slot.request_id != request_id) continue;
++        // Prefer exact browser_fd match; browser_fd < 0 means first match (legacy tests).
++        if (browser_fd >= 0 and slot.browser_fd != browser_fd) continue;
+         const copy = slot.*;
+         slot.* = .{};
+         return copy;
+@@ -5171,6 +5189,17 @@ fn takePendingFileChooser(tab_id: i64, request_id: u64) ?PendingFileChooser {
+     return null;
+ }
+ 
++fn clearPendingFileChoosersForBrowserFd(browser_fd: std.posix.fd_t) usize {
++    var cleared: usize = 0;
++    for (&pending_file_choosers) |*slot| {
++        if (!slot.in_use) continue;
++        if (slot.browser_fd != browser_fd) continue;
++        slot.* = .{};
++        cleared += 1;
++    }
++    return cleared;
++}
++
+ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRequest) void {
+     const chooser = req orelse {
+         log.warn("FileChooserRequest: missing payload", .{});
+@@ -5216,8 +5245,8 @@ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRe
+ 
+         if (!reservePendingFileChooser(tab_id, request_id, fd)) {
+             log.warn(
+-                "FileChooserRequest: no pending slot tab_id={} request_id={}",
+-                .{ tab_id, request_id },
++                "FileChooserRequest: no pending slot tab_id={} request_id={} fd={}",
++                .{ tab_id, request_id, fd },
+             );
+             should_cancel = true;
+         } else if (!found_pane) {
+@@ -5225,7 +5254,7 @@ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRe
+                 "FileChooserRequest: unknown pane tab_id={} request_id={} — cancel",
+                 .{ tab_id, request_id },
+             );
+-            _ = takePendingFileChooser(tab_id, request_id);
++            _ = takePendingFileChooser(tab_id, request_id, fd);
+             should_cancel = true;
+         } else {
+             reserved = true;
+@@ -5297,20 +5326,31 @@ fn sendFileChooserReply(
+ }
+ 
+ /// Called from AppKit after NSOpenPanel completes (Swift @_cdecl bridge).
++/// pane_id resolves the browser_fd so multi-engine same tab/request cannot collide.
+ pub fn fileChooserComplete(
++    pane_id: []const u8,
+     tab_id: i64,
+     request_id: u64,
+     accepted: bool,
+     paths: []const []const u8,
+ ) void {
+     state_mutex.lockUncancelable(global.io());
+-    const pending = takePendingFileChooser(tab_id, request_id);
++    var browser_fd: std.posix.fd_t = -1;
++    if (findPane(pane_id)) |pane_index| {
++        const profile = panes[pane_index].profileName();
++        const browser = panes[pane_index].browserName();
++        if (findServer(profile, browser)) |server_index| {
++            browser_fd = servers[server_index].attached_fd;
++        }
++    }
++    // Fall back: match tab+request alone only when browser_fd unknown (single-engine).
++    const pending = takePendingFileChooser(tab_id, request_id, browser_fd);
+     state_mutex.unlock(global.io());
+ 
+     const slot = pending orelse {
+         log.warn(
+-            "FileChooserComplete: no pending tab_id={} request_id={}",
+-            .{ tab_id, request_id },
++            "FileChooserComplete: no pending tab_id={} request_id={} pane_id={s}",
++            .{ tab_id, request_id, pane_id },
+         );
+         return;
+     };
+@@ -5329,6 +5369,69 @@ pub fn fileChooserComplete(
+     };
+ }
+ 
++/// Finder/OS file drag phase onto browser overlay (Issue 26072811532404).
++/// phase: "enter" | "over" | "leave" | "drop". leave may pass empty paths.
++pub fn externalFileDrop(
++    pane_id: []const u8,
++    paths: []const []const u8,
++    x: f64,
++    y: f64,
++    phase: []const u8,
++) bool {
++    // leave/over may have empty paths; enter/drop need paths (drop may use session).
++    if (paths.len == 0 and !std.mem.eql(u8, phase, "leave") and !std.mem.eql(u8, phase, "over")) {
++        return false;
++    }
++    const snapshot = snapshotBrowserInput(pane_id, false) orelse {
++        log.warn("ExternalFileDrop: no browser snapshot pane_id={s}", .{pane_id});
++        return false;
++    };
++
++    const allocator = std.heap.c_allocator;
++    var owned_paths: [][:0]u8 = allocator.alloc([:0]u8, paths.len) catch return false;
++    defer {
++        for (owned_paths) |p| allocator.free(p);
++        allocator.free(owned_paths);
++    }
++    var path_c_ptrs: [][*]u8 = allocator.alloc([*]u8, @max(paths.len, 1)) catch return false;
++    defer allocator.free(path_c_ptrs);
++
++    for (paths, 0..) |path, i| {
++        owned_paths[i] = allocator.dupeZ(u8, path) catch return false;
++        path_c_ptrs[i] = owned_paths[i].ptr;
++    }
++
++    const phase_z = allocator.dupeZ(u8, phase) catch return false;
++    defer allocator.free(phase_z);
++
++    var drop: c.Termsurf__ExternalFileDrop = undefined;
++    c.termsurf__external_file_drop__init(&drop);
++    drop.tab_id = snapshot.tab_id;
++    drop.n_paths = paths.len;
++    drop.paths = if (paths.len > 0) @ptrCast(path_c_ptrs.ptr) else null;
++    drop.x = x;
++    drop.y = y;
++    drop.phase = phase_z.ptr;
++
++    var wrapper: c.Termsurf__TermSurfMessage = undefined;
++    c.termsurf__term_surf_message__init(&wrapper);
++    wrapper.msg_case = c.TERMSURF__TERM_SURF_MESSAGE__MSG_EXTERNAL_FILE_DROP;
++    wrapper.unnamed_0.external_file_drop = &drop;
++
++    sendProtobuf(snapshot.browser_fd, &wrapper) catch |err| {
++        log.warn(
++            "ExternalFileDrop send failed pane_id={s} tab_id={} phase={s} err={}",
++            .{ snapshot.paneId(), snapshot.tab_id, phase, err },
++        );
++        return false;
++    };
++    log.info(
++        "ExternalFileDrop: pane_id={s} tab_id={} phase={s} paths={} x={d:.1} y={d:.1}",
++        .{ snapshot.paneId(), snapshot.tab_id, phase, paths.len, x, y },
++    );
++    return true;
++}
++
+ fn classifyConnection(msg_case: c.Termsurf__TermSurfMessage__MsgCase) ConnType {
+     return switch (msg_case) {
+         c.TERMSURF__TERM_SURF_MESSAGE__MSG_SERVER_REGISTER => .browser,
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 59804144a..a464cf731 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -325,30 +325,113 @@ pub export fn termsurf_gui_active_changed(active: i32) void {
+     termsurf.guiActiveChanged(active != 0);
+ }
+ 
++/// Safety max for multi-file C bridges (Issue 26073012595926). Above this we
++/// fail closed rather than allocate unbounded host memory. Not a silent clamp.
++const max_host_file_paths: usize = 10_000;
++
++/// Copy C path pointer array into a heap slice of views (full path_count).
++/// Returns null on OOM or when path_count exceeds max_host_file_paths.
++/// Caller must free with c_allocator.free when non-null and non-empty.
++fn collectCPathSlices(paths: ?[*]?[*:0]const u8, path_count: usize) ?[][]const u8 {
++    if (path_count == 0 or paths == null) return &.{};
++    if (path_count > max_host_file_paths) return null;
++    const allocator = std.heap.c_allocator;
++    const path_slices = allocator.alloc([]const u8, path_count) catch return null;
++    const path_array = paths.?;
++    var i: usize = 0;
++    while (i < path_count) : (i += 1) {
++        if (path_array[i]) |p| {
++            path_slices[i] = std.mem.span(p);
++        } else {
++            path_slices[i] = "";
++        }
++    }
++    return path_slices;
++}
++
+ /// AppKit NSOpenPanel completion → FileChooserReply on the engine connection.
++/// pane_id scopes the pending slot to the correct browser_fd (multi-engine isolation).
+ pub export fn termsurf_file_chooser_complete(
++    pane_id: ?[*:0]const u8,
+     tab_id: i64,
+     request_id: u64,
+     accepted: c_int,
+     paths: ?[*]?[*:0]const u8,
+     path_count: usize,
+ ) void {
+-    var path_slices: [64][]const u8 = undefined;
+-    const n = @min(path_count, path_slices.len);
+-    if (accepted != 0 and paths != null and n > 0) {
+-        const path_array = paths.?;
+-        var i: usize = 0;
+-        while (i < n) : (i += 1) {
+-            if (path_array[i]) |p| {
+-                path_slices[i] = std.mem.span(p);
+-            } else {
+-                path_slices[i] = "";
+-            }
++    const pane_slice: []const u8 = if (pane_id) |p| std.mem.span(p) else "";
++    if (accepted != 0 and paths != null and path_count > 0) {
++        if (path_count > max_host_file_paths) {
++            std.log.warn(
++                "termsurf_file_chooser_complete: path_count={} exceeds max {}; cancelling",
++                .{ path_count, max_host_file_paths },
++            );
++            termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
++            return;
+         }
+-        termsurf.fileChooserComplete(tab_id, request_id, true, path_slices[0..n]);
++        const path_slices = collectCPathSlices(paths, path_count) orelse {
++            std.log.warn(
++                "termsurf_file_chooser_complete: alloc failed path_count={}; cancelling",
++                .{path_count},
++            );
++            termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
++            return;
++        };
++        defer if (path_slices.len > 0) std.heap.c_allocator.free(path_slices);
++        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, true, path_slices);
+     } else {
+-        termsurf.fileChooserComplete(tab_id, request_id, false, &.{});
++        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
++    }
++}
++
++/// Finder/OS file drag phase onto browser overlay → ExternalFileDrop on engine.
++/// phase: "enter"|"over"|"leave"|"drop" (NULL => "drop").
++pub export fn termsurf_external_file_drop(
++    pane_id: [*:0]const u8,
++    paths: ?[*]?[*:0]const u8,
++    path_count: usize,
++    x: f64,
++    y: f64,
++    phase: ?[*:0]const u8,
++) c_int {
++    const phase_slice: []const u8 = if (phase) |p| std.mem.span(p) else "drop";
++    if (path_count > max_host_file_paths) {
++        std.log.warn(
++            "termsurf_external_file_drop: path_count={} exceeds max {}; rejecting",
++            .{ path_count, max_host_file_paths },
++        );
++        return 0;
+     }
++    const path_slices = collectCPathSlices(paths, path_count) orelse {
++        if (path_count > 0) {
++            std.log.warn(
++                "termsurf_external_file_drop: alloc failed path_count={}; rejecting",
++                .{path_count},
++            );
++            return 0;
++        }
++        return if (termsurf.externalFileDrop(
++            std.mem.span(pane_id),
++            &.{},
++            x,
++            y,
++            phase_slice,
++        ))
++            1
++        else
++            0;
++    };
++    defer if (path_slices.len > 0) std.heap.c_allocator.free(path_slices);
++    return if (termsurf.externalFileDrop(
++        std.mem.span(pane_id),
++        path_slices,
++        x,
++        y,
++        phase_slice,
++    ))
++        1
++    else
++        0;
+ }
+ 
+ // On Windows, Zig's _DllMainCRTStartup does not initialize the MSVC C
+diff --git a/src/protobuf/termsurf.pb-c.c b/src/protobuf/termsurf.pb-c.c
+index 4067e0c4c..8b9a0588e 100644
+--- a/src/protobuf/termsurf.pb-c.c
++++ b/src/protobuf/termsurf.pb-c.c
+@@ -1312,6 +1312,51 @@ void   termsurf__file_chooser_reply__free_unpacked
+   assert(message->base.descriptor == &termsurf__file_chooser_reply__descriptor);
+   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+ }
++void   termsurf__external_file_drop__init
++                     (Termsurf__ExternalFileDrop         *message)
++{
++  static const Termsurf__ExternalFileDrop init_value = TERMSURF__EXTERNAL_FILE_DROP__INIT;
++  *message = init_value;
++}
++size_t termsurf__external_file_drop__get_packed_size
++                     (const Termsurf__ExternalFileDrop *message)
++{
++  assert(message->base.descriptor == &termsurf__external_file_drop__descriptor);
++  return protobuf_c_message_get_packed_size ((const ProtobufCMessage*)(message));
++}
++size_t termsurf__external_file_drop__pack
++                     (const Termsurf__ExternalFileDrop *message,
++                      uint8_t       *out)
++{
++  assert(message->base.descriptor == &termsurf__external_file_drop__descriptor);
++  return protobuf_c_message_pack ((const ProtobufCMessage*)message, out);
++}
++size_t termsurf__external_file_drop__pack_to_buffer
++                     (const Termsurf__ExternalFileDrop *message,
++                      ProtobufCBuffer *buffer)
++{
++  assert(message->base.descriptor == &termsurf__external_file_drop__descriptor);
++  return protobuf_c_message_pack_to_buffer ((const ProtobufCMessage*)message, buffer);
++}
++Termsurf__ExternalFileDrop *
++       termsurf__external_file_drop__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data)
++{
++  return (Termsurf__ExternalFileDrop *)
++     protobuf_c_message_unpack (&termsurf__external_file_drop__descriptor,
++                                allocator, len, data);
++}
++void   termsurf__external_file_drop__free_unpacked
++                     (Termsurf__ExternalFileDrop *message,
++                      ProtobufCAllocator *allocator)
++{
++  if(!message)
++    return;
++  assert(message->base.descriptor == &termsurf__external_file_drop__descriptor);
++  protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
++}
+ void   termsurf__console_message__init
+                      (Termsurf__ConsoleMessage         *message)
+ {
+@@ -2122,7 +2167,7 @@ void   termsurf__query_tabs_reply__free_unpacked
+   assert(message->base.descriptor == &termsurf__query_tabs_reply__descriptor);
+   protobuf_c_message_free_unpacked ((ProtobufCMessage*)message, allocator);
+ }
+-static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[45] =
++static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descriptors[46] =
+ {
+   {
+     "create_tab",
+@@ -2664,6 +2709,18 @@ static const ProtobufCFieldDescriptor termsurf__term_surf_message__field_descrip
+     PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
+     0,NULL,NULL    /* reserved1,reserved2, etc */
+   },
++  {
++    "external_file_drop",
++    50,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_MESSAGE,
++    offsetof(Termsurf__TermSurfMessage, msg_case),
++    offsetof(Termsurf__TermSurfMessage, external_file_drop),
++    &termsurf__external_file_drop__descriptor,
++    NULL,
++    PROTOBUF_C_FIELD_FLAG_ONEOF,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
+ };
+ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
+   30,   /* field[30] = browser_ready */
+@@ -2673,6 +2730,7 @@ static const unsigned termsurf__term_surf_message__field_indices_by_name[] = {
+   1,   /* field[1] = create_devtools_tab */
+   0,   /* field[0] = create_tab */
+   17,   /* field[17] = cursor_changed */
++  45,   /* field[45] = external_file_drop */
+   44,   /* field[44] = file_chooser_reply */
+   43,   /* field[43] = file_chooser_request */
+   9,   /* field[9] = focus_changed */
+@@ -2717,7 +2775,7 @@ static const ProtobufCIntRange termsurf__term_surf_message__number_ranges[3 + 1]
+   { 1, 0 },
+   { 43, 39 },
+   { 45, 40 },
+-  { 0, 45 }
++  { 0, 46 }
+ };
+ const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
+ {
+@@ -2727,7 +2785,7 @@ const ProtobufCMessageDescriptor termsurf__term_surf_message__descriptor =
+   "Termsurf__TermSurfMessage",
+   "termsurf",
+   sizeof(Termsurf__TermSurfMessage),
+-  45,
++  46,
+   termsurf__term_surf_message__field_descriptors,
+   termsurf__term_surf_message__field_indices_by_name,
+   3,  termsurf__term_surf_message__number_ranges,
+@@ -4877,6 +4935,96 @@ const ProtobufCMessageDescriptor termsurf__file_chooser_reply__descriptor =
+   (ProtobufCMessageInit) termsurf__file_chooser_reply__init,
+   NULL,NULL,NULL    /* reserved[123] */
+ };
++static const ProtobufCFieldDescriptor termsurf__external_file_drop__field_descriptors[5] =
++{
++  {
++    "tab_id",
++    1,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_INT64,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__ExternalFileDrop, tab_id),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "paths",
++    2,
++    PROTOBUF_C_LABEL_REPEATED,
++    PROTOBUF_C_TYPE_STRING,
++    offsetof(Termsurf__ExternalFileDrop, n_paths),
++    offsetof(Termsurf__ExternalFileDrop, paths),
++    NULL,
++    &protobuf_c_empty_string,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "x",
++    3,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_DOUBLE,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__ExternalFileDrop, x),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "y",
++    4,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_DOUBLE,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__ExternalFileDrop, y),
++    NULL,
++    NULL,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++  {
++    "phase",
++    5,
++    PROTOBUF_C_LABEL_NONE,
++    PROTOBUF_C_TYPE_STRING,
++    0,   /* quantifier_offset */
++    offsetof(Termsurf__ExternalFileDrop, phase),
++    NULL,
++    &protobuf_c_empty_string,
++    0,             /* flags */
++    0,NULL,NULL    /* reserved1,reserved2, etc */
++  },
++};
++static const unsigned termsurf__external_file_drop__field_indices_by_name[] = {
++  1,   /* field[1] = paths */
++  4,   /* field[4] = phase */
++  0,   /* field[0] = tab_id */
++  2,   /* field[2] = x */
++  3,   /* field[3] = y */
++};
++static const ProtobufCIntRange termsurf__external_file_drop__number_ranges[1 + 1] =
++{
++  { 1, 0 },
++  { 0, 5 }
++};
++const ProtobufCMessageDescriptor termsurf__external_file_drop__descriptor =
++{
++  PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC,
++  "termsurf.ExternalFileDrop",
++  "ExternalFileDrop",
++  "Termsurf__ExternalFileDrop",
++  "termsurf",
++  sizeof(Termsurf__ExternalFileDrop),
++  5,
++  termsurf__external_file_drop__field_descriptors,
++  termsurf__external_file_drop__field_indices_by_name,
++  1,  termsurf__external_file_drop__number_ranges,
++  (ProtobufCMessageInit) termsurf__external_file_drop__init,
++  NULL,NULL,NULL    /* reserved[123] */
++};
+ static const ProtobufCFieldDescriptor termsurf__console_message__field_descriptors[5] =
+ {
+   {
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index 2611fda59..a6d4d3617 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -44,6 +44,7 @@ typedef struct Termsurf__JavaScriptDialogRequest Termsurf__JavaScriptDialogReque
+ typedef struct Termsurf__JavaScriptDialogReply Termsurf__JavaScriptDialogReply;
+ typedef struct Termsurf__FileChooserRequest Termsurf__FileChooserRequest;
+ typedef struct Termsurf__FileChooserReply Termsurf__FileChooserReply;
++typedef struct Termsurf__ExternalFileDrop Termsurf__ExternalFileDrop;
+ typedef struct Termsurf__ConsoleMessage Termsurf__ConsoleMessage;
+ typedef struct Termsurf__HttpAuthRequest Termsurf__HttpAuthRequest;
+ typedef struct Termsurf__HttpAuthReply Termsurf__HttpAuthReply;
+@@ -112,6 +113,7 @@ typedef enum {
+   TERMSURF__TERM_SURF_MESSAGE__MSG_RENDERER_CRASHED = 39,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_FILE_CHOOSER_REQUEST = 48,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_FILE_CHOOSER_REPLY = 49,
++  TERMSURF__TERM_SURF_MESSAGE__MSG_EXTERNAL_FILE_DROP = 50,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_RENDER_SURFACE = 43,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_ACTION = 45,
+   TERMSURF__TERM_SURF_MESSAGE__MSG_NAVIGATION_STATE = 46,
+@@ -143,6 +145,10 @@ struct  Termsurf__TermSurfMessage
+      */
+     Termsurf__CreateTab *create_tab;
+     Termsurf__CursorChanged *cursor_changed;
++    /*
++     * Host → engine: Finder/OS file drop onto browser surface (upload).
++     */
++    Termsurf__ExternalFileDrop *external_file_drop;
+     Termsurf__FileChooserReply *file_chooser_reply;
+     /*
+      * Host-mediated file chooser (engine parks listener; ahterm owns NSOpenPanel)
+@@ -681,6 +687,26 @@ struct  Termsurf__FileChooserReply
+ , 0, 0, 0, 0,NULL }
+ 
+ 
++/*
++ * Host → engine: OS/Finder file drag phases onto the overlay at client (x,y).
++ * phase: "enter" | "over" | "leave" | "drop" (empty/omitted treated as "drop").
++ * Exp 4 streams enter/over/leave for page hover highlight; drop completes upload.
++ */
++struct  Termsurf__ExternalFileDrop
++{
++  ProtobufCMessage base;
++  int64_t tab_id;
++  size_t n_paths;
++  char **paths;
++  double x;
++  double y;
++  char *phase;
++};
++#define TERMSURF__EXTERNAL_FILE_DROP__INIT \
++ { PROTOBUF_C_MESSAGE_INIT (&termsurf__external_file_drop__descriptor) \
++, 0, 0,NULL, 0, 0, (char *)protobuf_c_empty_string }
++
++
+ struct  Termsurf__ConsoleMessage
+ {
+   ProtobufCMessage base;
+@@ -1483,6 +1509,25 @@ Termsurf__FileChooserReply *
+ void   termsurf__file_chooser_reply__free_unpacked
+                      (Termsurf__FileChooserReply *message,
+                       ProtobufCAllocator *allocator);
++/* Termsurf__ExternalFileDrop methods */
++void   termsurf__external_file_drop__init
++                     (Termsurf__ExternalFileDrop         *message);
++size_t termsurf__external_file_drop__get_packed_size
++                     (const Termsurf__ExternalFileDrop   *message);
++size_t termsurf__external_file_drop__pack
++                     (const Termsurf__ExternalFileDrop   *message,
++                      uint8_t             *out);
++size_t termsurf__external_file_drop__pack_to_buffer
++                     (const Termsurf__ExternalFileDrop   *message,
++                      ProtobufCBuffer     *buffer);
++Termsurf__ExternalFileDrop *
++       termsurf__external_file_drop__unpack
++                     (ProtobufCAllocator  *allocator,
++                      size_t               len,
++                      const uint8_t       *data);
++void   termsurf__external_file_drop__free_unpacked
++                     (Termsurf__ExternalFileDrop *message,
++                      ProtobufCAllocator *allocator);
+ /* Termsurf__ConsoleMessage methods */
+ void   termsurf__console_message__init
+                      (Termsurf__ConsoleMessage         *message);
+@@ -1914,6 +1959,9 @@ typedef void (*Termsurf__FileChooserRequest_Closure)
+ typedef void (*Termsurf__FileChooserReply_Closure)
+                  (const Termsurf__FileChooserReply *message,
+                   void *closure_data);
++typedef void (*Termsurf__ExternalFileDrop_Closure)
++                 (const Termsurf__ExternalFileDrop *message,
++                  void *closure_data);
+ typedef void (*Termsurf__ConsoleMessage_Closure)
+                  (const Termsurf__ConsoleMessage *message,
+                   void *closure_data);
+@@ -2003,6 +2051,7 @@ extern const ProtobufCMessageDescriptor termsurf__java_script_dialog_request__de
+ extern const ProtobufCMessageDescriptor termsurf__java_script_dialog_reply__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__file_chooser_request__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__file_chooser_reply__descriptor;
++extern const ProtobufCMessageDescriptor termsurf__external_file_drop__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__console_message__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__http_auth_request__descriptor;
+ extern const ProtobufCMessageDescriptor termsurf__http_auth_reply__descriptor;
+-- 
+2.50.1 (Apple Git-155)
+
