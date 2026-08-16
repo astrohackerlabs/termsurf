@@ -7,12 +7,13 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26081311412273 Exp 1):** Electron Chromium
-  **`150.0.7871.224`** (Electron **43.4.0**) + regenerated **144**-patch
-  series (`issue-26081311412273/`) — see `patches/release-manifest.json`
+- **Active pin (Issue 26081616315182 Exp 1):** Electron Chromium
+  **`150.0.7871.224`** (Electron **43.4.0**) + merge-helpful **37**-patch
+  squash (`issue-26081616315182/`) — **same tree** as the prior 144-commit
+  pin; see `patches/release-manifest.json`
 - Product branch:
-  `150.0.7871.224-issue-26081311412273-exp1-electron-pin`
-- Product HEAD: `8044bc38cb7e6ab88fe2482fe10d73205be18e8c`
+  `150.0.7871.224-issue-26081616315182-exp1-chromium-squash`
+- Product HEAD: `04c368282f7503446e12c60d43d842721052f0c5`
 - Product tree: `b9c53610b0902bad341d618e6ef5ec11b83f28b0`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
@@ -21,7 +22,22 @@ branch notes that are safe to commit.
 - Release authority: `patches/release-manifest.json` chromium entry
 
 
-### Issue 26081311412273 Exp 1 / Electron 43.4.0 chrome pin (current tip)
+### Issue 26081616315182 Exp 1 / merge-helpful squash (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.224` / `36bfd07adec25f5027aaecf2023b35821f30ee4e` |
+| Prior series | `issue-26081311412273/` (144) / HEAD `8044bc38cb7e` |
+| Product branch | `150.0.7871.224-issue-26081616315182-exp1-chromium-squash` |
+| Product HEAD | `04c368282f7503446e12c60d43d842721052f0c5` |
+| Product tree | `b9c53610b0902bad341d618e6ef5ec11b83f28b0` |
+| Archives | `issue-26081616315182/` (37, regenerated `base..HEAD`) |
+| Patch count | **37** |
+| Archive aggregate SHA-256 | `e0a424d0fff79c368ab768bc09c76d1a9e5841e3472f4170ea6dfc38362c4215` |
+| Scope | Same-tree squash of 144 replay commits into 37 merge-helpful chapters |
+| Build | See experiment Results |
+
+### Issue 26081311412273 Exp 1 / Electron 43.4.0 chrome pin (parent tip)
 
 | Field | Value |
 | --- | --- |

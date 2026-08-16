@@ -1,0 +1,26 @@
+From 9e08b6ffb21d650f1bf8d7dab354172684b0ec07 Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:41:12 -0500
+Subject: [PATCH 20/37] Ring loading before first road
+
+---
+ content/libtermsurf_chromium/ts_browser_main_parts.cc | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 1329772206..5b5e9a2925 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -499,6 +499,9 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+   tab->tab_observer = std::move(tab_observer);
+   tabs_.push_back(std::move(tab));
+ 
++  // The initial LoadURL can report progress before WebContentsObserver emits
++  // DidStartLoading, so make the protocol's initial loading edge deterministic.
++  TsNotifyLoadingState(handle, "loading", 0);
+   NavigateTab(handle, url);
+ 
+   return handle;
+-- 
+2.50.1 (Apple Git-155)
+

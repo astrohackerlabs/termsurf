@@ -1,0 +1,62 @@
+From 81700e1a4566b5f692d35dd67e18ca0ce25db2d8 Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:42:44 -0500
+Subject: [PATCH 30/37] Join all Spaces on TermSurf shell windows
+
+---
+ .../ts_shell_window_mac.mm                    | 25 +++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/ts_shell_window_mac.mm b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+index 15a23cbdad..30057803b0 100644
+--- a/content/libtermsurf_chromium/ts_shell_window_mac.mm
++++ b/content/libtermsurf_chromium/ts_shell_window_mac.mm
+@@ -37,6 +37,21 @@ NSRect PrimaryScreenFrame() {
+   return screen.frame;
+ }
+ 
++// Content shell defaults to FullScreenPrimary (see shell_platform_delegate_mac).
++// Primary and Auxiliary are mutually exclusive; clear conflicting roles before
++// setting TermSurf export-window Space policy (issue 26072110403572 Exp 2).
++void ApplyTermSurfSpaceCollectionBehavior(NSWindow* window) {
++  if (!window) {
++    return;
++  }
++  NSWindowCollectionBehavior behavior = window.collectionBehavior;
++  behavior &= ~NSWindowCollectionBehaviorFullScreenPrimary;
++  behavior &= ~NSWindowCollectionBehaviorFullScreenNone;
++  behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
++  behavior |= NSWindowCollectionBehaviorFullScreenAuxiliary;
++  window.collectionBehavior = behavior;
++}
++
+ }  // namespace
+ 
+ void ConfigureShellWindowForTermSurf(Shell* shell) {
+@@ -49,6 +64,14 @@ void ConfigureShellWindowForTermSurf(Shell* shell) {
+     return;
+   }
+ 
++  // Space co-location for non-user-visible export windows: do not leave the
++  // helper stranded on the Space where it was created when the TermSurf host
++  // moves (native fullscreen or Mission Control desktop change). Without this,
++  // WindowServer occludes the source window and Chromium backgrounds the page.
++  // (Issue 26072110403572 Exp 2 — primary path; no process-wide backgrounding
++  // override.)
++  ApplyTermSurfSpaceCollectionBehavior(window);
++
+   [window setIgnoresMouseEvents:YES];
+ }
+ 
+@@ -114,6 +137,8 @@ void MoveShellWindowToTermSurfScreenRect(Shell* shell,
+   if (!window) {
+     return;
+   }
++  // Re-apply Space join on geometry updates in case AppKit cleared behavior.
++  ApplyTermSurfSpaceCollectionBehavior(window);
+   [window setIgnoresMouseEvents:YES];
+ 
+   NSRect primary_frame = PrimaryScreenFrame();
+-- 
+2.50.1 (Apple Git-155)
+

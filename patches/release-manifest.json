@@ -58,14 +58,14 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "36bfd07adec25f5027aaecf2023b35821f30ee4e",
-      "branch": "150.0.7871.224-issue-26081311412273-exp1-electron-pin",
-      "expected_head": "8044bc38cb7e6ab88fe2482fe10d73205be18e8c",
+      "branch": "150.0.7871.224-issue-26081616315182-exp1-chromium-squash",
+      "expected_head": "04c368282f7503446e12c60d43d842721052f0c5",
       "expected_tree": "b9c53610b0902bad341d618e6ef5ec11b83f28b0",
       "patch_directories": [
-        "patches/chromium/patches/issue-26081311412273"
+        "patches/chromium/patches/issue-26081616315182"
       ],
-      "patch_count": 144,
-      "archive_sha256": "e11b0499364240b81e8256f0b7815e2032ac53337bb8fcd3e68722a5cfe9c720",
+      "patch_count": 37,
+      "archive_sha256": "e0a424d0fff79c368ab768bc09c76d1a9e5841e3472f4170ea6dfc38362c4215",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

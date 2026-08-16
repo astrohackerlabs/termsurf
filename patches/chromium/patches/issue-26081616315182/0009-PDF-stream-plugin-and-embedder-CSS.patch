@@ -1,0 +1,3165 @@
+From 4e09d48fc6fabd2a0784fe7127d2af6d88a7e8a5 Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:39:39 -0500
+Subject: [PATCH 09/37] PDF stream, plugin, and embedder CSS
+
+---
+ .../pdf_viewer_private_api.cc                 |   6 +
+ .../loader/navigation_url_loader_impl.cc      |   9 +
+ content/libtermsurf_chromium/BUILD.gn         |   3 +
+ .../extensions/ts_pdf_component_extension.cc  |   7 +-
+ .../extensions/ts_pdf_resource_bundle.cc      |  53 +++
+ .../libtermsurf_chromium/ts_content_client.cc |  50 ++-
+ .../libtermsurf_chromium/ts_content_client.h  |   5 +
+ .../ts_content_renderer_client.cc             | 101 ++++-
+ .../ts_content_renderer_client.h              |  10 +
+ .../ts_mime_handler_binders.cc                |  66 +--
+ ...esponse_interceptor_url_loader_throttle.cc |  94 ++++-
+ .../mime_handler_private.cc                   |  32 +-
+ .../mime_handler_view_attach_helper.cc        |   4 +
+ .../mime_handler_view_embedder.cc             |  60 ++-
+ .../mime_handler_stream_manager.cc            |  84 +++-
+ .../blink/renderer/core/dom/document_init.cc  |  62 ++-
+ .../core/html/html_frame_owner_element.cc     | 152 +++++--
+ .../html/parser/html_construction_site.cc     |  94 +++--
+ .../core/html/parser/html_document_parser.cc  |  97 +++++
+ .../renderer/core/loader/document_loader.cc   | 375 +++++++++++++++---
+ .../renderer/core/loader/frame_loader.cc      |  39 +-
+ 21 files changed, 1191 insertions(+), 212 deletions(-)
+
+diff --git a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc b/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
+index d6b6deb697..01a5fedcd8 100644
+--- a/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
++++ b/chrome/browser/extensions/api/pdf_viewer_private/pdf_viewer_private_api.cc
+@@ -7,6 +7,7 @@
+ #include <cmath>
+ #include <memory>
+ 
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -133,9 +134,14 @@ ExtensionFunction::ResponseAction PdfViewerPrivateGetStreamInfoFunction::Run() {
+   base::WeakPtr<StreamContainer> stream =
+       GetStreamContainer(render_frame_host());
+   if (!stream) {
++    LOG(INFO) << "[issue-792-exp18] pdf-viewer-private-get-stream-info "
++              << "has_stream=0 stream_url= original_url=";
+     return RespondNow(Error("Failed to get StreamContainer"));
+   }
+ 
++  LOG(INFO) << "[issue-792-exp18] pdf-viewer-private-get-stream-info "
++            << "has_stream=1 stream_url=" << stream->stream_url()
++            << " original_url=" << stream->original_url();
+   api::pdf_viewer_private::StreamInfo stream_info;
+   stream_info.original_url = stream->original_url().spec();
+   stream_info.stream_url = stream->stream_url().spec();
+diff --git a/content/browser/loader/navigation_url_loader_impl.cc b/content/browser/loader/navigation_url_loader_impl.cc
+index f0226459cc..37676bc17f 100644
+--- a/content/browser/loader/navigation_url_loader_impl.cc
++++ b/content/browser/loader/navigation_url_loader_impl.cc
+@@ -1536,6 +1536,15 @@ void NavigationURLLoaderImpl::OnReceiveResponse(
+   // When a plugin intercepted the response, we don't want to download it.
+   bool is_download =
+       !head->intercepted_by_plugin && (must_download || !known_mime_type);
++  if (head->mime_type == "application/pdf" || head->intercepted_by_plugin) {
++    LOG(INFO) << "[issue-792-exp17] navigation-download-classification "
++              << "url=" << url_ << " mime_type=" << head->mime_type
++              << " intercepted_by_plugin="
++              << (head->intercepted_by_plugin ? 1 : 0)
++              << " must_download=" << (must_download ? 1 : 0)
++              << " known_mime_type=" << (known_mime_type ? 1 : 0)
++              << " is_download=" << (is_download ? 1 : 0);
++  }
+ 
+   CallOnReceivedResponse(std::move(head),
+                          std::move(url_loader_client_endpoints), is_download);
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 77298fa3cc..4aa16e4947 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -84,8 +84,11 @@ shared_library("libtermsurf_chromium") {
+     "//components/keyed_service/core",
+     "//components/pdf/browser",
+     "//components/pdf/browser:interceptors",
++    "//components/pdf/renderer",
+     "//components/pref_registry",
+     "//components/prefs",
++    "//components/resources:components_resources",
++    "//components/strings:components_strings",
+     "//components/user_prefs",
+     "//components/value_store",
+     "//components/zoom",
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+index 642482f3b3..3f7b998d83 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_component_extension.cc
+@@ -102,11 +102,8 @@ std::optional<base::DictValue> LoadPdfManifest(
+     LOG(INFO) << "[issue-792-exp8] pdf-permissions-stripped values="
+               << base::JoinString(stripped_permissions, ",");
+   }
+-  if (manifest->Remove("web_accessible_resources")) {
+-    stripped_manifest_keys->push_back("web_accessible_resources");
+-    LOG(INFO) << "[issue-792-exp3] pdf-component-extension-stripped-value"
+-              << " key=web_accessible_resources values=pdf_embedder.css";
+-  }
++  LOG(INFO) << "[issue-793-exp1] pdf-web-accessible-resource kept=1"
++            << " path=pdf_embedder.css";
+   LOG(INFO) << "[issue-792-exp3] pdf-resource-manager-ready count="
+             << std::size(kPdfResources) << " manifest_parsed=1";
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index cd5ec5b2d3..20c32a42eb 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -15,6 +15,8 @@
+ #include "base/strings/string_util.h"
+ #include "chrome/grit/common_resources.h"
+ #include "chrome/grit/pdf_resources.h"
++#include "components/grit/components_resources.h"
++#include "components/strings/grit/components_strings.h"
+ #include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -66,6 +68,57 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+               << " html_signature=" << HasHtmlSignature(index_html);
+   }
+ 
++  base::FilePath components_pak_path =
++      assets_path.AppendASCII("gen")
++          .AppendASCII("components")
++          .AppendASCII("components_resources.pak");
++  const bool components_found = base::PathExists(components_pak_path);
++  if (components_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        components_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::string pdf_embedder_html;
++  if (components_found) {
++    pdf_embedder_html =
++        ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
++            IDR_PDF_EMBEDDER_HTML);
++  }
++  LOG(INFO) << "[issue-792-exp20] components-resource-pak path="
++            << components_pak_path.AsUTF8Unsafe()
++            << " found=" << components_found
++            << " loaded=" << !pdf_embedder_html.empty()
++            << " pdf_embedder_bytes=" << pdf_embedder_html.size()
++            << " has_iframe="
++            << (pdf_embedder_html.find("<iframe") != std::string::npos ? 1 : 0)
++            << " has_about_blank="
++            << (pdf_embedder_html.find("about:blank") != std::string::npos ? 1
++                                                                           : 0);
++
++  base::FilePath components_strings_pak_path =
++      assets_path.AppendASCII("gen")
++          .AppendASCII("components")
++          .AppendASCII("strings")
++          .AppendASCII("components_strings_en-US.pak");
++  const bool components_strings_found =
++      base::PathExists(components_strings_pak_path);
++  if (components_strings_found) {
++    ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
++        components_strings_pak_path, ui::kScaleFactorNone);
++  }
++
++  std::u16string portrait_string;
++  if (components_strings_found) {
++    portrait_string = ui::ResourceBundle::GetSharedInstance()
++                          .GetLocalizedString(
++                              IDS_PDF_PROPERTIES_PAGE_SIZE_PORTRAIT);
++  }
++  LOG(INFO) << "[issue-792-exp28] components-strings-pak path="
++            << components_strings_pak_path.AsUTF8Unsafe()
++            << " found=" << components_strings_found
++            << " loaded=" << !portrait_string.empty()
++            << " portrait_bytes=" << portrait_string.size();
++
+   base::FilePath common_pak_path =
+       assets_path.AppendASCII("gen").AppendASCII("chrome").AppendASCII(
+           "common_resources.pak");
+diff --git a/content/libtermsurf_chromium/ts_content_client.cc b/content/libtermsurf_chromium/ts_content_client.cc
+index 48f05351f3..faf2818dbb 100644
+--- a/content/libtermsurf_chromium/ts_content_client.cc
++++ b/content/libtermsurf_chromium/ts_content_client.cc
+@@ -5,15 +5,61 @@
+ #include "content/libtermsurf_chromium/ts_content_client.h"
+ 
+ #include "base/command_line.h"
++#include "base/files/file_path.h"
+ #include "base/logging.h"
+ #include "content/public/common/content_switches.h"
++#include "content/public/common/webplugininfo.h"
+ #include "extensions/common/constants.h"
++#include "pdf/buildflags.h"
++
++#if BUILDFLAG(ENABLE_PDF)
++#include "components/pdf/common/constants.h"
++#endif
+ 
+ namespace content {
++namespace {
++
++#if BUILDFLAG(ENABLE_PDF)
++constexpr base::FilePath::CharType kTsPdfInternalPluginPath[] =
++    FILE_PATH_LITERAL("internal-pdf-viewer");
++#endif
++
++}  // namespace
+ 
+ TsContentClient::TsContentClient() = default;
+ TsContentClient::~TsContentClient() = default;
+ 
++void TsContentClient::AddPlugins(std::vector<content::WebPluginInfo>* plugins) {
++  ShellContentClient::AddPlugins(plugins);
++
++#if BUILDFLAG(ENABLE_PDF)
++  static constexpr char16_t kPDFPluginName[] = u"Chromium PDF Plugin";
++  static constexpr char16_t kPDFPluginDescription[] = u"Built-in PDF viewer";
++  static constexpr char kPDFPluginExtension[] = "pdf";
++  static constexpr char kPDFPluginExtensionDescription[] =
++      "Portable Document Format";
++
++  content::WebPluginInfo pdf_info;
++  pdf_info.name = kPDFPluginName;
++  pdf_info.path = base::FilePath(kTsPdfInternalPluginPath);
++  pdf_info.desc = kPDFPluginDescription;
++  content::WebPluginMimeType pdf_mime_type(pdf::kInternalPluginMimeType,
++                                           kPDFPluginExtension,
++                                           kPDFPluginExtensionDescription);
++  pdf_info.mime_types.push_back(pdf_mime_type);
++  content::WebPluginMimeType pdf_document_mime_type(
++      pdf::kPDFMimeType, kPDFPluginExtension, kPDFPluginExtensionDescription);
++  pdf_info.mime_types.push_back(pdf_document_mime_type);
++  pdf_info.type = content::WebPluginInfo::PLUGIN_TYPE_BROWSER_INTERNAL_PLUGIN;
++  plugins->push_back(pdf_info);
++
++  LOG(INFO) << "[issue-792-exp15] internal-pdf-plugin-registered mime_type="
++            << pdf::kInternalPluginMimeType
++            << " document_mime_type=" << pdf::kPDFMimeType
++            << " path=" << pdf_info.path.value();
++#endif
++}
++
+ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   ShellContentClient::AddAdditionalSchemes(schemes);
+ 
+@@ -23,8 +69,8 @@ void TsContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   schemes->cors_enabled_schemes.push_back(extensions::kExtensionScheme);
+   schemes->csp_bypassing_schemes.push_back(extensions::kExtensionScheme);
+ 
+-  if (base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+-          switches::kProcessType)
++  if (base::CommandLine::ForCurrentProcess()
++          ->GetSwitchValueASCII(switches::kProcessType)
+           .empty()) {
+     LOG(INFO) << "[issue-792-exp6] extension-scheme-registered scheme="
+               << extensions::kExtensionScheme;
+diff --git a/content/libtermsurf_chromium/ts_content_client.h b/content/libtermsurf_chromium/ts_content_client.h
+index 9de8bc9f15..6fe6136646 100644
+--- a/content/libtermsurf_chromium/ts_content_client.h
++++ b/content/libtermsurf_chromium/ts_content_client.h
+@@ -5,10 +5,14 @@
+ #ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+ #define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_CLIENT_H_
+ 
++#include <vector>
++
+ #include "content/shell/common/shell_content_client.h"
+ 
+ namespace content {
+ 
++struct WebPluginInfo;
++
+ class TsContentClient : public ShellContentClient {
+  public:
+   TsContentClient();
+@@ -17,6 +21,7 @@ class TsContentClient : public ShellContentClient {
+   TsContentClient(const TsContentClient&) = delete;
+   TsContentClient& operator=(const TsContentClient&) = delete;
+ 
++  void AddPlugins(std::vector<content::WebPluginInfo>* plugins) override;
+   void AddAdditionalSchemes(Schemes* schemes) override;
+ };
+ 
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index c3249abf1e..b98b5e4937 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -4,20 +4,30 @@
+ 
+ #include "content/libtermsurf_chromium/ts_content_renderer_client.h"
+ 
++#include "base/functional/bind.h"
+ #include "base/logging.h"
++#include "components/pdf/common/constants.h"
++#include "components/pdf/common/pdf_util.h"
++#include "components/pdf/renderer/internal_plugin_renderer_helpers.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_renderer_client.h"
+ #include "content/public/common/url_constants.h"
+ #include "content/public/renderer/render_frame.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extensions_client.h"
++#include "extensions/common/mojom/guest_view.mojom.h"
+ #include "extensions/renderer/api/core_extensions_renderer_api_provider.h"
+ #include "extensions/renderer/dispatcher.h"
+ #include "extensions/renderer/extension_frame_helper.h"
+ #include "extensions/renderer/extensions_renderer_client.h"
++#include "extensions/renderer/guest_view/mime_handler_view/mime_handler_view_container_manager.h"
+ #include "services/network/public/mojom/cors_origin_pattern.mojom-shared.h"
++#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+ #include "third_party/blink/public/platform/web_string.h"
+ #include "third_party/blink/public/platform/web_url.h"
++#include "third_party/blink/public/web/web_document.h"
++#include "third_party/blink/public/web/web_element.h"
++#include "third_party/blink/public/web/web_local_frame.h"
+ #include "third_party/blink/public/web/web_plugin_params.h"
+ #include "third_party/blink/public/web/web_security_policy.h"
+ 
+@@ -40,6 +50,17 @@ void AllowPdfViewerChromeResources() {
+             << extension_misc::kPdfExtensionId;
+ }
+ 
++bool HasInternalId(const blink::WebElement& plugin_element) {
++  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
++}
++
++std::string DocumentUrl(RenderFrame* render_frame) {
++  if (!render_frame || !render_frame->GetWebFrame()) {
++    return "";
++  }
++  return GURL(render_frame->GetWebFrame()->GetDocument().Url()).spec();
++}
++
+ }  // namespace
+ 
+ TsContentRendererClient::TsContentRendererClient() = default;
+@@ -63,17 +84,93 @@ void TsContentRendererClient::RenderThreadStarted() {
+ void TsContentRendererClient::RenderFrameCreated(RenderFrame* render_frame) {
+   ShellContentRendererClient::RenderFrameCreated(render_frame);
+ 
++  render_frame->GetAssociatedInterfaceRegistry()
++      ->AddInterface<extensions::mojom::MimeHandlerViewContainerManager>(
++          base::BindRepeating(
++              &extensions::MimeHandlerViewContainerManager::BindReceiver,
++              base::Unretained(render_frame)));
++  LOG(INFO) << "[issue-792-exp15] mime-handler-container-manager-bound "
++            << "render_frame=" << render_frame;
++
+   // ExtensionFrameHelper destroys itself when the RenderFrame is destroyed.
+   new extensions::ExtensionFrameHelper(render_frame, dispatcher());
+   dispatcher()->OnRenderFrameCreated(render_frame);
+ }
+ 
++bool TsContentRendererClient::IsPluginHandledExternally(
++    RenderFrame* render_frame,
++    const blink::WebElement& plugin_element,
++    const GURL& original_url,
++    const std::string& mime_type) {
++  if (mime_type == pdf::kInternalPluginMimeType && render_frame &&
++      render_frame->GetWebFrame()) {
++    const bool allowed_origin = IsPdfInternalPluginAllowedOrigin(
++        render_frame->GetWebFrame()->GetSecurityOrigin(), {});
++    LOG(INFO) << "[issue-792-exp27] internal-plugin-external-check "
++              << "document_url=" << DocumentUrl(render_frame)
++              << " original_url=" << original_url << " mime_type=" << mime_type
++              << " allowed_origin=" << (allowed_origin ? 1 : 0);
++    if (allowed_origin) {
++      LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
++                << "handled=1";
++      return true;
++    }
++
++    LOG(INFO) << "[issue-792-exp27] internal-plugin-externalized "
++              << "handled=0 reason=disallowed-origin";
++  }
++
++  const bool has_internal_id = HasInternalId(plugin_element);
++  const bool is_pdf_mime = mime_type == pdf::kPDFMimeType ||
++                           mime_type == pdf::kInternalPluginMimeType;
++  const bool handled = has_internal_id && is_pdf_mime;
++
++  LOG(INFO) << "[issue-792-exp15] is-plugin-handled-externally mime_type="
++            << mime_type << " url=" << original_url
++            << " document_url=" << DocumentUrl(render_frame)
++            << " has_internal_id=" << has_internal_id
++            << " plugin_lookup=" << (handled ? "ok" : "missing")
++            << " handled=" << handled;
++  LOG(INFO) << "[issue-792-exp19] renderer-plugin-external document_url="
++            << DocumentUrl(render_frame) << " original_url=" << original_url
++            << " mime_type=" << mime_type
++            << " has_internal_id=" << has_internal_id << " handled=" << handled;
++
++  return handled;
++}
++
+ bool TsContentRendererClient::OverrideCreatePlugin(
+     RenderFrame* render_frame,
+     const blink::WebPluginParams& params,
+     blink::WebPlugin** plugin) {
+-  if (extensions_renderer_client_ &&
+-      extensions_renderer_client_->OverrideCreatePlugin(render_frame, params)) {
++  if (params.mime_type.Utf8() == pdf::kInternalPluginMimeType) {
++    const bool has_pdf_renderer = pdf::IsPdfRenderer();
++    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-check "
++              << "document_url=" << DocumentUrl(render_frame)
++              << " mime_type=" << params.mime_type.Utf8()
++              << " url=" << GURL(params.url)
++              << " has_pdf_renderer=" << (has_pdf_renderer ? 1 : 0);
++    if (!has_pdf_renderer) {
++      LOG(INFO) << "[issue-792-exp26] internal-plugin-create-skipped "
++                << "reason=missing-pdf-renderer";
++      return false;
++    }
++
++    *plugin = pdf::CreateInternalPlugin(std::move(params), render_frame, {});
++    LOG(INFO) << "[issue-792-exp26] internal-plugin-create-result "
++              << "created=" << (*plugin ? 1 : 0);
++    return true;
++  }
++
++  const bool delegated_to_extensions =
++      extensions_renderer_client_ &&
++      extensions_renderer_client_->OverrideCreatePlugin(render_frame, params);
++  LOG(INFO) << "[issue-792-exp19] renderer-override-create-plugin "
++            << "document_url=" << DocumentUrl(render_frame)
++            << " mime_type=" << params.mime_type.Utf8()
++            << " url=" << GURL(params.url)
++            << " delegated_to_extensions=" << delegated_to_extensions;
++  if (delegated_to_extensions) {
+     return false;
+   }
+   return ShellContentRendererClient::OverrideCreatePlugin(render_frame, params,
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.h b/content/libtermsurf_chromium/ts_content_renderer_client.h
+index 4b618fc35a..d4242674ab 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.h
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.h
+@@ -6,8 +6,14 @@
+ #define CONTENT_LIBTERMSURF_CHROMIUM_TS_CONTENT_RENDERER_CLIENT_H_
+ 
+ #include <memory>
++#include <string>
+ 
+ #include "content/shell/renderer/shell_content_renderer_client.h"
++#include "url/gurl.h"
++
++namespace blink {
++class WebElement;
++}  // namespace blink
+ 
+ namespace extensions {
+ class Dispatcher;
+@@ -29,6 +35,10 @@ class TsContentRendererClient : public ShellContentRendererClient {
+ 
+   void RenderThreadStarted() override;
+   void RenderFrameCreated(RenderFrame* render_frame) override;
++  bool IsPluginHandledExternally(RenderFrame* render_frame,
++                                 const blink::WebElement& plugin_element,
++                                 const GURL& original_url,
++                                 const std::string& mime_type) override;
+   bool OverrideCreatePlugin(RenderFrame* render_frame,
+                             const blink::WebPluginParams& params,
+                             blink::WebPlugin** plugin) override;
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index d4a03d5db9..617d945906 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -9,8 +9,11 @@
+ #include <utility>
+ 
+ #include "base/logging.h"
++#include "chrome/browser/pdf/pdf_viewer_stream_manager.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
++#include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
++#include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/api/mime_handler.mojom.h"
+ #include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+@@ -33,35 +36,6 @@ std::string SiteUrl(RenderFrameHost* render_frame_host) {
+   return render_frame_host->GetSiteInstance()->GetSiteURL().spec();
+ }
+ 
+-class TsMimeHandlerService
+-    : public extensions::mime_handler::MimeHandlerService {
+- public:
+-  explicit TsMimeHandlerService(std::string frame_url)
+-      : frame_url_(std::move(frame_url)) {}
+-
+-  TsMimeHandlerService(const TsMimeHandlerService&) = delete;
+-  TsMimeHandlerService& operator=(const TsMimeHandlerService&) = delete;
+-
+-  ~TsMimeHandlerService() override = default;
+-
+-  void GetStreamInfo(GetStreamInfoCallback callback) override {
+-    LOG(INFO) << "[issue-792-exp12] mime-handler-get-stream-info frame_url="
+-              << frame_url_ << " stream_info=null";
+-    std::move(callback).Run(extensions::mime_handler::StreamInfoPtr());
+-  }
+-
+-  void SetPdfPluginAttributes(
+-      extensions::mime_handler::PdfPluginAttributesPtr pdf_plugin_attributes)
+-      override {
+-    LOG(INFO)
+-        << "[issue-792-exp12] mime-handler-set-pdf-plugin-attributes frame_url="
+-        << frame_url_;
+-  }
+-
+- private:
+-  std::string frame_url_;
+-};
+-
+ class TsBeforeUnloadControl
+     : public extensions::mime_handler::BeforeUnloadControl {
+  public:
+@@ -93,18 +67,46 @@ void BindTsMimeHandlerService(
+         receiver) {
+   const std::string frame_url = FrameUrl(render_frame_host);
+   const std::string site_url = SiteUrl(render_frame_host);
++  const bool is_pdf_extension = IsPdfExtensionFrame(render_frame_host);
+ 
+-  if (!IsPdfExtensionFrame(render_frame_host)) {
++  if (!is_pdf_extension) {
+     LOG(INFO)
+         << "[issue-792-exp12] mime-handler-service-binder-reject frame_url="
+         << frame_url << " site_url=" << site_url;
++    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++              << frame_url << " reason=not-pdf-extension";
+     return;
+   }
+ 
+   LOG(INFO) << "[issue-792-exp12] mime-handler-service-binder frame_url="
+             << frame_url << " site_url=" << site_url;
+-  mojo::MakeSelfOwnedReceiver(std::make_unique<TsMimeHandlerService>(frame_url),
+-                              std::move(receiver));
++  RenderFrameHost* embedder_host = render_frame_host->GetParent();
++  auto* manager =
++      embedder_host
++          ? pdf::PdfViewerStreamManager::FromRenderFrameHost(embedder_host)
++          : nullptr;
++  base::WeakPtr<extensions::StreamContainer> stream =
++      manager && embedder_host ? manager->GetStreamContainer(embedder_host)
++                               : nullptr;
++  LOG(INFO) << "[issue-792-exp18] mime-handler-service-request frame_url="
++            << frame_url << " site_url=" << site_url
++            << " is_pdf_extension=" << (is_pdf_extension ? 1 : 0)
++            << " has_parent=" << (embedder_host ? 1 : 0)
++            << " has_manager=" << (manager ? 1 : 0)
++            << " has_stream=" << (stream ? 1 : 0);
++
++  if (!stream) {
++    const char* reason =
++        !embedder_host ? "no-parent" : (!manager ? "no-manager" : "no-stream");
++    LOG(INFO) << "[issue-792-exp18] mime-handler-service-no-stream frame_url="
++              << frame_url << " reason=" << reason;
++    return;
++  }
++
++  LOG(INFO) << "[issue-792-exp18] mime-handler-service-bound frame_url="
++            << frame_url << " stream_url=" << stream->stream_url()
++            << " original_url=" << stream->original_url();
++  extensions::MimeHandlerServiceImpl::Create(stream, std::move(receiver));
+ }
+ 
+ void BindTsBeforeUnloadControl(
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index f7b0373a94..8637dda722 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -90,40 +90,41 @@ void ClearAllButFrameAncestors(network::mojom::URLResponseHead* response_head) {
+   csp.swap(cleared);
+ }
+ 
+-void AddPdfStreamContainer(
++bool AddPdfStreamContainer(
+     const std::string& extension_id,
+     bool embedded,
+     FrameTreeNodeId frame_tree_node_id,
+     blink::mojom::TransferrableURLLoaderPtr transferrable_loader,
+     const GURL& original_url,
+     const std::string& internal_id) {
+-  WebContents* web_contents = WebContents::FromFrameTreeNodeId(
+-      frame_tree_node_id);
++  WebContents* web_contents =
++      WebContents::FromFrameTreeNodeId(frame_tree_node_id);
+   if (!web_contents) {
+-    return;
++    return false;
+   }
+ 
+-  auto* registry = extensions::ExtensionRegistry::Get(
+-      web_contents->GetBrowserContext());
++  auto* registry =
++      extensions::ExtensionRegistry::Get(web_contents->GetBrowserContext());
+   const extensions::Extension* extension =
+       registry ? registry->enabled_extensions().GetByID(extension_id) : nullptr;
+   if (!extension) {
+-    return;
++    return false;
+   }
+ 
+   auto* handler = MimeTypesHandler::GetHandler(extension);
+   if (!handler || !handler->HasPlugin()) {
+-    return;
++    return false;
+   }
+ 
+-  GURL handler_url(extensions::Extension::GetBaseURLFromExtensionId(
+-                       extension_id)
+-                       .spec() +
+-                   handler->handler_url());
++  GURL handler_url(
++      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec() +
++      handler->handler_url());
+   auto stream_container = std::make_unique<extensions::StreamContainer>(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+ 
++  LOG(INFO) << "[issue-792-exp16] interceptor-manager-created "
++            << "frame_tree_node_id=" << frame_tree_node_id;
+   pdf::PdfViewerStreamManager::Create(web_contents);
+   pdf::PdfViewerStreamManager::FromWebContents(web_contents)
+       ->AddStreamContainer(frame_tree_node_id, internal_id,
+@@ -132,6 +133,13 @@ void AddPdfStreamContainer(
+             << frame_tree_node_id << " internal_id=" << internal_id
+             << " original_url=" << original_url
+             << " handler_url=" << handler_url;
++  LOG(INFO) << "[issue-792-exp15] stream-container-added-before-resume "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " internal_id=" << internal_id;
++  LOG(INFO) << "[issue-792-exp16] interceptor-stream-added "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " internal_id=" << internal_id;
++  return true;
+ }
+ 
+ }  // namespace
+@@ -152,8 +160,8 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+     bool* defer) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+ 
+-  WebContents* web_contents = WebContents::FromFrameTreeNodeId(
+-      frame_tree_node_id_);
++  WebContents* web_contents =
++      WebContents::FromFrameTreeNodeId(frame_tree_node_id_);
+   if (!web_contents) {
+     return;
+   }
+@@ -190,9 +198,32 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+       new_client.BindNewPipeAndPassReceiver();
+ 
+   const std::string internal_id = base::UnguessableToken::Create().ToString();
+-  const std::string payload = extensions::MimeHandlerViewAttachHelper::
+-      CreateTemplateMimeHandlerPage(response_url, response_head->mime_type,
+-                                    internal_id);
++  LOG(INFO) << "[issue-792-exp16] oopif-template-body frame_tree_node_id="
++            << frame_tree_node_id_ << " internal_id=" << internal_id
++            << " original_url=" << response_url;
++  const std::string payload =
++      extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
++          response_url, response_head->mime_type, internal_id);
++  const std::string pdf_extension_url =
++      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
++  LOG(INFO) << "[issue-792-exp19] wrapper-payload "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " internal_id=" << internal_id << " bytes=" << payload.size()
++            << " has_template="
++            << (payload.find("<template") != std::string::npos ? 1 : 0)
++            << " has_iframe="
++            << (payload.find("<iframe") != std::string::npos ? 1 : 0)
++            << " has_embed="
++            << (payload.find("<embed") != std::string::npos ? 1 : 0)
++            << " has_about_blank="
++            << (payload.find("about:blank") != std::string::npos ? 1 : 0)
++            << " has_internal_id="
++            << (payload.find(internal_id) != std::string::npos ? 1 : 0)
++            << " has_pdf_extension_url="
++            << (payload.find(pdf_extension_url) != std::string::npos ? 1 : 0);
++  LOG(INFO) << "[issue-792-exp16] interceptor-template-created "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " internal_id=" << internal_id;
+   *defer = true;
+ 
+   mojo::ScopedDataPipeProducerHandle producer_handle;
+@@ -212,6 +243,8 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   delegate_->InterceptResponse(std::move(dummy_new_loader),
+                                std::move(new_client_receiver), &original_loader,
+                                &original_client, &consumer_handle);
++  LOG(INFO) << "[issue-792-exp16] interceptor-response-swapped "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+ 
+   auto deep_copied_response = response_head->Clone();
+   if (response_head->headers) {
+@@ -233,11 +266,26 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ 
+   bool embedded =
+       request_destination_ != network::mojom::RequestDestination::kDocument;
+-  GetUIThreadTaskRunner({})->PostTask(
+-      FROM_HERE, base::BindOnce(&AddPdfStreamContainer, extension_id, embedded,
+-                                frame_tree_node_id_,
+-                                std::move(transferrable_loader), response_url,
+-                                internal_id));
++  LOG(INFO) << "[issue-792-exp17] wrapper-classification-before "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " mime_type=" << response_head->mime_type
++            << " intercepted_by_plugin="
++            << (response_head->intercepted_by_plugin ? 1 : 0)
++            << " request_destination="
++            << static_cast<int>(request_destination_);
++  if (AddPdfStreamContainer(extension_id, embedded, frame_tree_node_id_,
++                            std::move(transferrable_loader), response_url,
++                            internal_id)) {
++    response_head->intercepted_by_plugin = true;
++  }
++  LOG(INFO) << "[issue-792-exp17] wrapper-classification-after "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " mime_type=" << response_head->mime_type
++            << " intercepted_by_plugin="
++            << (response_head->intercepted_by_plugin ? 1 : 0)
++            << " request_destination="
++            << static_cast<int>(request_destination_);
++
+   GetUIThreadTaskRunner({})->PostTask(
+       FROM_HERE,
+       base::BindOnce(&TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad,
+@@ -245,6 +293,8 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+ }
+ 
+ void TsPluginResponseInterceptorURLLoaderThrottle::ResumeLoad() {
++  LOG(INFO) << "[issue-792-exp16] interceptor-resume frame_tree_node_id="
++            << frame_tree_node_id_;
+   delegate_->Resume();
+ }
+ 
+diff --git a/extensions/browser/api/mime_handler_private/mime_handler_private.cc b/extensions/browser/api/mime_handler_private/mime_handler_private.cc
+index 789866d271..fed1ea6ad8 100644
+--- a/extensions/browser/api/mime_handler_private/mime_handler_private.cc
++++ b/extensions/browser/api/mime_handler_private/mime_handler_private.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/containers/flat_map.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/numerics/safe_conversions.h"
+ #include "base/strings/string_util.h"
+ #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_guest.h"
+@@ -24,8 +25,9 @@ namespace {
+ base::flat_map<std::string, std::string> CreateResponseHeadersMap(
+     const net::HttpResponseHeaders* headers) {
+   base::flat_map<std::string, std::string> result;
+-  if (!headers)
++  if (!headers) {
+     return result;
++  }
+ 
+   size_t iter = 0;
+   std::string header_name;
+@@ -38,11 +40,14 @@ base::flat_map<std::string, std::string> CreateResponseHeadersMap(
+     //
+     // TODO(sammc): Send as bytes instead of a string and let the client decide
+     // how to decode.
+-    if (!base::IsStringASCII(header_name) || !base::IsStringASCII(header_value))
++    if (!base::IsStringASCII(header_name) ||
++        !base::IsStringASCII(header_value)) {
+       continue;
++    }
+     auto& current_value = result[header_name];
+-    if (!current_value.empty())
++    if (!current_value.empty()) {
+       current_value += ", ";
++    }
+     current_value += header_value;
+   }
+   return result;
+@@ -67,22 +72,36 @@ void MimeHandlerServiceImpl::Create(
+ 
+ void MimeHandlerServiceImpl::GetStreamInfo(GetStreamInfoCallback callback) {
+   if (!stream_) {
++    LOG(INFO) << "[issue-792-exp18] real-mime-handler-get-stream-info "
++              << "has_stream=0 stream_url= original_url=";
+     std::move(callback).Run(mime_handler::StreamInfoPtr());
+     return;
+   }
++  LOG(INFO) << "[issue-792-exp18] real-mime-handler-get-stream-info "
++            << "has_stream=1 stream_url=" << stream_->stream_url()
++            << " original_url=" << stream_->original_url();
+   std::move(callback).Run(
+       mojo::ConvertTo<mime_handler::StreamInfoPtr>(*stream_));
+ }
+ 
+ void MimeHandlerServiceImpl::SetPdfPluginAttributes(
+     mime_handler::PdfPluginAttributesPtr pdf_plugin_attributes) {
+-  if (!stream_)
++  if (!stream_) {
++    LOG(INFO) << "[issue-792-exp18] real-mime-handler-set-pdf-attributes "
++              << "has_stream=0 background_color= allow_javascript=";
+     return;
++  }
++
++  LOG(INFO) << "[issue-792-exp18] real-mime-handler-set-pdf-attributes "
++            << "has_stream=1 background_color="
++            << pdf_plugin_attributes->background_color << " allow_javascript="
++            << (pdf_plugin_attributes->allow_javascript ? 1 : 0);
+ 
+   // Check the `background_color` is an integer.
+   double whole = 0.0;
+-  if (std::modf(pdf_plugin_attributes->background_color, &whole) != 0.0)
++  if (std::modf(pdf_plugin_attributes->background_color, &whole) != 0.0) {
+     return;
++  }
+ 
+   // Check the `background_color` is within the range of a uint32_t.
+   if (!base::IsValueInRangeForNumericType<uint32_t>(
+@@ -101,8 +120,9 @@ extensions::mime_handler::StreamInfoPtr TypeConverter<
+     extensions::mime_handler::StreamInfoPtr,
+     extensions::StreamContainer>::Convert(const extensions::StreamContainer&
+                                               stream) {
+-  if (stream.stream_url().is_empty())
++  if (stream.stream_url().is_empty()) {
+     return extensions::mime_handler::StreamInfoPtr();
++  }
+ 
+   auto result = extensions::mime_handler::StreamInfo::New();
+   result->embedded = stream.embedded();
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
+index b1ab7caaa4..b9e2eb87a3 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.cc
+@@ -11,6 +11,7 @@
+ 
+ #include "base/containers/flat_map.h"
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
+ #include "content/public/browser/browser_task_traits.h"
+@@ -104,6 +105,9 @@ void MimeHandlerViewAttachHelper::CreateFullPageMimeHandlerView(
+     const GURL& resource_url,
+     const std::string& stream_id,
+     const std::string& token) {
++  LOG(INFO) << "[issue-792-exp15] mhv-embedder-create frame_tree_node_id="
++            << frame_tree_node_id << " resource_url=" << resource_url
++            << " stream_id=" << stream_id << " internal_id=" << token;
+   MimeHandlerViewEmbedder::Create(frame_tree_node_id, resource_url, stream_id,
+                                   token);
+ }
+diff --git a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+index b4b761d0bd..2d382b5cc3 100644
+--- a/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
++++ b/extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.cc
+@@ -5,6 +5,7 @@
+ #include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_embedder.h"
+ 
+ #include "base/containers/flat_map.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/no_destructor.h"
+ #include "components/guest_view/browser/guest_view_manager.h"
+@@ -40,8 +41,9 @@ MimeHandlerViewEmbedder* MimeHandlerViewEmbedder::Get(
+     content::FrameTreeNodeId frame_tree_node_id) {
+   const auto& map = *GetMimeHandlerViewEmbeddersMap();
+   auto it = map.find(frame_tree_node_id);
+-  if (it == map.cend())
++  if (it == map.cend()) {
+     return nullptr;
++  }
+   return it->second.get();
+ }
+ 
+@@ -86,20 +88,26 @@ void MimeHandlerViewEmbedder::DidStartNavigation(
+   // PDFExtensionLinkClickTest.OpenPDFWithReplaceState reaches here).
+   if (handle->GetFrameTreeNodeId() == frame_tree_node_id_ &&
+       !handle->IsSameDocument()) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=new-navigation "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+   }
+ }
+ 
+ void MimeHandlerViewEmbedder::ReadyToCommitNavigation(
+     content::NavigationHandle* handle) {
+-  if (handle->GetFrameTreeNodeId() != frame_tree_node_id_)
++  if (handle->GetFrameTreeNodeId() != frame_tree_node_id_) {
+     return;
+-  if (render_frame_host_)
++  }
++  if (render_frame_host_) {
+     return;
++  }
+ 
+   // It's possible for the navigation to the template HTML document to fail
+   // (e.g. attempting to load a PDF in a fenced frame).
+   if (handle->GetNetErrorCode() != net::OK) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=net-error "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+     return;
+   }
+@@ -111,6 +119,8 @@ void MimeHandlerViewEmbedder::ReadyToCommitNavigation(
+                 network::mojom::WebSandboxFlags::kPlugins);
+ 
+   render_frame_host_ = handle->GetRenderFrameHost();
++  LOG(INFO) << "[issue-792-exp15] mhv-ready-to-commit frame_tree_node_id="
++            << frame_tree_node_id_ << " url=" << handle->GetURL();
+   GetContainerManager()->SetInternalId(internal_id_);
+ }
+ 
+@@ -129,6 +139,31 @@ void MimeHandlerViewEmbedder::DidFinishNavigation(
+ 
+ void MimeHandlerViewEmbedder::RenderFrameCreated(
+     content::RenderFrameHost* render_frame_host) {
++  const bool parent_matches =
++      render_frame_host_ &&
++      render_frame_host_ == render_frame_host->GetParent();
++  const bool url_matches =
++      render_frame_host_ &&
++      render_frame_host_->GetLastCommittedURL() == resource_url_;
++  const bool owner_matches = render_frame_host->GetFrameOwnerElementType() ==
++                             blink::FrameOwnerElementType::kEmbed;
++  const bool name_matches = render_frame_host->GetFrameName() == internal_id_;
++  LOG(INFO) << "[issue-792-exp15] mhv-render-frame-created parent_matches="
++            << parent_matches << " url_matches=" << url_matches
++            << " owner_type="
++            << static_cast<int>(render_frame_host->GetFrameOwnerElementType())
++            << " owner_matches=" << owner_matches
++            << " name_matches=" << name_matches
++            << " ready=" << ready_to_create_mime_handler_view_;
++  LOG(INFO) << "[issue-792-exp19] mhv-render-frame-created "
++            << "frame_tree_node_id=" << render_frame_host->GetFrameTreeNodeId()
++            << " parent_matches=" << parent_matches
++            << " url_matches=" << url_matches << " owner_type="
++            << static_cast<int>(render_frame_host->GetFrameOwnerElementType())
++            << " owner_matches=" << owner_matches
++            << " name_matches=" << name_matches
++            << " ready=" << ready_to_create_mime_handler_view_;
++
+   // If an extension injects a frame before we finish attaching the PDF's
+   // iframe, then we don't want to early out by mistake. We also put an
+   // unguessable name element on the <embed> to guard against the possibility
+@@ -145,6 +180,8 @@ void MimeHandlerViewEmbedder::RenderFrameCreated(
+     // Renderer notifies the browser about creating MimeHandlerView right after
+     // HTMLPlugInElement::RequestObject, which is before the plugin element is
+     // navigated.
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=not-ready "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+     return;
+   }
+@@ -173,6 +210,8 @@ void MimeHandlerViewEmbedder::FrameDeleted(
+       (placeholder_render_frame_host_for_inner_contents_ &&
+        placeholder_render_frame_host_for_inner_contents_
+                ->GetFrameTreeNodeId() == frame_tree_node_id)) {
++    LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=frame-deleted "
++              << "frame_tree_node_id=" << frame_tree_node_id_;
+     DestroySelf();
+   }
+ }
+@@ -180,6 +219,11 @@ void MimeHandlerViewEmbedder::FrameDeleted(
+ void MimeHandlerViewEmbedder::CreateMimeHandlerViewGuest(
+     mojo::PendingRemote<mime_handler::BeforeUnloadControl>
+         before_unload_control_remote) {
++  LOG(INFO) << "[issue-792-exp15] mhv-create-guest frame_tree_node_id="
++            << frame_tree_node_id_ << " stream_id=" << stream_id_;
++  LOG(INFO) << "[issue-792-exp19] mhv-create-guest-start "
++            << "frame_tree_node_id=" << frame_tree_node_id_
++            << " stream_id=" << stream_id_;
+   auto* browser_context = web_contents()->GetBrowserContext();
+   auto* manager =
+       guest_view::GuestViewManager::FromBrowserContext(browser_context);
+@@ -206,8 +250,9 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
+   std::unique_ptr<MimeHandlerViewGuest> guest_view =
+       base::WrapUnique(raw_guest_view);
+ 
+-  if (!guest_view)
++  if (!guest_view) {
+     return;
++  }
+   guest_view->SetBeforeUnloadController(
+       std::move(before_unload_control_remote));
+ 
+@@ -243,6 +288,8 @@ void MimeHandlerViewEmbedder::DidCreateMimeHandlerViewGuest(
+           placeholder_render_frame_host_for_inner_contents_,
+           element_instance_id, is_full_page /* is_full_page_plugin */);
+   // MHVE is no longer required.
++  LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=attach-complete "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+   DestroySelf();
+ }
+ 
+@@ -258,13 +305,16 @@ MimeHandlerViewEmbedder::GetContainerManager() {
+ void MimeHandlerViewEmbedder::ReadyToCreateMimeHandlerView(
+     bool ready_to_create_mime_handler_view) {
+   ready_to_create_mime_handler_view_ = ready_to_create_mime_handler_view;
+-  if (!ready_to_create_mime_handler_view_)
++  if (!ready_to_create_mime_handler_view_) {
+     DestroySelf();
++  }
+ }
+ 
+ void MimeHandlerViewEmbedder::OnFrameSandboxed() {
+   DCHECK(!render_frame_host_);
+   DCHECK(!container_manager_);
++  LOG(INFO) << "[issue-792-exp19] mhv-destroy reason=sandboxed "
++            << "frame_tree_node_id=" << frame_tree_node_id_;
+   DestroySelf();
+ }
+ 
+diff --git a/extensions/browser/mime_handler/mime_handler_stream_manager.cc b/extensions/browser/mime_handler/mime_handler_stream_manager.cc
+index 3774044c8b..3bd94ecf23 100644
+--- a/extensions/browser/mime_handler/mime_handler_stream_manager.cc
++++ b/extensions/browser/mime_handler/mime_handler_stream_manager.cc
+@@ -11,6 +11,7 @@
+ #include <utility>
+ 
+ #include "base/functional/bind.h"
++#include "base/logging.h"
+ #include "base/memory/ptr_util.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/strings/to_string.h"
+@@ -400,6 +401,8 @@ bool MimeHandlerStreamManager::ContainsUnclaimedStreamInfo(
+ 
+ void MimeHandlerStreamManager::DeleteUnclaimedStreamInfo(
+     content::FrameTreeNodeId frame_tree_node_id) {
++  LOG(INFO) << "[issue-792-exp16] pvs-delete-unclaimed frame_tree_node_id="
++            << frame_tree_node_id;
+   CHECK(stream_infos_.erase(GetUnclaimedEmbedderHostInfo(frame_tree_node_id)));
+ 
+   if (stream_infos_.empty()) {
+@@ -428,8 +431,6 @@ void MimeHandlerStreamManager::RenderFrameDeleted(
+ 
+   // If `render_frame_host` is an unrelated host (there isn't an unclaimed
+   // stream), ignore.
+-  content::FrameTreeNodeId frame_tree_node_id =
+-      render_frame_host->GetFrameTreeNodeId();
+   if (!ContainsUnclaimedStreamInfo(frame_tree_node_id)) {
+     return;
+   }
+@@ -446,6 +447,12 @@ void MimeHandlerStreamManager::RenderFrameHostChanged(
+   if (!old_host) {
+     return;
+   }
++  LOG(INFO) << "[issue-792-exp16] pvs-rfh-changed "
++            << "old_frame_tree_node_id=" << old_host->GetFrameTreeNodeId()
++            << " new_frame_tree_node_id="
++            << (new_host ? new_host->GetFrameTreeNodeId().value() : -1)
++            << " old_has_claimed="
++            << static_cast<bool>(GetClaimedStreamInfo(old_host));
+ 
+   if (MaybeDeleteStreamOnExtensionHostChanged(old_host) ||
+       MaybeDeleteStreamOnContentHostChanged(old_host)) {
+@@ -492,6 +499,10 @@ void MimeHandlerStreamManager::FrameDeleted(
+       ++iter;
+     }
+   }
++  LOG(INFO) << "[issue-792-exp16] pvs-frame-deleted frame_tree_node_id="
++            << frame_tree_node_id
++            << " stream_count_before=" << stream_count_before
++            << " stream_count_after=" << stream_infos_.size();
+ 
+   // Delete `this` if there are no remaining stream infos.
+   if (stream_infos_.empty()) {
+@@ -502,6 +513,16 @@ void MimeHandlerStreamManager::FrameDeleted(
+ 
+ void MimeHandlerStreamManager::DidStartNavigation(
+     content::NavigationHandle* navigation_handle) {
++  const content::FrameTreeNodeId frame_tree_node_id =
++      navigation_handle->GetFrameTreeNodeId();
++  LOG(INFO) << "[issue-792-exp16] pvs-start frame_tree_node_id="
++            << frame_tree_node_id << " url=" << navigation_handle->GetURL()
++            << " is_pdf=" << navigation_handle->IsPdf()
++            << " is_in_main_frame=" << navigation_handle->IsInMainFrame()
++            << " has_unclaimed="
++            << ContainsUnclaimedStreamInfo(frame_tree_node_id)
++            << " stream_count=" << stream_infos_.size();
++
+   // Set the content host frame tree node ID if the navigation is for a content
+   // host. This needs to occur before the network request for the content
+   // navigation so that delegates that consult content-host state during
+@@ -529,7 +550,12 @@ void MimeHandlerStreamManager::ReadyToCommitNavigation(
+   }
+ 
+   // Maybe register a PDF subresource override in the PDF content host.
+-  if (MaybeRegisterPdfSubresourceOverride(navigation_handle)) {
++  const bool handled_subresource_override =
++      MaybeRegisterPdfSubresourceOverride(navigation_handle);
++  LOG(INFO) << "[issue-792-exp16] pvs-ready-subresource-override "
++            << "frame_tree_node_id=" << frame_tree_node_id
++            << " handled=" << handled_subresource_override;
++  if (handled_subresource_override) {
+     return;
+   }
+ 
+@@ -557,6 +583,8 @@ void MimeHandlerStreamManager::ReadyToCommitNavigation(
+   content::RenderFrameHost* embedder_host =
+       navigation_handle->GetRenderFrameHost();
+   if (!ContainsUnclaimedStreamInfo(embedder_host->GetFrameTreeNodeId())) {
++    LOG(INFO) << "[issue-792-exp16] pvs-no-claim frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId() << " reason=no-unclaimed";
+     return;
+   }
+ 
+@@ -580,6 +608,19 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+     ClearContentNavigationCrashKeys();
+   }
+ 
++  content::RenderFrameHost* parent_host = navigation_handle->GetParentFrame();
++  LOG(INFO) << "[issue-792-exp19] pvs-finish frame_tree_node_id="
++            << navigation_handle->GetFrameTreeNodeId()
++            << " url=" << navigation_handle->GetURL()
++            << " has_committed=" << navigation_handle->HasCommitted()
++            << " is_error_page=" << navigation_handle->IsErrorPage()
++            << " is_pdf=" << navigation_handle->IsPdf()
++            << " has_parent=" << (parent_host ? 1 : 0)
++            << " parent_frame_tree_node_id="
++            << (parent_host ? base::ToString(parent_host->GetFrameTreeNodeId())
++                            : "none")
++            << " stream_count=" << stream_infos_.size();
++
+   // Maybe set up postMessage support after the PDF content host finishes
+   // navigating.
+   if (MaybeSetUpPostMessage(navigation_handle)) {
+@@ -588,8 +629,12 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+ 
+   // The rest of the method handles the extension host. The parent host should
+   // be the tracked embedder host.
+-  content::RenderFrameHost* embedder_host = navigation_handle->GetParentFrame();
++  content::RenderFrameHost* embedder_host = parent_host;
+   if (!embedder_host) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-no-parent "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " url=" << navigation_handle->GetURL();
+     return;
+   }
+ 
+@@ -597,6 +642,12 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+   // host navigates.
+   auto* stream_info = GetClaimedStreamInfo(embedder_host);
+   if (!stream_info) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-no-claimed-stream "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " parent_frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId()
++              << " url=" << navigation_handle->GetURL();
+     return;
+   }
+ 
+@@ -607,6 +658,15 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+     // navigations in other children of the embedder host. Ignore all other
+     // URLs, which was shown to be possible in crbug.com/432497344.
+     const GURL pdf_extension_url = stream_info->stream()->handler_url();
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-extension-already-started "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId() << " url=" << url
++              << " matches_extension_url=" << (url == pdf_extension_url)
++              << " matches_tracked_frame="
++              << (stream_info->extension_host_frame_tree_node_id() ==
++                  navigation_handle->GetFrameTreeNodeId())
++              << " has_committed=" << navigation_handle->HasCommitted()
++              << " is_error_page=" << navigation_handle->IsErrorPage();
+     if (url == pdf_extension_url &&
+         stream_info->extension_host_frame_tree_node_id() ==
+             navigation_handle->GetFrameTreeNodeId() &&
+@@ -624,6 +684,11 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+   // extension. Navigate the about:blank embed to the handler extension URL to
+   // load the extension.
+   if (!url.IsAboutBlank()) {
++    LOG(INFO) << "[issue-792-exp19] pvs-finish-not-about-blank "
++              << "frame_tree_node_id="
++              << navigation_handle->GetFrameTreeNodeId()
++              << " parent_frame_tree_node_id="
++              << embedder_host->GetFrameTreeNodeId() << " url=" << url;
+     return;
+   }
+ 
+@@ -640,6 +705,13 @@ void MimeHandlerStreamManager::DidFinishNavigation(
+       about_blank_host->GetFrameTreeNodeId();
+   stream_info->set_extension_host_frame_tree_node_id(
+       extension_host_frame_tree_node_id);
++  LOG(INFO) << "[issue-792-exp19] pvs-finish-about-blank "
++            << "frame_tree_node_id=" << extension_host_frame_tree_node_id
++            << " parent_frame_tree_node_id="
++            << embedder_host->GetFrameTreeNodeId() << " url=" << url;
++  LOG(INFO) << "[issue-792-exp15] pdf-extension-about-blank "
++            << "frame_tree_node_id=" << extension_host_frame_tree_node_id
++            << " embedder=" << embedder_host->GetFrameTreeNodeId();
+ 
+   NavigateToExtensionUrl(extension_host_frame_tree_node_id, stream_info,
+                          embedder_host->GetSiteInstance(),
+@@ -687,6 +759,8 @@ void MimeHandlerStreamManager::NavigateToExtensionUrl(
+       stream_info->stream()->handler_url());
+   params.frame_tree_node_id = extension_host_frame_tree_node_id;
+   params.source_site_instance = source_site_instance;
++  LOG(INFO) << "[issue-792-exp15] pdf-extension-navigate handler_url="
++            << stream_info->stream()->handler_url();
+   web_contents()->GetController().LoadURLWithParams(params);
+ }
+ 
+@@ -736,6 +810,8 @@ void MimeHandlerStreamManager::DeleteClaimedStreamInfo(
+     content::RenderFrameHost* embedder_host) {
+   auto iter = stream_infos_.find(GetEmbedderHostInfo(embedder_host));
+   CHECK(iter != stream_infos_.end());
++  LOG(INFO) << "[issue-792-exp16] pvs-delete-claimed frame_tree_node_id="
++            << embedder_host->GetFrameTreeNodeId();
+ 
+   extensions::StreamInfo* stream_info = iter->second.get();
+   if (stream_info->mime_handler_view_container_manager()) {
+diff --git a/third_party/blink/renderer/core/dom/document_init.cc b/third_party/blink/renderer/core/dom/document_init.cc
+index ef0c56bb72..78011fa098 100644
+--- a/third_party/blink/renderer/core/dom/document_init.cc
++++ b/third_party/blink/renderer/core/dom/document_init.cc
+@@ -29,6 +29,7 @@
+ 
+ #include "third_party/blink/renderer/core/dom/document_init.h"
+ 
++#include "base/logging.h"
+ #include "base/uuid.h"
+ #include "services/metrics/public/cpp/ukm_source_id.h"
+ #include "third_party/blink/public/common/tokens/tokens.h"
+@@ -59,6 +60,23 @@
+ 
+ namespace blink {
+ 
++namespace {
++
++const char* DocumentTypeForLog(DocumentInit::Type type) {
++  switch (type) {
++    case DocumentInit::Type::kHTML:
++      return "html";
++    case DocumentInit::Type::kPlugin:
++      return "plugin";
++    case DocumentInit::Type::kText:
++      return "text";
++    default:
++      return "other";
++  }
++}
++
++}  // namespace
++
+ // static
+ DocumentInit DocumentInit::Create() {
+   return DocumentInit();
+@@ -182,25 +200,48 @@ DocumentInit::Type DocumentInit::ComputeDocumentType(
+     return Type::kMedia;
+   }
+ 
+-  if (frame && frame->GetPage() && frame->Loader().AllowPlugins())
+-      [[unlikely]] {
+-    PluginData* plugin_data = GetPluginData(frame);
++  const bool should_log = EqualIgnoringAsciiCase(mime_type, "application/pdf");
++  bool allow_plugins = false;
++  PluginData* plugin_data = nullptr;
++  bool supports_mime = false;
++  bool is_external = false;
++  auto log_check = [&](Type result) {
++    if (!should_log && !is_external) {
++      return;
++    }
++    LOG(INFO) << "[issue-792-exp21] document-type-check mime_type="
++              << mime_type.Utf8() << " has_frame=" << (frame ? 1 : 0)
++              << " allow_plugins=" << allow_plugins
++              << " has_plugin_data=" << (plugin_data ? 1 : 0)
++              << " supports_mime=" << supports_mime
++              << " is_external=" << is_external
++              << " result=" << DocumentTypeForLog(result);
++  };
++
++  allow_plugins = frame && frame->GetPage() && frame->Loader().AllowPlugins();
++  if (allow_plugins) [[unlikely]] {
++    plugin_data = GetPluginData(frame);
+ 
+     // Everything else except text/plain can be overridden by plugins.
+     // Disallowing plugins to use text/plain prevents plugins from hijacking a
+     // fundamental type that the browser is expected to handle, and also serves
+     // as an optimization to prevent loading the plugin database in the common
+     // case.
+-    if (mime_type != "text/plain" && plugin_data &&
+-        plugin_data->SupportsMimeType(mime_type)) {
++    supports_mime = mime_type != "text/plain" && plugin_data &&
++                    plugin_data->SupportsMimeType(mime_type);
++    if (supports_mime) {
+       // Plugins handled by MimeHandlerView do not create a PluginDocument. They
+       // are rendered inside cross-process frames and the notion of a PluginView
+       // (which is associated with PluginDocument) is irrelevant here.
+-      if (plugin_data->IsExternalPluginMimeType(mime_type)) {
+-        if (is_for_external_handler)
++      is_external = plugin_data->IsExternalPluginMimeType(mime_type);
++      if (is_external) {
++        if (is_for_external_handler) {
+           *is_for_external_handler = true;
++        }
++        log_check(Type::kHTML);
+         return Type::kHTML;
+       }
++      log_check(Type::kPlugin);
+       return Type::kPlugin;
+     }
+   }
+@@ -215,6 +256,7 @@ DocumentInit::Type DocumentInit::ComputeDocumentType(
+     return Type::kXML;
+   }
+ 
++  log_check(Type::kHTML);
+   return Type::kHTML;
+ }
+ 
+@@ -227,6 +269,12 @@ DocumentInit& DocumentInit::WithTypeFrom(const String& mime_type) {
+   mime_type_ = mime_type;
+   type_ = ComputeDocumentType(window_ ? window_->GetFrame() : nullptr,
+                               mime_type_, &is_for_external_handler_);
++  if (EqualIgnoringAsciiCase(mime_type_, "application/pdf") ||
++      is_for_external_handler_) {
++    LOG(INFO) << "[issue-792-exp21] document-type-selected mime_type="
++              << mime_type_.Utf8() << " result=" << DocumentTypeForLog(type_)
++              << " is_for_external_handler=" << is_for_external_handler_;
++  }
+   return *this;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/html/html_frame_owner_element.cc b/third_party/blink/renderer/core/html/html_frame_owner_element.cc
+index 5aa78ab1c3..481dfa0831 100644
+--- a/third_party/blink/renderer/core/html/html_frame_owner_element.cc
++++ b/third_party/blink/renderer/core/html/html_frame_owner_element.cc
+@@ -21,6 +21,7 @@
+ #include "third_party/blink/renderer/core/html/html_frame_owner_element.h"
+ 
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/time/time.h"
+@@ -88,6 +89,11 @@ namespace blink {
+ namespace {
+ 
+ using PluginSet = HeapHashSet<Member<WebPluginContainerImpl>>;
++
++AtomicString InternalIdAttr() {
++  return AtomicString("internalid");
++}
++
+ PluginSet& PluginsPendingDispose() {
+   using PluginSetHolder = DisallowNewWrapper<PluginSet>;
+   DEFINE_STATIC_LOCAL(Persistent<PluginSetHolder>, holder,
+@@ -97,14 +103,16 @@ PluginSet& PluginsPendingDispose() {
+ 
+ bool DoesParentAllowLazyLoadingChildren(Document& document) {
+   LocalFrame* containing_frame = document.GetFrame();
+-  if (!containing_frame)
++  if (!containing_frame) {
+     return true;
++  }
+ 
+   // If the embedding document has no owner, then by default allow lazy loading
+   // children.
+   FrameOwner* containing_frame_owner = containing_frame->Owner();
+-  if (!containing_frame_owner)
++  if (!containing_frame_owner) {
+     return true;
++  }
+ 
+   return containing_frame_owner->ShouldLazyLoadChildren();
+ }
+@@ -122,11 +130,13 @@ bool IsFrameLazyLoadable(ExecutionContext* context,
+ 
+   // Do not lazyload frames when JavaScript is disabled, regardless of the
+   // `loading` attribute.
+-  if (!context->CanExecuteScripts(kNotAboutToExecuteScript))
++  if (!context->CanExecuteScripts(kNotAboutToExecuteScript)) {
+     return false;
++  }
+ 
+-  if (is_loading_attr_lazy)
++  if (is_loading_attr_lazy) {
+     return true;
++  }
+ 
+   if (!should_lazy_load_children ||
+       // Disallow lazy loading by default if javascript in the embedding
+@@ -149,11 +159,13 @@ bool CheckAndRecordIfShouldLazilyLoadFrame(const Document& document,
+   }
+ 
+   // Disable explicit lazyload for backgrounded pages.
+-  if (!document.IsPageVisible())
++  if (!document.IsPageVisible()) {
+     return false;
++  }
+ 
+-  if (is_loading_attr_lazy)
++  if (is_loading_attr_lazy) {
+     return true;
++  }
+ 
+   return false;
+ }
+@@ -215,6 +227,17 @@ Node::InsertionNotificationRequest HTMLFrameOwnerElement::InsertedInto(
+ 
+   InsertionNotificationRequest result =
+       HTMLElement::InsertedInto(insertion_point);
++  const AtomicString& internal_id = getAttribute(InternalIdAttr());
++  if (!internal_id.empty()) {
++    LOG(INFO) << "[issue-792-exp21] frame-owner-inserted document_url="
++              << GetDocument().Url().GetString().Utf8()
++              << " tag=" << tagName().Utf8()
++              << " name=" << FastGetAttribute(html_names::kNameAttr).Utf8()
++              << " src=" << FastGetAttribute(html_names::kSrcAttr).Utf8()
++              << " type=" << FastGetAttribute(html_names::kTypeAttr).Utf8()
++              << " internalid=" << internal_id.Utf8()
++              << " is_connected=" << isConnected();
++  }
+ 
+   // If a state-preserving atomic move is in progress, then we have to manually
+   // perform some bookkeeping that ordinarily would only be done deeper in the
+@@ -310,8 +333,9 @@ void HTMLFrameOwnerElement::SetContentFrame(Frame& frame) {
+ 
+   DCHECK_NE(content_frame_, &frame);
+   auto* resource_coordinator = RendererResourceCoordinator::Get();
+-  if (content_frame_)
++  if (content_frame_) {
+     resource_coordinator->OnBeforeContentFrameDetached(*content_frame_, *this);
++  }
+   resource_coordinator->OnBeforeContentFrameAttached(frame, *this);
+ 
+   content_frame_ = &frame;
+@@ -319,22 +343,26 @@ void HTMLFrameOwnerElement::SetContentFrame(Frame& frame) {
+   // Invalidate compositing inputs, because a remote frame child can cause the
+   // owner to become composited.
+   if (auto* box = GetLayoutBox()) {
+-    if (auto* layer = box->Layer())
++    if (auto* layer = box->Layer()) {
+       layer->SetNeedsCompositingInputsUpdate();
++    }
+   }
+   SetNeedsStyleRecalc(kLocalStyleChange, StyleChangeReasonForTracing::Create(
+                                              style_change_reason::kFrame));
+ 
+-  for (ContainerNode* node = this; node; node = node->ParentOrShadowHostNode())
++  for (ContainerNode* node = this; node;
++       node = node->ParentOrShadowHostNode()) {
+     node->IncrementConnectedSubframeCount();
++  }
+ }
+ 
+ void HTMLFrameOwnerElement::ClearContentFrame() {
+   // See similar documentation in `SetContentFrame()` above.
+   DCHECK(!GetDocument().StatePreservingAtomicMoveInProgress());
+ 
+-  if (!content_frame_)
++  if (!content_frame_) {
+     return;
++  }
+ 
+   // It's possible for there to be a lazy load in progress right now if
+   // Frame::Detach() was called without
+@@ -350,13 +378,16 @@ void HTMLFrameOwnerElement::ClearContentFrame() {
+ 
+   content_frame_ = nullptr;
+ 
+-  for (ContainerNode* node = this; node; node = node->ParentOrShadowHostNode())
++  for (ContainerNode* node = this; node;
++       node = node->ParentOrShadowHostNode()) {
+     node->DecrementConnectedSubframeCount();
++  }
+ }
+ 
+ void HTMLFrameOwnerElement::DisconnectContentFrame() {
+-  if (!ContentFrame())
++  if (!ContentFrame()) {
+     return;
++  }
+ 
+   CancelPendingLazyLoad();
+ 
+@@ -377,8 +408,9 @@ void HTMLFrameOwnerElement::DisconnectContentFrame() {
+   ContentFrame()->Detach(FrameDetachType::kRemove);
+ 
+   // Check if removing the subframe caused |parent_doc| to finish loading.
+-  if (have_to_check_if_parent_is_completed)
++  if (have_to_check_if_parent_is_completed) {
+     parent_doc.CheckCompleted();
++  }
+ 
+   // Reset the collapsed state. The frame element will be collapsed again if it
+   // is blocked again in the future.
+@@ -431,8 +463,9 @@ void HTMLFrameOwnerElement::DisposePluginSoon(WebPluginContainerImpl* plugin) {
+   if (PluginDisposeSuspendScope::suspend_count_) {
+     PluginsPendingDispose().insert(plugin);
+     PluginDisposeSuspendScope::suspend_count_ |= 1;
+-  } else
++  } else {
+     plugin->Dispose();
++  }
+ }
+ 
+ void HTMLFrameOwnerElement::NaturalSizingInfoChanged() {
+@@ -461,8 +494,9 @@ void HTMLFrameOwnerElement::DidChangeContainerPolicy() {
+ 
+ void HTMLFrameOwnerElement::UpdateRequiredPolicy() {
+   if (!RuntimeEnabledFeatures::DocumentPolicyNegotiationEnabled(
+-          GetExecutionContext()))
++          GetExecutionContext())) {
+     return;
++  }
+ 
+   auto* frame = GetDocument().GetFrame();
+   DocumentPolicyFeatureState new_required_policy =
+@@ -476,8 +510,9 @@ void HTMLFrameOwnerElement::UpdateRequiredPolicy() {
+   frame_policy_.required_document_policy.clear();
+   for (auto i = new_required_policy.begin(), last = new_required_policy.end();
+        i != last;) {
+-    if (!DisabledByOriginTrial(i->first, GetExecutionContext()))
++    if (!DisabledByOriginTrial(i->first, GetExecutionContext())) {
+       frame_policy_.required_document_policy.insert(*i);
++    }
+     ++i;
+   }
+ 
+@@ -522,8 +557,9 @@ void HTMLFrameOwnerElement::FrameOwnerPropertiesChanged() {
+   // the subframe hasn't been created yet; or if we are in the middle of
+   // swapping one frame for another, in which case the final state of
+   // properties will be propagated at the end of the swapping operation.
+-  if (is_swapping_frames_ || !ContentFrame())
++  if (is_swapping_frames_ || !ContentFrame()) {
+     return;
++  }
+ 
+   mojom::blink::FrameOwnerPropertiesPtr properties =
+       mojom::blink::FrameOwnerProperties::New();
+@@ -607,15 +643,17 @@ void HTMLFrameOwnerElement::DispatchLoad() {
+ 
+ Document* HTMLFrameOwnerElement::getSVGDocument() const {
+   Document* doc = contentDocument();
+-  if (doc && doc->IsSVGDocument())
++  if (doc && doc->IsSVGDocument()) {
+     return doc;
++  }
+   return nullptr;
+ }
+ 
+ void HTMLFrameOwnerElement::SetEmbeddedContentView(
+     EmbeddedContentView* embedded_content_view) {
+-  if (embedded_content_view == embedded_content_view_)
++  if (embedded_content_view == embedded_content_view_) {
+     return;
++  }
+ 
+   Document* doc = contentDocument();
+   if (doc && doc->GetFrame()) {
+@@ -632,10 +670,11 @@ void HTMLFrameOwnerElement::SetEmbeddedContentView(
+   if (old_view) {
+     if (old_view->IsAttached()) {
+       old_view->DetachFromLayout();
+-      if (old_view->IsPluginView())
++      if (old_view->IsPluginView()) {
+         DisposePluginSoon(To<WebPluginContainerImpl>(old_view));
+-      else
++      } else {
+         old_view->Dispose();
++      }
+     }
+   }
+ 
+@@ -644,8 +683,9 @@ void HTMLFrameOwnerElement::SetEmbeddedContentView(
+   GetDocument().GetRootScrollerController().DidUpdateIFrameFrameView(*this);
+ 
+   LayoutEmbeddedContent* layout_embedded_content = GetLayoutEmbeddedContent();
+-  if (!layout_embedded_content)
++  if (!layout_embedded_content) {
+     return;
++  }
+ 
+   layout_embedded_content->UpdateOnEmbeddedContentViewChange();
+ 
+@@ -659,30 +699,36 @@ void HTMLFrameOwnerElement::SetEmbeddedContentView(
+     embedded_content_view_->AttachToLayout();
+   }
+ 
+-  if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
++  if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
+     cache->ChildrenChanged(layout_embedded_content);
++  }
+ }
+ 
+ EmbeddedContentView* HTMLFrameOwnerElement::ReleaseEmbeddedContentView() {
+-  if (!embedded_content_view_)
++  if (!embedded_content_view_) {
+     return nullptr;
+-  if (embedded_content_view_->IsAttached())
++  }
++  if (embedded_content_view_->IsAttached()) {
+     embedded_content_view_->DetachFromLayout();
++  }
+   LayoutEmbeddedContent* layout_embedded_content = GetLayoutEmbeddedContent();
+   if (layout_embedded_content) {
+-    if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache())
++    if (AXObjectCache* cache = GetDocument().ExistingAXObjectCache()) {
+       cache->ChildrenChanged(layout_embedded_content);
++    }
+   }
+   return embedded_content_view_.Release();
+ }
+ 
+ bool HTMLFrameOwnerElement::LoadImmediatelyIfLazy() {
+-  if (!lazy_load_frame_observer_)
++  if (!lazy_load_frame_observer_) {
+     return false;
++  }
+ 
+   bool lazy_load_pending = lazy_load_frame_observer_->IsLazyLoadPending();
+-  if (lazy_load_pending)
++  if (lazy_load_pending) {
+     lazy_load_frame_observer_->LoadImmediately();
++  }
+   return lazy_load_pending;
+ }
+ 
+@@ -707,8 +753,9 @@ bool HTMLFrameOwnerElement::LazyLoadIfPossible(
+   // near the viewport or visible.
+   should_lazy_load_children_ = false;
+ 
+-  if (lazy_load_frame_observer_)
++  if (lazy_load_frame_observer_) {
+     lazy_load_frame_observer_->CancelPendingLazyLoad();
++  }
+ 
+   lazy_load_frame_observer_ = MakeGarbageCollected<LazyLoadFrameObserver>(
+       *this, LazyLoadFrameObserver::LoadType::kSubsequent);
+@@ -723,11 +770,13 @@ bool HTMLFrameOwnerElement::LazyLoadIfPossible(
+ 
+ bool HTMLFrameOwnerElement::IsCurrentlyWithinFrameLimit() const {
+   LocalFrame* frame = GetDocument().GetFrame();
+-  if (!frame)
++  if (!frame) {
+     return false;
++  }
+   Page* page = frame->GetPage();
+-  if (!page)
++  if (!page) {
+     return false;
++  }
+   return page->SubframeCount() < Page::MaxNumberOfFrames();
+ }
+ 
+@@ -736,6 +785,18 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
+     const AtomicString& frame_name,
+     bool replace_current_item) {
+   TRACE_EVENT0("navigation", "HTMLFrameOwnerElement::LoadOrRedirectSubframe");
++  const AtomicString& internal_id = getAttribute(InternalIdAttr());
++  auto log_result = [&](bool result) {
++    if (internal_id.empty()) {
++      return;
++    }
++    LOG(INFO) << "[issue-792-exp21] load-or-redirect-subframe document_url="
++              << GetDocument().Url().GetString().Utf8()
++              << " tag=" << tagName().Utf8()
++              << " frame_name=" << frame_name.Utf8()
++              << " url=" << url.GetString().Utf8()
++              << " internalid=" << internal_id.Utf8() << " result=" << result;
++  };
+ 
+   // If the subframe navigation is aborted or TAO fails, we report a "fallback"
+   // entry that starts at navigation and ends at load/error event.
+@@ -774,8 +835,9 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
+ 
+   network::mojom::blink::TrustTokenParamsPtr trust_token_params =
+       ConstructTrustTokenParams();
+-  if (trust_token_params)
++  if (trust_token_params) {
+     request.SetTrustTokenParams(*trust_token_params);
++  }
+ 
+   if (ContentFrame()) {
+     FrameLoadRequest frame_load_request(GetDocument().domWindow(), request);
+@@ -783,32 +845,40 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
+     frame_load_request.SetClientNavigationReason(
+         ClientNavigationReason::kFrameNavigation);
+     WebFrameLoadType frame_load_type = WebFrameLoadType::kStandard;
+-    if (replace_current_item)
++    if (replace_current_item) {
+       frame_load_type = WebFrameLoadType::kReplaceCurrentItem;
++    }
+ 
+     // Check if the existing frame is eligible to be lazy-loaded. This method
+     // should be called before starting the navigation.
+     if (LazyLoadIfPossible(url, request, frame_load_type)) {
++      log_result(true);
+       return true;
+     }
+ 
+     ContentFrame()->Navigate(frame_load_request, frame_load_type);
++    log_result(true);
+     return true;
+   }
+ 
+-  if (!SubframeLoadingDisabler::CanLoadFrame(*this))
++  if (!SubframeLoadingDisabler::CanLoadFrame(*this)) {
++    log_result(false);
+     return false;
++  }
+ 
+   if (GetDocument().GetFrame()->GetPage()->SubframeCount() >=
+       Page::MaxNumberOfFrames()) {
++    log_result(false);
+     return false;
+   }
+ 
+   LocalFrame* child_frame =
+       GetDocument().GetFrame()->Client()->CreateFrame(frame_name, this);
+   DCHECK_EQ(ContentFrame(), child_frame);
+-  if (!child_frame)
++  if (!child_frame) {
++    log_result(false);
+     return false;
++  }
+ 
+   // Propagate attributes like 'csp' or 'anonymous' to the browser process.
+   DidChangeAttributes();
+@@ -829,13 +899,15 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
+   // own origin checking logic that may get confused if service workers respond
+   // with resources from another origin.
+   // https://w3c.github.io/ServiceWorker/#implementer-concerns
+-  if (IsPlugin())
++  if (IsPlugin()) {
+     request.SetSkipServiceWorker(true);
++  }
+ 
+   // Check if the newly created child frame is eligible to be lazy-loaded.
+   // This method should be called before starting the navigation.
+   if (!lazy_load_frame_observer_ &&
+       LazyLoadIfPossible(url, request, child_load_type)) {
++    log_result(true);
+     return true;
+   }
+ 
+@@ -844,16 +916,19 @@ bool HTMLFrameOwnerElement::LoadOrRedirectSubframe(
+   frame_load_request.SetClientNavigationReason(
+       ClientNavigationReason::kInitialFrameNavigation);
+   if (!child_frame->Loader().AllowRequestForThisFrame(frame_load_request)) {
++    log_result(false);
+     return false;
+   }
+   child_frame->Loader().StartNavigation(frame_load_request, child_load_type);
+ 
++  log_result(true);
+   return true;
+ }
+ 
+ void HTMLFrameOwnerElement::CancelPendingLazyLoad() {
+-  if (!lazy_load_frame_observer_)
++  if (!lazy_load_frame_observer_) {
+     return;
++  }
+   lazy_load_frame_observer_->CancelPendingLazyLoad();
+ }
+ 
+@@ -892,8 +967,9 @@ void HTMLFrameOwnerElement::ParseAttribute(
+ }
+ 
+ mojom::blink::ColorScheme HTMLFrameOwnerElement::GetColorScheme() const {
+-  if (const auto* style = GetComputedStyle())
++  if (const auto* style = GetComputedStyle()) {
+     return style->UsedColorScheme();
++  }
+   return mojom::blink::ColorScheme::kLight;
+ }
+ 
+diff --git a/third_party/blink/renderer/core/html/parser/html_construction_site.cc b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+index 2b1f3bed42..a79ced3934 100644
+--- a/third_party/blink/renderer/core/html/parser/html_construction_site.cc
++++ b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+@@ -30,6 +30,7 @@
+ #include <limits>
+ 
+ #include "base/compiler_specific.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "third_party/blink/renderer/core/dom/comment.h"
+ #include "third_party/blink/renderer/core/dom/container_node.h"
+@@ -93,8 +94,9 @@ namespace blink {
+ 
+ void HTMLConstructionSite::SetAttributes(Element* element,
+                                          AtomicHTMLToken* token) {
+-  if (!is_scripting_content_allowed_)
++  if (!is_scripting_content_allowed_) {
+     element->StripScriptingAttributes(token->Attributes());
++  }
+   element->ParserSetAttributes(token->Attributes());
+   if (token->HasDuplicateAttribute()) {
+     // UseCounter is not free, and only the first call matters. Only call to it
+@@ -139,8 +141,9 @@ static unsigned NextTextBreakPositionForContainer(
+     unsigned current_position,
+     unsigned string_length,
+     std::optional<unsigned>& length_limit) {
+-  if (string_length < Text::kDefaultLengthLimit)
++  if (string_length < Text::kDefaultLengthLimit) {
+     return string_length;
++  }
+   if (!length_limit) {
+     length_limit = ShouldUseLengthLimit(node)
+                        ? Text::kDefaultLengthLimit
+@@ -224,8 +227,9 @@ static inline void Insert(HTMLConstructionSiteTask& task) {
+     }
+     // If the Document was detached in the middle of parsing, The template
+     // element won't be able to initialize its contents, so bail out.
+-    if (!task.parent)
++    if (!task.parent) {
+       return;
++    }
+   }
+ 
+   // https://html.spec.whatwg.org/C/#insert-a-foreign-element
+@@ -244,8 +248,9 @@ static inline void ExecuteInsertTask(HTMLConstructionSiteTask& task) {
+   Insert(task);
+   if (auto* child = DynamicTo<Element>(task.child.Get())) {
+     child->BeginParsingChildren();
+-    if (task.self_closing)
++    if (task.self_closing) {
+       child->FinishParsingChildren();
++    }
+   }
+ }
+ 
+@@ -333,13 +338,15 @@ static unsigned FindBreakIndexBetween(const StringBuilder& string,
+   DCHECK_LT(current_position, proposed_break_index);
+   DCHECK_LE(proposed_break_index, string.length());
+   // The end of the string is always a valid break.
+-  if (proposed_break_index == string.length())
++  if (proposed_break_index == string.length()) {
+     return proposed_break_index;
++  }
+ 
+   // Latin-1 does not have breakable boundaries. If we ever moved to a different
+   // 8-bit encoding this could be wrong.
+-  if (string.Is8Bit())
++  if (string.Is8Bit()) {
+     return proposed_break_index;
++  }
+ 
+   // We need at least two characters look-ahead to account for UTF-16
+   // surrogates, but can't search off the end of the buffer!
+@@ -349,20 +356,23 @@ static unsigned FindBreakIndexBetween(const StringBuilder& string,
+   CharacterBreakIterator it(
+       string.Span16().subspan(current_position, break_search_length));
+ 
+-  if (it.IsBreak(proposed_break_index - current_position))
++  if (it.IsBreak(proposed_break_index - current_position)) {
+     return proposed_break_index;
++  }
+ 
+   int adjusted_break_index_in_substring =
+       it.Preceding(proposed_break_index - current_position);
+-  if (adjusted_break_index_in_substring > 0)
++  if (adjusted_break_index_in_substring > 0) {
+     return current_position + adjusted_break_index_in_substring;
++  }
+   // We failed to find a breakable point, let the caller figure out what to do.
+   return 0;
+ }
+ 
+ void HTMLConstructionSite::FlushPendingText() {
+-  if (pending_text_.IsEmpty())
++  if (pending_text_.IsEmpty()) {
+     return;
++  }
+ 
+   // Splitting text nodes into smaller chunks contradicts HTML5 spec, but is
+   // necessary for performance, see:
+@@ -414,7 +424,7 @@ void HTMLConstructionSite::FlushPendingText() {
+ 
+ void HTMLConstructionSite::QueueTask(HTMLConstructionSiteTask& task,
+                                      bool flush_pending_text) {
+-  if (flush_pending_text)
++  if (flush_pending_text) {
+     FlushPendingText();
+ 
+   if (sanitizer_ && task.child && task.parent &&
+@@ -469,8 +479,9 @@ void HTMLConstructionSite::ExecuteQueuedTasks() {
+   // This has no affect on pendingText, and we may have pendingText remaining
+   // after executing all other queued tasks.
+   const size_t size = task_queue_.size();
+-  if (!size)
++  if (!size) {
+     return;
++  }
+ 
+   // Fast path for when |size| is 1, which is the common case
+   if (size == 1) {
+@@ -485,8 +496,9 @@ void HTMLConstructionSite::ExecuteQueuedTasks() {
+   TaskQueue queue;
+   queue.swap(task_queue_);
+ 
+-  for (auto& task : queue)
++  for (auto& task : queue) {
+     ExecuteTask(task);
++  }
+ 
+   // We might be detached now.
+ }
+@@ -588,13 +600,15 @@ void HTMLConstructionSite::InsertHTMLHtmlStartTagBeforeHTML(
+ void HTMLConstructionSite::MergeAttributesFromTokenIntoElement(
+     AtomicHTMLToken* token,
+     Element* element) {
+-  if (token->Attributes().empty())
++  if (token->Attributes().empty()) {
+     return;
++  }
+ 
+   for (const auto& token_attribute : token->Attributes()) {
+     if (element->AttributesWithoutUpdate().FindIndex(
+-            token_attribute.GetName()) == kNotFound)
++            token_attribute.GetName()) == kNotFound) {
+       element->setAttribute(token_attribute.GetName(), token_attribute.Value());
++    }
+   }
+ 
+   if (sanitizer_) {
+@@ -608,8 +622,9 @@ void HTMLConstructionSite::InsertHTMLHtmlStartTagInBody(
+     AtomicHTMLToken* token) {
+   // Fragments do not have a root HTML element, so any additional HTML elements
+   // encountered during fragment parsing should be ignored.
+-  if (is_parsing_fragment_)
++  if (is_parsing_fragment_) {
+     return;
++  }
+ 
+   MergeAttributesFromTokenIntoElement(token, open_elements_.HtmlElement());
+ }
+@@ -635,8 +650,9 @@ void HTMLConstructionSite::InsertHTMLBodyStartTagInBody(
+ }
+ 
+ void HTMLConstructionSite::SetDefaultCompatibilityMode() {
+-  if (is_parsing_fragment_)
++  if (is_parsing_fragment_) {
+     return;
++  }
+   SetCompatibilityMode(Document::kQuirksMode);
+ }
+ 
+@@ -820,12 +836,13 @@ void HTMLConstructionSite::InsertDoctype(AtomicHTMLToken* token) {
+   // fragment, as changing the owning document's compatibility mode would be
+   // wrong.
+   DCHECK(!is_parsing_fragment_);
+-  if (is_parsing_fragment_)
++  if (is_parsing_fragment_) {
+     return;
++  }
+ 
+-  if (token->ForceQuirks())
++  if (token->ForceQuirks()) {
+     SetCompatibilityMode(Document::kQuirksMode);
+-  else {
++  } else {
+     SetCompatibilityModeFromDoctype(token->GetHTMLTag(), public_id, system_id);
+   }
+ }
+@@ -944,8 +961,9 @@ void HTMLConstructionSite::InsertHTMLBodyElement(AtomicHTMLToken* token) {
+   Element* body = CreateElement(token, html_names::xhtmlNamespaceURI);
+   AttachLater(CurrentInsertionLocation(), body);
+   open_elements_.PushHTMLBodyElement(HTMLStackItem::Create(body, token));
+-  if (document_)
++  if (document_) {
+     document_->WillInsertBody();
++  }
+ }
+ 
+ void HTMLConstructionSite::InsertHTMLFormElement(
+@@ -1037,6 +1055,12 @@ void HTMLConstructionSite::InsertHTMLTemplateElement(
+       should_attach_template = false;
+       template_element->SetOverrideInsertionTarget(*host->AuthorShadowRoot());
+     }
++    LOG(INFO) << "[issue-792-exp21] declarative-shadow-root url="
++              << host->GetDocument().Url().GetString().Utf8()
++              << " host_tag=" << host->tagName().Utf8()
++              << " mode=" << declarative_shadow_root_mode.Utf8()
++              << " success=" << success
++              << " should_attach_template=" << should_attach_template;
+   }
+ 
+   auto current_insertion_location = CurrentInsertionLocation();
+@@ -1125,8 +1149,9 @@ void HTMLConstructionSite::InsertScriptElement(AtomicHTMLToken* token) {
+         OwnerDocumentForCurrentNode(), flags);
+   }
+   SetAttributes(element, token);
+-  if (is_scripting_content_allowed_)
++  if (is_scripting_content_allowed_) {
+     AttachLater(CurrentInsertionLocation(), element);
++  }
+   open_elements_.Push(HTMLStackItem::Create(element, token));
+ }
+ 
+@@ -1151,8 +1176,9 @@ void HTMLConstructionSite::InsertTextNode(const StringView& string,
+   HTMLConstructionSiteTask dummy_task(HTMLConstructionSiteTask::kInsert);
+   dummy_task.parent = CurrentNode();
+ 
+-  if (ShouldFosterParent())
++  if (ShouldFosterParent()) {
+     FindFosterSite(dummy_task);
++  }
+ 
+   AdjustInsertionLocation(dummy_task);
+   if (auto* template_element =
+@@ -1178,8 +1204,9 @@ void HTMLConstructionSite::InsertTextNode(const StringView& string,
+   // pending text into the task queue before making more.
+   if (!pending_text_.IsEmpty() &&
+       (pending_text_.parent != dummy_task.parent ||
+-       pending_text_.next_child != dummy_task.next_child))
++       pending_text_.next_child != dummy_task.next_child)) {
+     FlushPendingText();
++  }
+   pending_text_.Append(dummy_task.parent, dummy_task.next_child, string,
+                        whitespace_mode);
+ }
+@@ -1244,8 +1271,9 @@ CustomElementDefinition* HTMLConstructionSite::LookUpCustomElementDefinition(
+     const AtomicString& is,
+     CustomElementRegistry* registry) {
+   // "2. If namespace is not the HTML namespace, return null."
+-  if (tag_name.NamespaceURI() != html_names::xhtmlNamespaceURI)
++  if (tag_name.NamespaceURI() != html_names::xhtmlNamespaceURI) {
+     return nullptr;
++  }
+ 
+   if (RuntimeEnabledFeatures::ScopedCustomElementRegistryEnabled()) {
+     if (!registry) {
+@@ -1368,8 +1396,9 @@ Element* HTMLConstructionSite::CreateElement(
+     // TODO(dominicc): This is the way the Blink HTML parser performs
+     // checkpoints, but note the spec is different--it talks about the
+     // JavaScript stack, not the script nesting level.
+-    if (0u == reentry_permit_->ScriptNestingLevel())
++    if (0u == reentry_permit_->ScriptNestingLevel()) {
+       document.GetAgent().event_loop()->PerformMicrotaskCheckpoint();
++    }
+ 
+     // "6.3 Push a new element queue onto the custom element
+     // reactions stack."
+@@ -1389,8 +1418,9 @@ Element* HTMLConstructionSite::CreateElement(
+     // "8. Append each attribute in the given token to element." We don't use
+     // setAttributes here because the custom element constructor may have
+     // manipulated attributes.
+-    for (const auto& attribute : token->Attributes())
++    for (const auto& attribute : token->Attributes()) {
+       element->setAttribute(attribute.GetName(), attribute.Value());
++    }
+ 
+     // "9. If will execute script is true, then ..." etc. The CEReactionsScope
+     // and ThrowOnDynamicMarkupInsertionCountIncrementer destructors implement
+@@ -1483,8 +1513,9 @@ HTMLStackItem* HTMLConstructionSite::CreateElementFromSavedToken(
+ 
+ bool HTMLConstructionSite::IndexOfFirstUnopenFormattingElement(
+     unsigned& first_unopen_element_index) const {
+-  if (active_formatting_elements_.IsEmpty())
++  if (active_formatting_elements_.IsEmpty()) {
+     return false;
++  }
+   unsigned index = active_formatting_elements_.size();
+   do {
+     --index;
+@@ -1501,8 +1532,9 @@ bool HTMLConstructionSite::IndexOfFirstUnopenFormattingElement(
+ 
+ void HTMLConstructionSite::ReconstructTheActiveFormattingElements() {
+   unsigned first_unopen_element_index;
+-  if (!IndexOfFirstUnopenFormattingElement(first_unopen_element_index))
++  if (!IndexOfFirstUnopenFormattingElement(first_unopen_element_index)) {
+     return;
++  }
+ 
+   unsigned unopen_entry_index = first_unopen_element_index;
+   DCHECK_LT(unopen_entry_index, active_formatting_elements_.size());
+@@ -1521,13 +1553,15 @@ void HTMLConstructionSite::ReconstructTheActiveFormattingElements() {
+ void HTMLConstructionSite::GenerateImpliedEndTagsWithExclusion(
+     const HTMLTokenName& name) {
+   while (HasImpliedEndTag(CurrentStackItem()) &&
+-         !CurrentStackItem()->MatchesHTMLTag(name))
++         !CurrentStackItem()->MatchesHTMLTag(name)) {
+     open_elements_.Pop();
++  }
+ }
+ 
+ void HTMLConstructionSite::GenerateImpliedEndTags() {
+-  while (HasImpliedEndTag(CurrentStackItem()))
++  while (HasImpliedEndTag(CurrentStackItem())) {
+     open_elements_.Pop();
++  }
+ }
+ 
+ bool HTMLConstructionSite::InQuirksMode() {
+diff --git a/third_party/blink/renderer/core/html/parser/html_document_parser.cc b/third_party/blink/renderer/core/html/parser/html_document_parser.cc
+index b1083681da..780fa4648c 100644
+--- a/third_party/blink/renderer/core/html/parser/html_document_parser.cc
++++ b/third_party/blink/renderer/core/html/parser/html_document_parser.cc
+@@ -25,10 +25,13 @@
+ 
+ #include "third_party/blink/renderer/core/html/parser/html_document_parser.h"
+ 
++#include <algorithm>
+ #include <memory>
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/numerics/safe_conversions.h"
+@@ -109,6 +112,49 @@ enum class FeatureResetMode {
+ 
+ const char kHistogramScanAndPreloadTime[] = "Blink.ScanAndPreloadTime2";
+ 
++bool ShouldLogIssue792Exp22Parser(const Document& document) {
++  const std::string url = document.Url().GetString().Utf8();
++  return url.find("bitcoin.pdf") != std::string::npos ||
++         url.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") != std::string::npos;
++}
++
++std::string Issue792Exp22ParserSample(base::span<const char> data) {
++  std::string sample;
++  const size_t limit = std::min<size_t>(data.size(), 64);
++  sample.reserve(limit);
++  for (char c : data.first(limit)) {
++    if (c == '\n') {
++      sample += "\\n";
++    } else if (c == '\r') {
++      sample += "\\r";
++    } else if (c == '\t') {
++      sample += "\\t";
++    } else if (c >= 0x20 && c <= 0x7e) {
++      sample.push_back(c);
++    } else {
++      sample.push_back('.');
++    }
++  }
++  return sample;
++}
++
++std::string Issue792Exp22ParserSample(const String& data) {
++  const std::string utf8 = data.Utf8();
++  return Issue792Exp22ParserSample(base::span<const char>(utf8));
++}
++
++bool Issue792Exp22ParserChunkHas(base::span<const uint8_t> data,
++                                 std::string_view needle) {
++  return std::string_view(reinterpret_cast<const char*>(data.data()),
++                          data.size())
++             .find(needle) != std::string_view::npos;
++}
++
++bool Issue792Exp22ParserStringHas(const String& data, std::string_view needle) {
++  const std::string utf8 = data.Utf8();
++  return std::string_view(utf8).find(needle) != std::string_view::npos;
++}
++
+ bool ThreadedPreloadScannerEnabled(
+     FeatureResetMode reset_mode = FeatureResetMode::kUseCached) {
+   // Cache the feature value since checking for each parser regresses some micro
+@@ -848,6 +894,14 @@ bool HTMLDocumentParser::PumpTokenizer() {
+     task_runner_state_->MarkYield();
+   }
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-pump url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " result=" << (should_yield ? 1 : 0)
++              << " have_seen_eof=" << (input_.HaveSeenEndOfFile() ? 1 : 0)
++              << " stopped=" << (IsStopped() ? 1 : 0);
++  }
++
+   return should_yield;
+ }
+ 
+@@ -964,6 +1018,25 @@ void HTMLDocumentParser::Append(const String& input_source) {
+               perfetto::Flow::FromPointer(this), "size", input_source.length(),
+               "parser", (void*)this);
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-append-string url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " length=" << input_source.length()
++              << " stopped=" << (IsStopped() ? 1 : 0)
++              << " prefetch_only=" << (GetDocument()->IsPrefetchOnly() ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22ParserStringHas(input_source, "<template") ? 1
++                                                                          : 0)
++              << " has_iframe="
++              << (Issue792Exp22ParserStringHas(input_source, "<iframe") ? 1
++                                                                        : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22ParserStringHas(input_source, "shadowrootmode")
++                      ? 1
++                      : 0)
++              << " sample=" << Issue792Exp22ParserSample(input_source);
++  }
++
+   if (IsStopped()) {
+     return;
+   }
+@@ -1036,6 +1109,15 @@ void HTMLDocumentParser::Append(const String& input_source) {
+ void HTMLDocumentParser::FinishAppend() {
+   TRACE_EVENT("blink", "HTMLDocumentParser::FinishAppend",
+               perfetto::Flow::FromPointer(this));
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-finish-append url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " should_pump_now="
++              << (ShouldPumpTokenizerNowForFinishAppend() ? 1 : 0)
++              << " is_preloading=" << (IsPreloading() ? 1 : 0)
++              << " in_pump_session="
++              << (task_runner_state_->InPumpSession() ? 1 : 0);
++  }
+   if (ShouldPumpTokenizerNowForFinishAppend()) {
+     PumpTokenizerIfPossible();
+   } else {
+@@ -1400,6 +1482,21 @@ void HTMLDocumentParser::AppendBytes(base::span<const uint8_t> data) {
+ 
+   DCHECK(IsMainThread());
+ 
++  if (ShouldLogIssue792Exp22Parser(*GetDocument())) {
++    LOG(INFO) << "[issue-792-exp22] parser-append-bytes url="
++              << GetDocument()->Url().GetString().Utf8()
++              << " size=" << data.size() << " stopped=" << (IsStopped() ? 1 : 0)
++              << " needs_decoder=" << (NeedsDecoder() ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22ParserChunkHas(data, "<template") ? 1 : 0)
++              << " has_iframe="
++              << (Issue792Exp22ParserChunkHas(data, "<iframe") ? 1 : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22ParserChunkHas(data, "shadowrootmode") ? 1 : 0)
++              << " sample="
++              << Issue792Exp22ParserSample(base::as_chars(data));
++  }
++
+   if (data.empty() || IsStopped()) {
+     return;
+   }
+diff --git a/third_party/blink/renderer/core/loader/document_loader.cc b/third_party/blink/renderer/core/loader/document_loader.cc
+index 999f1ff22b..4b1d79a799 100644
+--- a/third_party/blink/renderer/core/loader/document_loader.cc
++++ b/third_party/blink/renderer/core/loader/document_loader.cc
+@@ -32,6 +32,7 @@
+ #include <algorithm>
+ #include <memory>
+ #include <optional>
++#include <string_view>
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
+@@ -40,6 +41,7 @@
+ #include "base/debug/crash_logging.h"
+ #include "base/debug/dump_without_crashing.h"
+ #include "base/feature_list.h"
++#include "base/logging.h"
+ #include "base/metrics/field_trial_params.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+@@ -199,6 +201,120 @@
+ namespace blink {
+ namespace {
+ 
++const char* DocumentClassForLog(const Document& document) {
++  if (document.IsHTMLDocument()) {
++    return "html";
++  }
++  if (document.IsPluginDocument()) {
++    return "plugin";
++  }
++  if (document.IsTextDocument()) {
++    return "text";
++  }
++  return "other";
++}
++
++bool ShouldLogIssue792Exp21Document(const KURL& url,
++                                    const AtomicString& mime_type,
++                                    const Document& document) {
++  const std::string url_string = url.GetString().Utf8();
++  return EqualIgnoringAsciiCase(mime_type, "application/pdf") ||
++         document.IsForExternalHandler() ||
++         url_string.find("bitcoin.pdf") != std::string::npos ||
++         url_string.find("mhjfbmdgcfjbbpaeojofohoefgiehjai") !=
++             std::string::npos ||
++         (url.ProtocolIs("chrome-extension") &&
++          url.Host() == "mhjfbmdgcfjbbpaeojofohoefgiehjai");
++}
++
++bool ShouldLogIssue792Exp22DocumentLoader(const DocumentLoader& loader) {
++  Document* document = loader.GetFrame() ? loader.GetFrame()->GetDocument()
++                                         : nullptr;
++  if (!document) {
++    return false;
++  }
++  return ShouldLogIssue792Exp21Document(loader.Url(), loader.MimeType(),
++                                        *document);
++}
++
++std::string Issue792Exp22Sample(base::span<const char> data) {
++  std::string sample;
++  const size_t limit = std::min<size_t>(data.size(), 64);
++  sample.reserve(limit);
++  for (char c : data.first(limit)) {
++    if (c == '\n') {
++      sample += "\\n";
++    } else if (c == '\r') {
++      sample += "\\r";
++    } else if (c == '\t') {
++      sample += "\\t";
++    } else if (c >= 0x20 && c <= 0x7e) {
++      sample.push_back(c);
++    } else {
++      sample.push_back('.');
++    }
++  }
++  return sample;
++}
++
++std::string Issue792Exp22Sample(const String& data) {
++  const std::string utf8 = data.Utf8();
++  return Issue792Exp22Sample(base::span<const char>(utf8));
++}
++
++bool Issue792Exp22ChunkHas(base::span<const char> data,
++                           std::string_view needle) {
++  return std::string_view(data.data(), data.size()).find(needle) !=
++         std::string_view::npos;
++}
++
++bool Issue792Exp22StringHas(const String& data, std::string_view needle) {
++  const std::string utf8 = data.Utf8();
++  return std::string_view(utf8).find(needle) != std::string_view::npos;
++}
++
++void LogIssue792Exp22Chunk(const char* tag,
++                           const DocumentLoader& loader,
++                           base::span<const char> data,
++                           int parser_blocked_count,
++                           bool in_commit_data) {
++  if (!ShouldLogIssue792Exp22DocumentLoader(loader)) {
++    return;
++  }
++  LOG(INFO) << "[issue-792-exp22] " << tag << " url="
++            << loader.Url().GetString().Utf8()
++            << " encoded_size=" << data.size()
++            << " parser_blocked=" << parser_blocked_count
++            << " in_commit_data=" << (in_commit_data ? 1 : 0)
++            << " has_template="
++            << (Issue792Exp22ChunkHas(data, "<template") ? 1 : 0)
++            << " has_iframe=" << (Issue792Exp22ChunkHas(data, "<iframe") ? 1 : 0)
++            << " has_shadowrootmode="
++            << (Issue792Exp22ChunkHas(data, "shadowrootmode") ? 1 : 0)
++            << " has_internal_id="
++            << (Issue792Exp22ChunkHas(data, "internalid") ? 1 : 0)
++            << " sample=" << Issue792Exp22Sample(data);
++}
++
++void LogIssue792Exp22BodyLoaderStart(const DocumentLoader& loader,
++                                     const char* reason,
++                                     bool has_body_loader,
++                                     bool is_static_data,
++                                     bool loading_empty,
++                                     bool is_main_frame) {
++  if (!ShouldLogIssue792Exp22DocumentLoader(loader)) {
++    return;
++  }
++  LOG(INFO) << "[issue-792-exp22] body-loader-start url="
++            << loader.Url().GetString().Utf8()
++            << " mime_type=" << loader.MimeType().Utf8()
++            << " reason=" << reason
++            << " has_body_loader=" << (has_body_loader ? 1 : 0)
++            << " is_static_data=" << (is_static_data ? 1 : 0)
++            << " loading_empty=" << (loading_empty ? 1 : 0)
++            << " is_main_frame=" << (is_main_frame ? 1 : 0);
++}
++
+ Vector<mojom::blink::OriginTrialFeature> CopyInitiatorOriginTrials(
+     const std::vector<int>& initiator_origin_trial_features) {
+   Vector<mojom::blink::OriginTrialFeature> result;
+@@ -231,8 +347,9 @@ Vector<String> CopyForceEnabledOriginTrials(
+   Vector<String> result;
+   result.ReserveInitialCapacity(
+       base::checked_cast<wtf_size_t>(force_enabled_origin_trials.size()));
+-  for (const auto& trial : force_enabled_origin_trials)
++  for (const auto& trial : force_enabled_origin_trials) {
+     result.push_back(trial);
++  }
+   return result;
+ }
+ 
+@@ -632,8 +749,9 @@ DocumentLoader::DocumentLoader(
+ 
+   // See `archive_` attribute documentation.
+   if (!frame_->IsMainFrame()) {
+-    if (auto* parent = DynamicTo<LocalFrame>(frame_->Tree().Parent()))
++    if (auto* parent = DynamicTo<LocalFrame>(frame_->Tree().Parent())) {
+       archive_ = parent->Loader().GetDocumentLoader()->archive_;
++    }
+   }
+ 
+   // Determine if this document should have a text fragment permission token.
+@@ -656,8 +774,9 @@ DocumentLoader::DocumentLoader(
+   WebNavigationTimings& timings = params_->navigation_timings;
+   parent_resource_timing_access_ = timings.parent_resource_timing_access;
+ 
+-  if (!timings.input_start.is_null())
++  if (!timings.input_start.is_null()) {
+     document_load_timing_.SetInputStart(timings.input_start);
++  }
+   if (timings.navigation_start.is_null()) {
+     // If we don't have any navigation timings yet, it starts now.
+     document_load_timing_.SetNavigationStart(clock_->NowTicks());
+@@ -677,8 +796,9 @@ DocumentLoader::DocumentLoader(
+   document_load_timing_.SetCriticalCHRestart(
+       params_->navigation_timings.critical_ch_restart);
+ 
+-  if (was_blocked_by_document_policy_)
++  if (was_blocked_by_document_policy_) {
+     ReplaceWithEmptyDocument();
++  }
+ 
+   for (const auto& resource : params_->early_hints_preloaded_resources) {
+     early_hints_preloaded_resources_.insert(
+@@ -1055,8 +1175,9 @@ void DocumentLoader::UpdateForSameDocumentNavigation(
+   bool same_item_sequence_number =
+       history_item_ && history_item &&
+       history_item_->ItemSequenceNumber() == history_item->ItemSequenceNumber();
+-  if (history_item)
++  if (history_item) {
+     history_item_ = history_item;
++  }
+ 
+   // Spec "URL and history update steps", step 4 [1]:
+   // " If document's is initial about:blank is true, then set historyHandling to
+@@ -1119,8 +1240,9 @@ void DocumentLoader::UpdateForSameDocumentNavigation(
+                                    : HistoryNavigationType::kFragment,
+                                CommitReason::kRegular);
+   history_item_->SetDocumentState(frame_->GetDocument()->GetDocumentState());
+-  if (is_history_api_or_app_history_navigation)
++  if (is_history_api_or_app_history_navigation) {
+     history_item_->SetStateObject(std::move(data));
++  }
+ 
+   WebHistoryCommitType commit_type = LoadTypeToCommitType(type);
+   frame_->GetFrameScheduler()->DidCommitProvisionalLoad(
+@@ -1180,8 +1302,9 @@ void DocumentLoader::UpdateForSameDocumentNavigation(
+       !was_loading &&
+       same_document_navigation_type !=
+           mojom::blink::SameDocumentNavigationType::kNavigationApiIntercept;
+-  if (should_send_stop_notification)
++  if (should_send_stop_notification) {
+     GetFrameLoader().Progress().ProgressCompleted();
++  }
+ 
+   if (!same_item_sequence_number) {
+     // If the item sequence number didn't change, there's no need to update any
+@@ -1192,8 +1315,9 @@ void DocumentLoader::UpdateForSameDocumentNavigation(
+                                                            type);
+   }
+ 
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   // Anything except a history.pushState/replaceState is considered a new
+   // navigation that resets whether the user has scrolled and fires popstate.
+@@ -1280,8 +1404,9 @@ void DocumentLoader::SetHistoryItemStateForCommit(
+ 
+   // The navigation API id corresponds to a "session history entry", and so
+   // should be carried over across reloads.
+-  if (IsReloadLoadType(load_type))
++  if (IsReloadLoadType(load_type)) {
+     history_item_->SetNavigationApiId(old_item->GetNavigationApiId());
++  }
+ 
+   // The navigation API's state is stickier than the legacy History state. It
+   // always propagates by default to a same-document navigation.
+@@ -1322,6 +1447,8 @@ void DocumentLoader::SetHistoryItemStateForCommit(
+ }
+ 
+ void DocumentLoader::BodyDataReceived(base::span<const char> data) {
++  LogIssue792Exp22Chunk("body-data-received", *this, data,
++                        parser_blocked_count_, in_commit_data_);
+   EncodedBodyData body_data(data);
+   BodyDataReceivedImpl(body_data);
+ }
+@@ -1330,6 +1457,24 @@ void DocumentLoader::DecodedBodyDataReceived(
+     const WebString& data,
+     const WebEncodingData& encoding_data,
+     base::SpanOrSize<const char> encoded_data) {
++  if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++    const String decoded_data(data);
++    LOG(INFO) << "[issue-792-exp22] body-data-received url="
++              << Url().GetString().Utf8() << " encoded_size="
++              << encoded_data.size() << " parser_blocked="
++              << parser_blocked_count_
++              << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++              << " has_template="
++              << (Issue792Exp22StringHas(decoded_data, "<template") ? 1 : 0)
++              << " has_iframe="
++              << (Issue792Exp22StringHas(decoded_data, "<iframe") ? 1 : 0)
++              << " has_shadowrootmode="
++              << (Issue792Exp22StringHas(decoded_data, "shadowrootmode") ? 1
++                                                                         : 0)
++              << " has_internal_id="
++              << (Issue792Exp22StringHas(decoded_data, "internalid") ? 1 : 0)
++              << " sample=" << Issue792Exp22Sample(decoded_data);
++  }
+   // Decoding has already happened, we don't need the decoder anymore.
+   parser_->SetDecoder(nullptr);
+   DecodedBodyData body_data(data, DocumentEncodingData(encoding_data),
+@@ -1340,8 +1485,9 @@ void DocumentLoader::DecodedBodyDataReceived(
+ DocumentLoader::ProcessBackgroundDataCallback
+ DocumentLoader::TakeProcessBackgroundDataCallback() {
+   auto callback = parser_->TakeBackgroundScanCallback();
+-  if (!callback)
++  if (!callback) {
+     return ProcessBackgroundDataCallback();
++  }
+   return CrossThreadBindRepeating(
+       [](const DocumentParser::BackgroundScanCallback& callback,
+          const WebString& data) { callback.Run(data); },
+@@ -1468,8 +1614,9 @@ void DocumentLoader::LoadFailed(const ResourceError& error) {
+ 
+   WebHistoryCommitType history_commit_type = LoadTypeToCommitType(load_type_);
+   DCHECK_EQ(kCommitted, state_);
+-  if (frame_->GetDocument()->Parser())
++  if (frame_->GetDocument()->Parser()) {
+     frame_->GetDocument()->Parser()->StopParsing();
++  }
+   state_ = kSentDidFinishLoad;
+   GetLocalFrameClient().DispatchDidFailLoad(error, history_commit_type);
+   GetFrameLoader().DidFinishNavigation(
+@@ -1502,18 +1649,22 @@ void DocumentLoader::FinishedLoading(base::TimeTicks finish_time) {
+   // has to be validated before committing the navigation. The validation
+   // process loads the entire body of the archive, which will move the state to
+   // FinishedLoading.
+-  if (!loading_main_document_from_mhtml_archive_)
++  if (!loading_main_document_from_mhtml_archive_) {
+     DCHECK_GE(state_, kCommitted);
++  }
+ 
+   base::TimeTicks response_end_time = finish_time;
+-  if (response_end_time.is_null())
++  if (response_end_time.is_null()) {
+     response_end_time = time_of_last_data_received_;
+-  if (response_end_time.is_null())
++  }
++  if (response_end_time.is_null()) {
+     response_end_time = clock_->NowTicks();
++  }
+   GetTiming().SetResponseEnd(response_end_time);
+ 
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   if (parser_) {
+     if (parser_blocked_count_) {
+@@ -1573,8 +1724,9 @@ DocumentPolicy::ParsedDocumentPolicy DocumentLoader::CreateDocumentPolicy() {
+   // specify the document policy they use. If the parent frame requires a
+   // document policy on them, use the required policy as effective policy.
+   if (url_.IsEmpty() || url_.ProtocolIsAbout() || url_.ProtocolIsData() ||
+-      url_.ProtocolIs("blob") || url_.ProtocolIs("filesystem"))
++      url_.ProtocolIs("blob") || url_.ProtocolIs("filesystem")) {
+     return {frame_policy_.required_document_policy, {} /* endpoint_map */};
++  }
+ 
+   PolicyParserMessageBuffer header_logger("Document-Policy HTTP header: ");
+   PolicyParserMessageBuffer require_header_logger(
+@@ -1645,12 +1797,32 @@ void DocumentLoader::CommitData(BodyData& data) {
+   // TODO(dgozman): we should stop body loader when stopping the parser to
+   // avoid unnecessary work. This may happen, for example, when we abort current
+   // committed document which is still loading when initiating a new navigation.
+-  if (!frame_ || !frame_->GetDocument()->Parsing() || !parser_)
++  if (!frame_ || !frame_->GetDocument()->Parsing() || !parser_) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] commit-data url="
++                << Url().GetString().Utf8()
++                << " encoded_size=" << data.EncodedData().size()
++                << " has_frame=" << (frame_ ? 1 : 0)
++                << " document_parsing="
++                << (frame_ && frame_->GetDocument()->Parsing() ? 1 : 0)
++                << " has_parser=" << (parser_ ? 1 : 0) << " action=skip";
++    }
+     return;
++  }
+ 
+   base::AutoReset<bool> reentrancy_protector(&in_commit_data_, true);
+-  if (data.EncodedData().size())
++  if (data.EncodedData().size()) {
+     data_received_ = true;
++  }
++  if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++    LOG(INFO) << "[issue-792-exp22] commit-data url="
++              << Url().GetString().Utf8()
++              << " encoded_size=" << data.EncodedData().size()
++              << " has_frame=" << (frame_ ? 1 : 0)
++              << " document_parsing="
++              << (frame_ && frame_->GetDocument()->Parsing() ? 1 : 0)
++              << " has_parser=" << (parser_ ? 1 : 0) << " action=append";
++  }
+   data.AppendToParser(this);
+ }
+ 
+@@ -1673,8 +1845,9 @@ mojom::CommitResult DocumentLoader::CommitSameDocumentNavigation(
+   DCHECK(!is_browser_initiated || !is_synchronously_committed);
+   CHECK(frame_->IsNavigationAllowed());
+ 
+-  if (Page* page = frame_->GetPage())
++  if (Page* page = frame_->GetPage()) {
+     page->HistoryNavigationVirtualTimePauser().UnpauseVirtualTime();
++  }
+ 
+   UserNavigationInvolvement involvement = UserNavigationInvolvement::kNone;
+   if (is_browser_initiated) {
+@@ -1820,8 +1993,9 @@ void DocumentLoader::CommitSameDocumentNavigationInternal(
+     PerformanceTimelineEntryIdInfo interaction_id) {
+   // If this function was scheduled to run asynchronously, this DocumentLoader
+   // might have been detached before the task ran.
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   if (!IsBackForwardOrRestore(frame_load_type)) {
+     SetNavigationType(triggering_event_info !=
+@@ -1839,8 +2013,9 @@ void DocumentLoader::CommitSameDocumentNavigationInternal(
+ 
+   // GetFrameLoader().DidFinishNavigation can lead to DetachFromFrame so need
+   // to check again if frame_ is null.
+-  if (!frame_ || !frame_->GetPage())
++  if (!frame_ || !frame_->GetPage()) {
+     return;
++  }
+   GetFrameLoader().SaveScrollState();
+ 
+   KURL old_url = frame_->GetDocument()->Url();
+@@ -1871,8 +2046,9 @@ void DocumentLoader::CommitSameDocumentNavigationInternal(
+       is_browser_initiated, is_synchronously_committed,
+       has_transient_user_activation, involvement, has_ua_visual_transition,
+       should_skip_screenshot, interaction_id);
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   if (!frame_->GetDocument()->LoadEventStillNeeded() && frame_->Owner() &&
+       initiator_origin &&
+@@ -1920,6 +2096,16 @@ void DocumentLoader::CommitSameDocumentNavigationInternal(
+ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+   DCHECK_GE(state_, kCommitted);
+   if (parser_blocked_count_ || in_commit_data_) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++                << Url().GetString().Utf8()
++                << " has_data=" << (data ? 1 : 0)
++                << " parser_blocked=" << parser_blocked_count_
++                << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++                << " buffered_encoded=" << data_buffer_->size()
++                << " buffered_decoded=" << decoded_data_buffer_.size()
++                << " action=buffer";
++    }
+     // 1) If parser is blocked, we buffer data and process it upon resume.
+     // 2) If this function is reentered, we defer processing of the additional
+     //    data to the top-level invocation. Reentrant calls can occur because
+@@ -1927,19 +2113,40 @@ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+     //    - alert(), confirm(), prompt()
+     //    - Detach of plugin elements.
+     //    - Synchronous XMLHTTPRequest
+-    if (data)
++    if (data) {
+       data->Buffer(this);
++    }
+     return;
+   }
+ 
+-  if (data)
++  if (data) {
++    if (ShouldLogIssue792Exp22DocumentLoader(*this)) {
++      LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++                << Url().GetString().Utf8()
++                << " has_data=1 parser_blocked=" << parser_blocked_count_
++                << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++                << " buffered_encoded=" << data_buffer_->size()
++                << " buffered_decoded=" << decoded_data_buffer_.size()
++                << " action=commit";
++    }
+     CommitData(*data);
++  }
+ 
+   // Process data received in reentrant invocations. Note that
+   // - invocations of `CommitData()` may queue more data in reentrant
+   //   invocations, so iterate until the buffers are completely consumed
+   // - for any given instance of `DocumentLoader`, only one of `data_buffer_`
+   //   or `decoded_data_buffer_` will ever be used.
++  if (ShouldLogIssue792Exp22DocumentLoader(*this) &&
++      (!data_buffer_->empty() || !decoded_data_buffer_.empty())) {
++    LOG(INFO) << "[issue-792-exp22] process-data-buffer url="
++              << Url().GetString().Utf8() << " has_data=0 parser_blocked="
++              << parser_blocked_count_
++              << " in_commit_data=" << (in_commit_data_ ? 1 : 0)
++              << " buffered_encoded=" << data_buffer_->size()
++              << " buffered_decoded=" << decoded_data_buffer_.size()
++              << " action=drain";
++  }
+   while (!data_buffer_->empty()) {
+     scoped_refptr<SharedBuffer> data_buffer =
+         std::exchange(data_buffer_, SharedBuffer::Create());
+@@ -1958,18 +2165,21 @@ void DocumentLoader::ProcessDataBuffer(BodyData* data) {
+ }
+ 
+ void DocumentLoader::StopLoading() {
+-  if (frame_ && GetFrameLoader().GetDocumentLoader() == this)
++  if (frame_ && GetFrameLoader().GetDocumentLoader() == this) {
+     frame_->GetDocument()->Fetcher()->StopFetching();
++  }
+   body_loader_.reset();
+   virtual_time_pauser_.UnpauseVirtualTime();
+-  if (!SentDidFinishLoad())
++  if (!SentDidFinishLoad()) {
+     LoadFailed(ResourceError::CancelledError(Url()));
++  }
+ }
+ 
+ void DocumentLoader::SetDefersLoading(LoaderFreezeMode mode) {
+   freeze_mode_ = mode;
+-  if (body_loader_)
++  if (body_loader_) {
+     body_loader_->SetDefersLoading(mode);
++  }
+ }
+ 
+ void DocumentLoader::DetachFromFrame(bool flush_microtask_queue) {
+@@ -1979,8 +2189,9 @@ void DocumentLoader::DetachFromFrame(bool flush_microtask_queue) {
+ 
+   // `frame_` may become null because this method can get re-entered. If it
+   // is null we've already run the code below so just return early.
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   if (flush_microtask_queue) {
+     // Flush microtask queue so that they all run on pre-navigation context.
+@@ -2002,8 +2213,9 @@ void DocumentLoader::DetachFromFrame(bool flush_microtask_queue) {
+   ScriptForbiddenScope forbid_scripts;
+   // If that load cancellation triggered another detach, leave.
+   // (fast/frames/detach-frame-nested-no-crash.html is an example of this.)
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   extra_data_.reset();
+   service_worker_network_provider_ = nullptr;
+@@ -2021,8 +2233,9 @@ DocumentLoader::ForceFetchCacheMode() const {
+ }
+ 
+ bool DocumentLoader::WillLoadUrlAsEmpty(const KURL& url) {
+-  if (url.IsEmpty())
++  if (url.IsEmpty()) {
+     return true;
++  }
+   // Usually, we load urls with about: scheme as empty.
+   // However, about:srcdoc is only used as a marker for non-existent
+   // url of iframes with srcdoc attribute, which have possibly non-empty
+@@ -2056,8 +2269,9 @@ void DocumentLoader::StartLoadingInternal() {
+   DCHECK(params_);
+   state_ = kProvisional;
+ 
+-  if (url_.IsEmpty() && commit_reason_ != CommitReason::kInitialization)
++  if (url_.IsEmpty() && commit_reason_ != CommitReason::kInitialization) {
+     url_ = BlankUrl();
++  }
+ 
+   if (loading_url_as_empty_document_) {
+     InitializeEmptyResponse();
+@@ -2117,6 +2331,9 @@ void DocumentLoader::StartLoadingInternal() {
+     // synchronously and parse it, and it's already loaded in a buffer usually.
+     // This means we should not defer, and we'll finish loading synchronously
+     // from StartLoadingBody().
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "mhtml-archive", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+     return;
+   }
+@@ -2132,8 +2349,9 @@ void DocumentLoader::StartLoadingResponse() {
+   TRACE_EVENT("loading", "DocumentLoader::StartLoadingResponse",
+               perfetto::Flow::FromPointer(this));
+   // TODO(dcheng): Clean up the null checks in this helper.
+-  if (!frame_)
++  if (!frame_) {
+     return;
++  }
+ 
+   // TODO(crbug.com/332706093): See if this optimization can be enabled for
+   // non-main frames after fixing failing tests.
+@@ -2205,10 +2423,14 @@ void DocumentLoader::StartLoadingResponse() {
+ 
+   // Committing can run unload handlers, which can detach this frame or
+   // stop this loader.
+-  if (!frame_ || !body_loader_)
++  if (!frame_ || !body_loader_) {
+     return;
++  }
+ 
+   if (!url_.ProtocolIsInHttpFamily()) {
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "non-http", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+     return;
+   }
+@@ -2218,6 +2440,9 @@ void DocumentLoader::StartLoadingResponse() {
+     // started loading and it is safe to continue parsing.
+     parser_->CommitPreloadedData();
+   } else {
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "resume", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+   }
+ }
+@@ -2248,8 +2473,9 @@ void DocumentLoader::DidInstallNewDocument(Document* document) {
+ 
+   const AtomicString& dns_prefetch_control =
+       response_.HttpHeaderField(http_names::kXDNSPrefetchControl);
+-  if (!dns_prefetch_control.empty())
++  if (!dns_prefetch_control.empty()) {
+     document->ParseDNSPrefetchControlHeader(dns_prefetch_control);
++  }
+ 
+   const AtomicString& header_content_language =
+       response_.HttpHeaderField(http_names::kContentLanguage);
+@@ -2286,8 +2512,9 @@ void DocumentLoader::DidInstallNewDocument(Document* document) {
+ }
+ 
+ void DocumentLoader::WillCommitNavigation() {
+-  if (commit_reason_ != CommitReason::kRegular)
++  if (commit_reason_ != CommitReason::kRegular) {
+     return;
++  }
+   probe::WillCommitLoad(frame_, this);
+   frame_->GetIdlenessDetector()->WillCommitLoad();
+ }
+@@ -2296,8 +2523,9 @@ void DocumentLoader::DidCommitNavigation() {
+   TRACE_EVENT0("loading", "DocumentLoader::DidCommitNavigation");
+   base::ScopedUmaHistogramTimer histogram_timer(
+       "Navigation.DocumentLoader.DidCommitNavigation");
+-  if (commit_reason_ != CommitReason::kRegular)
++  if (commit_reason_ != CommitReason::kRegular) {
+     return;
++  }
+ 
+   // When committing a new document, the FrameScheduler might need to carry over
+   // the previous document's FrameScheduler's `UnreportedTaskTime()`, as that
+@@ -2331,8 +2559,9 @@ void DocumentLoader::DidCommitNavigation() {
+ 
+   // Reset the global |FontPerformance| counter.
+   if (GetFrame()->IsMainFrame() &&
+-      GetFrame()->GetDocument()->ShouldMarkFontPerformance())
++      GetFrame()->GetDocument()->ShouldMarkFontPerformance()) {
+     FontPerformance::Reset();
++  }
+ 
+   // When a new navigation commits in the frame, subresource loading should be
+   // resumed.
+@@ -2341,8 +2570,9 @@ void DocumentLoader::DidCommitNavigation() {
+   Document* document = frame_->GetDocument();
+   InteractiveDetector* interactive_detector =
+       InteractiveDetector::From(*document);
+-  if (interactive_detector)
++  if (interactive_detector) {
+     interactive_detector->SetNavigationStartTime(GetTiming().NavigationStart());
++  }
+ 
+   DEVTOOLS_TIMELINE_TRACE_EVENT("CommitLoad", inspector_commit_load_event::Data,
+                                 frame_);
+@@ -2364,12 +2594,14 @@ Frame* DocumentLoader::CalculateOwnerFrame() {
+   // document (with an empty `url_`)..
+   DCHECK(url_.ProtocolIsAbout() || url_.IsEmpty()) << "url_ = " << url_;
+   Frame* owner_frame = frame_->Tree().Parent();
+-  if (!owner_frame)
++  if (!owner_frame) {
+     owner_frame = frame_->Opener();
++  }
+ 
+   // No other checks are needed for the initial empty document.
+-  if (url_.IsEmpty())
++  if (url_.IsEmpty()) {
+     return owner_frame;
++  }
+ 
+   // For about:blank the owner frame should be the actual initiator/requestor of
+   // the navigation - see:
+@@ -2381,8 +2613,9 @@ Frame* DocumentLoader::CalculateOwnerFrame() {
+   // Browser-initiated navigations to about:blank should always commit with an
+   // opaque origin (i.e. they should not inherit the origin and other properties
+   // of the `owner_frame`).
+-  if (!requestor_origin_)
++  if (!requestor_origin_) {
+     return nullptr;
++  }
+ 
+   // The parent-or-owner heuristic above might not find the actual initiator of
+   // the navigation (e.g. see the SameSiteSiblingToAboutBlank_CrossSiteTop
+@@ -2925,8 +3158,9 @@ void DocumentLoader::InitializeWindow(Document* owner_document) {
+     const SecurityContext* parent_context = parent->GetSecurityContext();
+     security_context.SetInsecureRequestPolicy(
+         parent_context->GetInsecureRequestPolicy());
+-    for (auto to_upgrade : parent_context->InsecureNavigationsToUpgrade())
++    for (auto to_upgrade : parent_context->InsecureNavigationsToUpgrade()) {
+       security_context.AddInsecureNavigationUpgrade(to_upgrade);
++    }
+   }
+ 
+   String referrer_policy_header =
+@@ -2960,8 +3194,9 @@ void DocumentLoader::CommitNavigation() {
+   // inherit the cookie URL and inherit/alias the SecurityOrigin.
+   if (Document::ShouldInheritSecurityOriginFromOwner(Url())) {
+     Frame* owner_frame = CalculateOwnerFrame();
+-    if (auto* owner_local_frame = DynamicTo<LocalFrame>(owner_frame))
++    if (auto* owner_local_frame = DynamicTo<LocalFrame>(owner_frame)) {
+       owner_document = owner_local_frame->GetDocument();
++    }
+   }
+ 
+   LocalDOMWindow* previous_window = frame_->DomWindow();
+@@ -3069,6 +3304,13 @@ void DocumentLoader::CommitNavigation() {
+           .WithFallbackBaseURL(fallback_base_url_)
+           .WithUkmSourceId(ukm_source_id_)
+           .WithBaseAuctionNonce(base_auction_nonce_));
++  if (ShouldLogIssue792Exp21Document(Url(), MimeType(), *document)) {
++    LOG(INFO) << "[issue-792-exp21] document-commit url="
++              << Url().GetString().Utf8() << " mime_type=" << MimeType().Utf8()
++              << " document_class=" << DocumentClassForLog(*document)
++              << " is_for_external_handler=" << document->IsForExternalHandler()
++              << " child_count=" << frame_->Tree().ChildCount();
++  }
+ 
+   RecordUseCountersForCommit();
+   RecordConsoleMessagesForCommit();
+@@ -3141,8 +3383,9 @@ void DocumentLoader::CommitNavigation() {
+   if (loading_main_document_from_mhtml_archive_) {
+     ArchiveResource* main_resource = archive_->MainResource();
+     KURL main_resource_url = main_resource ? main_resource->Url() : KURL();
+-    if (!main_resource_url.IsEmpty())
++    if (!main_resource_url.IsEmpty()) {
+       document->SetBaseURLOverride(main_resource_url);
++    }
+   }
+ 
+   // For any navigations which have a per-origin salt, we need to notify the
+@@ -3171,8 +3414,9 @@ void DocumentLoader::CommitNavigation() {
+     navigation_api_previous_entry_ = WebHistoryItem();
+   }
+ 
+-  if (commit_reason_ == CommitReason::kXSLT)
++  if (commit_reason_ == CommitReason::kXSLT) {
+     DocumentXSLT::SetHasTransformSource(*document);
++  }
+ 
+   // If we've received browsing context group information, update the Page's
+   // browsing context group. This can only ever happen for a top-level frame,
+@@ -3289,11 +3533,13 @@ void DocumentLoader::CommitNavigation() {
+   }
+   // Note: this must be called after DispatchDidCommitLoad() for
+   // metrics to be correctly sent to the browser process.
+-  if (commit_reason_ != CommitReason::kInitialization)
++  if (commit_reason_ != CommitReason::kInitialization) {
+     use_counter_.DidCommitLoad(frame_);
++  }
+   if (IsBackForwardOrRestore(load_type_)) {
+-    if (Page* page = frame_->GetPage())
++    if (Page* page = frame_->GetPage()) {
+       page->HistoryNavigationVirtualTimePauser().UnpauseVirtualTime();
++    }
+   }
+ 
+   // If profiling is enabled by document policy, ensure that profiling metadata
+@@ -3399,6 +3645,11 @@ void DocumentLoader::CreateParserPostCommit() {
+ 
+   Document* document = frame_->GetDocument();
+   parser_ = document->OpenForNavigation(parsing_policy, MimeType(), encoding);
++  if (ShouldLogIssue792Exp21Document(Url(), MimeType(), *document)) {
++    LOG(INFO) << "[issue-792-exp21] document-parser-open url="
++              << Url().GetString().Utf8() << " mime_type=" << MimeType().Utf8()
++              << " parser=" << DocumentClassForLog(*document);
++  }
+ 
+   // XSLT processing converts the response into UTF-8 before sending it through
+   // the DocumentParser, but we should still report the original encoding when
+@@ -3414,10 +3665,14 @@ void DocumentLoader::CreateParserPostCommit() {
+       !is_static_data_ && frame_->IsMainFrame() &&
+       !document->IsPrefetchOnly() && MimeType() == "text/html") {
+     parser_->SetIsPreloading(true);
++    LogIssue792Exp22BodyLoaderStart(
++        *this, "post-commit-preload", body_loader_ != nullptr, is_static_data_,
++        loading_url_as_empty_document_, frame_ && frame_->IsMainFrame());
+     body_loader_->StartLoadingBody(this);
+ 
+-    if (!frame_ || !body_loader_)
++    if (!frame_ || !body_loader_) {
+       return;
++    }
+   }
+ 
+   frame_->DomWindow()->GetScriptController().UpdateDocument();
+@@ -3425,8 +3680,9 @@ void DocumentLoader::CreateParserPostCommit() {
+   GetFrameLoader().DispatchDidClearDocumentOfWindowObject();
+ 
+   parser_->SetDocumentWasLoadedAsPartOfNavigation();
+-  if (was_discarded_)
++  if (was_discarded_) {
+     document->SetWasDiscarded(true);
++  }
+   document->MaybeHandleHttpRefresh(
+       response_.HttpHeaderField(http_names::kRefresh),
+       Document::kHttpRefreshFromHeader);
+@@ -3447,8 +3703,9 @@ const AtomicString& DocumentLoader::MimeType() const {
+   // In the case of mhtml archive, |response_| has an archive mime type,
+   // while the document has a different mime type.
+   if (loading_main_document_from_mhtml_archive_) {
+-    if (ArchiveResource* main_resource = archive_->MainResource())
++    if (ArchiveResource* main_resource = archive_->MainResource()) {
+       return main_resource->MimeType();
++    }
+   }
+ 
+   return response_.MimeType();
+@@ -3462,8 +3719,9 @@ void DocumentLoader::ResumeParser() {
+   parser_blocked_count_--;
+   DCHECK_GE(parser_blocked_count_, 0);
+ 
+-  if (parser_blocked_count_ != 0)
++  if (parser_blocked_count_ != 0) {
+     return;
++  }
+ 
+   ProcessDataBuffer();
+ 
+@@ -3736,8 +3994,9 @@ void DocumentLoader::ApplyClientHintsConfig(
+ }
+ 
+ void DocumentLoader::InitializePrefetchedSignedExchangeManager() {
+-  if (params_->prefetched_signed_exchanges.empty())
++  if (params_->prefetched_signed_exchanges.empty()) {
+     return;
++  }
+   // |prefetched_signed_exchanges| is set only when the page is loaded from a
+   // signed exchange.
+   DCHECK(GetResponse().IsSignedExchangeInnerResponse());
+@@ -3765,8 +4024,9 @@ base::TimeDelta DocumentLoader::RemainingTimeToLCPLimit() const {
+   base::TimeTicks lcp_limit =
+       document_load_timing_.NavigationStart() + kLCPLimit;
+   base::TimeTicks now = clock_->NowTicks();
+-  if (now < lcp_limit)
++  if (now < lcp_limit) {
+     return lcp_limit - now;
++  }
+   return base::TimeDelta();
+ }
+ 
+@@ -3886,8 +4146,9 @@ void DocumentLoader::MaybeStartLoadingBodyInBackground(
+   }
+ 
+   auto* navigation_body_loader = DynamicTo<NavigationBodyLoader>(*body_loader);
+-  if (!navigation_body_loader)
++  if (!navigation_body_loader) {
+     return;
++  }
+ 
+   auto decoder = BuildTextResourceDecoder(frame, url, response.MimeType(),
+                                           response.TextEncodingName());
+@@ -3900,8 +4161,9 @@ void DocumentLoader::MaybeStartLoadingBodyInBackground(
+ ContentSecurityPolicy* DocumentLoader::CreateCSP() {
+   ContentSecurityPolicy* csp = MakeGarbageCollected<ContentSecurityPolicy>();
+ 
+-  if (GetFrame()->GetSettings()->GetBypassCSP())
++  if (GetFrame()->GetSettings()->GetBypassCSP()) {
+     return csp;  // Empty CSP.
++  }
+ 
+   // Add policies from the policy container. If this is a XSLT or javascript:
+   // document, this will just keep the current policies. If this is a local
+@@ -3966,8 +4228,9 @@ DocumentLoader::CreateBackgroundCodeCacheHost() {
+ 
+ mojo::PendingRemote<mojom::blink::CodeCacheHost>
+ DocumentLoader::CreateCodeCacheHost() {
+-  if (GetDisableCodeCacheForTesting())
++  if (GetDisableCodeCacheForTesting()) {
+     return mojo::NullRemote();
++  }
+   mojo::PendingRemote<mojom::blink::CodeCacheHost> pending_code_cache_host;
+   frame_->GetBrowserInterfaceBroker().GetInterface(
+       pending_code_cache_host.InitWithNewPipeAndPassReceiver());
+diff --git a/third_party/blink/renderer/core/loader/frame_loader.cc b/third_party/blink/renderer/core/loader/frame_loader.cc
+index c8ddfda7db..6c4cb8a38a 100644
+--- a/third_party/blink/renderer/core/loader/frame_loader.cc
++++ b/third_party/blink/renderer/core/loader/frame_loader.cc
+@@ -37,9 +37,11 @@
+ #include "third_party/blink/renderer/core/loader/frame_loader.h"
+ 
+ #include <memory>
++#include <string>
+ #include <utility>
+ 
+ #include "base/auto_reset.h"
++#include "base/logging.h"
+ #include "base/notreached.h"
+ #include "base/strings/strcat.h"
+ #include "base/time/time.h"
+@@ -1060,15 +1062,46 @@ static void FillStaticResponseIfNeeded(WebNavigationParams* params,
+     return;
+ 
+   const String& mime_type = params->response.MimeType();
+-  if (MIMETypeRegistry::IsSupportedMIMEType(mime_type))
++  const bool should_log_issue_792_exp23 =
++      url.GetString().Utf8().find("bitcoin.pdf") != std::string::npos;
++  const bool supported_mime = MIMETypeRegistry::IsSupportedMIMEType(mime_type);
++  if (supported_mime) {
++    if (should_log_issue_792_exp23) {
++      LOG(INFO) << "[issue-792-exp23] static-response-check url="
++                << url.GetString().Utf8()
++                << " mime_type=" << mime_type.Utf8()
++                << " supported_mime=" << (supported_mime ? 1 : 0)
++                << " has_plugin_data=0 plugin_supports_mime=0 action=return";
++    }
+     return;
++  }
+ 
+   PluginData* plugin_data = frame->GetPluginData();
+-  if (!mime_type.empty() && plugin_data &&
+-      plugin_data->SupportsMimeType(mime_type)) {
++  const bool plugin_supports_mime =
++      !mime_type.empty() && plugin_data &&
++      plugin_data->SupportsMimeType(mime_type);
++  if (plugin_supports_mime) {
++    if (should_log_issue_792_exp23) {
++      LOG(INFO) << "[issue-792-exp23] static-response-check url="
++                << url.GetString().Utf8()
++                << " mime_type=" << mime_type.Utf8()
++                << " supported_mime=" << (supported_mime ? 1 : 0)
++                << " has_plugin_data=" << (plugin_data ? 1 : 0)
++                << " plugin_supports_mime=" << (plugin_supports_mime ? 1 : 0)
++                << " action=return";
++    }
+     return;
+   }
+ 
++  if (should_log_issue_792_exp23) {
++    LOG(INFO) << "[issue-792-exp23] static-response-check url="
++              << url.GetString().Utf8() << " mime_type=" << mime_type.Utf8()
++              << " supported_mime=" << (supported_mime ? 1 : 0)
++              << " has_plugin_data=" << (plugin_data ? 1 : 0)
++              << " plugin_supports_mime=" << (plugin_supports_mime ? 1 : 0)
++              << " action=fallback";
++  }
++
+   // Typically, PlzNavigate checks that the MIME type can be handled on the
+   // browser side before sending it to the renderer. However, there are rare
+   // scenarios where it's possible for the renderer to send a commit request
+-- 
+2.50.1 (Apple Git-155)
+

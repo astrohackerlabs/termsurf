@@ -1,0 +1,401 @@
+From d45aabd86c69adff57e43ec181db014efd86fd57 Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:43:24 -0500
+Subject: [PATCH 35/37] External file drag-drop
+
+---
+ .../web_contents/web_contents_view_mac.mm     |  57 ++----
+ .../libtermsurf_chromium.cc                   |  14 ++
+ .../libtermsurf_chromium.h                    |   9 +
+ .../ts_browser_main_parts.cc                  |  11 ++
+ .../ts_file_select_helper.cc                  | 172 ++++++++++++++++++
+ .../ts_file_select_helper.h                   |  15 ++
+ 6 files changed, 234 insertions(+), 44 deletions(-)
+
+diff --git a/content/browser/web_contents/web_contents_view_mac.mm b/content/browser/web_contents/web_contents_view_mac.mm
+index 08375a1f3a..cbd013b46d 100644
+--- a/content/browser/web_contents/web_contents_view_mac.mm
++++ b/content/browser/web_contents/web_contents_view_mac.mm
+@@ -210,57 +210,26 @@ void SetReadWritePermissionsForFile(base::File& file) {
+     const gfx::Vector2d& cursor_offset,
+     const gfx::Rect& drag_obj_rect,
+     const blink::mojom::DragEventSourceInfo& event_info) {
++  // Unused: product TermSurf Chromium does not start native AppKit drags.
++  // Full host-mediated DnD is deferred (file transfer / later issues).
++  (void)drop_data;
++  (void)allowed_operations;
++  (void)image;
++  (void)cursor_offset;
++  (void)drag_obj_rect;
++  (void)event_info;
++
+   RenderWidgetHostImpl* source_rwh =
+       static_cast<RenderWidgetHostImpl*>(source_rfh.GetRenderWidgetHost());
+   // Disallow reentrant drag which could be an attempt to exploit drag state.
+   if (drag_source_start_rwh_) {
+     return;
+   }
+-  url::Origin source_origin = source_rfh.GetLastCommittedOrigin();
+-  // By allowing nested tasks, the code below also allows Close(),
+-  // which would deallocate |this|.  The same problem can occur while
+-  // processing -sendEvent:, so Close() is deferred in that case.
+-  // Drags from web content do not come via -sendEvent:, this sets the
+-  // same flag -sendEvent: would.
+-  base::mac::ScopedSendingEvent sending_event_scoper;
+-
+-  // The drag invokes a nested event loop, arrange to continue
+-  // processing events.
+-  base::CurrentThread::ScopedAllowApplicationTasksInNativeNestedLoop allow;
+-
+-  ClipboardEndpoint source_endpoint = CreateClipboardEndpoint(source_rfh);
+-
+-  // Checks if the drag operation is allowed by enterprise policies
+-  if (!GetContentClient()->browser()->IsDragAllowedByPolicy(source_endpoint,
+-                                                            drop_data)) {
+-    web_contents_->SystemDragEnded(source_rwh);
+-    return;
+-  }
+-
+-  NSDragOperation mask = static_cast<NSDragOperation>(allowed_operations);
+ 
+-  [drag_dest_ initiateDragWithRenderWidgetHost:source_rwh dropData:drop_data];
+-  drag_source_start_rwh_ = source_rwh->GetWeakPtr();
+-
+-  WebContentsDelegate* contents_delegate = web_contents_->GetDelegate();
+-  bool is_privileged =
+-      contents_delegate ? contents_delegate->IsPrivileged() : false;
+-
+-  // TODO(crbug.com/40825138): The param `drag_obj_rect` is unused.
+-
+-  const content::ChildProcessId render_process_id =
+-      source_rfh.GetProcess()->GetID();
+-  const blink::DocumentToken& document_token =
+-      static_cast<RenderFrameHostImpl&>(source_rfh).GetDocumentToken();
+-  if (remote_ns_view_) {
+-    remote_ns_view_->StartDrag(render_process_id, document_token, source_origin,
+-                               drop_data, mask, image, cursor_offset,
+-                               is_privileged);
+-  } else {
+-    in_process_ns_view_bridge_->StartDrag(render_process_id, document_token,
+-                                          source_origin, drop_data, mask, image,
+-                                          cursor_offset, is_privileged);
+-  }
++  // Embed helper (CALayerHost in host process): native NSDragging cannot
++  // complete. Clear Blink drag-source state instead of starting AppKit drag
++  // (Issue 26073010145867 Exp 3; buildable form of Exp 2 / 780 policy).
++  web_contents_->SystemDragEnded(source_rwh);
+ }
+ 
+ void WebContentsViewMac::Focus() {
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 60acdf21bb..58e9673073 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -470,6 +470,20 @@ bool ts_reply_file_chooser(ts_web_contents_t wc,
+                                      path_count);
+ }
+ 
++bool ts_apply_external_file_drop(ts_web_contents_t wc,
++                                 const char* const* paths,
++                                 size_t path_count,
++                                 double x,
++                                 double y,
++                                 const char* phase) {
++  if (!wc) {
++    return false;
++  }
++  auto* web_contents = static_cast<content::WebContents*>(wc);
++  return content::TsApplyExternalFileDrop(web_contents, paths, path_count, x, y,
++                                          phase);
++}
++
+ bool ts_reply_http_auth(ts_web_contents_t wc,
+                         uint64_t request_id,
+                         bool accepted,
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 6ed9d5dae4..658eac45dc 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -164,6 +164,15 @@ TS_EXPORT bool ts_reply_file_chooser(ts_web_contents_t wc,
+                                      const char* const* paths,
+                                      size_t path_count);
+ 
++/* Host-mediated OS/Finder file drag phase onto the page (DIP/view coords).
++   phase: "enter"|"over"|"leave"|"drop" (NULL/empty => "drop"). */
++TS_EXPORT bool ts_apply_external_file_drop(ts_web_contents_t wc,
++                                           const char* const* paths,
++                                           size_t path_count,
++                                           double x,
++                                           double y,
++                                           const char* phase);
++
+ TS_EXPORT bool ts_reply_http_auth(ts_web_contents_t wc,
+                                   uint64_t request_id,
+                                   bool accepted,
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index f4fac52440..1c23fccc8e 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -29,6 +29,7 @@
+ #include "content/libtermsurf_chromium/extensions/ts_extensions_client.h"
+ #include "content/libtermsurf_chromium/ts_browser_context.h"
+ #include "content/libtermsurf_chromium/ts_download_support.h"
++#include "content/libtermsurf_chromium/ts_file_select_helper.h"
+ #include "content/libtermsurf_chromium/ts_javascript_dialog_manager.h"
+ #include "content/libtermsurf_chromium/ts_tab_observer.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -693,6 +694,11 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+   for (auto it = tabs_.begin(); it != tabs_.end(); ++it) {
+     if ((*it)->shell &&
+         static_cast<void*>((*it)->shell->web_contents()) == wc_handle) {
++      // Cancel parked file chooser + clear external-drag session before WC dies
++      // (Issue 26073012571498 Exp 1).
++      if (WebContents* wc = (*it)->shell->web_contents()) {
++        TsClearFileTransferStateForWebContents(wc);
++      }
+       (*it)->tab_observer.reset();
+ #if BUILDFLAG(IS_MAC)
+       if (auto* view = (*it)->shell->web_contents()->GetRenderWidgetHostView()) {
+@@ -713,6 +719,11 @@ void TsBrowserMainParts::DestroyTab(void* wc_handle) {
+ void TsBrowserMainParts::ShutdownTabs() {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+   for (auto& tab : tabs_) {
++    if (tab->shell) {
++      if (WebContents* wc = tab->shell->web_contents()) {
++        TsClearFileTransferStateForWebContents(wc);
++      }
++    }
+     tab->tab_observer.reset();
+ #if BUILDFLAG(IS_MAC)
+     if (tab->shell) {
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.cc b/content/libtermsurf_chromium/ts_file_select_helper.cc
+index 7956af07f7..22bc165321 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.cc
++++ b/content/libtermsurf_chromium/ts_file_select_helper.cc
+@@ -21,11 +21,18 @@
+ #include "base/strings/string_util.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "base/task/thread_pool.h"
++#include "base/functional/callback_helpers.h"
++#include "content/browser/renderer_host/render_widget_host_impl.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/file_select_listener.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "content/public/common/drop_data.h"
++#include "third_party/blink/public/common/page/drag_operation.h"
+ #include "third_party/blink/public/mojom/choosers/file_chooser.mojom.h"
++#include "ui/base/clipboard/file_info.h"
++#include "ui/gfx/geometry/point_f.h"
+ 
+ namespace content {
+ namespace {
+@@ -533,6 +540,171 @@ bool TsReplyFileChooser(WebContents* web_contents,
+   return true;
+ }
+ 
++namespace {
++
++// Active host-mediated drag session per WebContents (Exp 4 hover stream).
++std::map<WebContents*, DropData>& ExternalDragSessions() {
++  static auto* sessions = new std::map<WebContents*, DropData>();
++  return *sessions;
++}
++
++DropData BuildExternalDropData(const char* const* paths, size_t path_count) {
++  DropData drop_data;
++  drop_data.did_originate_from_renderer = false;
++  drop_data.operation = ui::mojom::DragOperation::kCopy;
++  drop_data.document_is_handling_drag = true;
++  if (!paths || path_count == 0) {
++    return drop_data;
++  }
++  base::span<const char* const> path_span =
++      // SAFETY: caller provides |path_count| entries for |paths|.
++      UNSAFE_BUFFERS(base::span(paths, path_count));
++  for (const char* path_cstr : path_span) {
++    if (!path_cstr || path_cstr[0] == '\0') {
++      continue;
++    }
++    base::FilePath path = base::FilePath::FromUTF8Unsafe(path_cstr);
++    if (!path.IsAbsolute()) {
++      LOG(WARNING) << "[termsurf-file-drop] skip non-absolute path="
++                   << path_cstr;
++      continue;
++    }
++    drop_data.filenames.emplace_back(path, path.BaseName());
++  }
++  return drop_data;
++}
++
++RenderWidgetHostImpl* ExternalDragRwh(WebContents* web_contents) {
++  if (!web_contents) {
++    return nullptr;
++  }
++  RenderWidgetHostView* view = web_contents->GetRenderWidgetHostView();
++  if (!view) {
++    return nullptr;
++  }
++  return static_cast<RenderWidgetHostImpl*>(view->GetRenderWidgetHost());
++}
++
++}  // namespace
++
++bool TsApplyExternalFileDrop(WebContents* web_contents,
++                             const char* const* paths,
++                             size_t path_count,
++                             double x,
++                             double y,
++                             const char* phase) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!web_contents) {
++    return false;
++  }
++
++  const std::string phase_str = base::ToLowerASCII(
++      (phase && phase[0] != '\0') ? std::string(phase) : std::string("drop"));
++
++  auto* rwh = ExternalDragRwh(web_contents);
++  if (!rwh) {
++    LOG(WARNING) << "[termsurf-file-drop] no RWH phase=" << phase_str;
++    return false;
++  }
++
++  const gfx::PointF client_pt(static_cast<float>(x), static_cast<float>(y));
++  const gfx::PointF screen_pt = client_pt;
++  const blink::DragOperationsMask ops = blink::kDragOperationEvery;
++  auto& sessions = ExternalDragSessions();
++
++  if (phase_str == "leave") {
++    rwh->DragTargetDragLeave(client_pt, screen_pt);
++    sessions.erase(web_contents);
++    LOG(INFO) << "[termsurf-file-drop] leave x=" << x << " y=" << y;
++    return true;
++  }
++
++  if (phase_str == "over") {
++    auto it = sessions.find(web_contents);
++    if (it == sessions.end()) {
++      // No enter yet: treat as enter if paths present, else over alone is a no-op.
++      DropData drop_data = BuildExternalDropData(paths, path_count);
++      if (drop_data.filenames.empty()) {
++        return false;
++      }
++      rwh->FilterDropData(&drop_data);
++      rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                               base::DoNothing());
++      sessions[web_contents] = drop_data;
++    }
++    rwh->DragTargetDragOver(client_pt, screen_pt, ops, 0, base::DoNothing());
++    LOG(INFO) << "[termsurf-file-drop] over x=" << x << " y=" << y;
++    return true;
++  }
++
++  if (phase_str == "enter") {
++    DropData drop_data = BuildExternalDropData(paths, path_count);
++    if (drop_data.filenames.empty()) {
++      LOG(WARNING) << "[termsurf-file-drop] enter with no paths";
++      return false;
++    }
++    rwh->FilterDropData(&drop_data);
++    rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                             base::DoNothing());
++    sessions[web_contents] = drop_data;
++    LOG(INFO) << "[termsurf-file-drop] enter count=" << drop_data.filenames.size()
++              << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id;
++    return true;
++  }
++
++  // drop (default): full upload apply. Prefer paths from host; fall back to session.
++  DropData drop_data = BuildExternalDropData(paths, path_count);
++  if (drop_data.filenames.empty()) {
++    auto it = sessions.find(web_contents);
++    if (it != sessions.end()) {
++      drop_data = it->second;
++    }
++  }
++  if (drop_data.filenames.empty()) {
++    LOG(WARNING) << "[termsurf-file-drop] drop with no paths";
++    return false;
++  }
++
++  rwh->FilterDropData(&drop_data);
++  LOG(INFO) << "[termsurf-file-drop] drop count=" << drop_data.filenames.size()
++            << " x=" << x << " y=" << y << " view_id=" << drop_data.view_id
++            << " document_is_handling_drag="
++            << drop_data.document_is_handling_drag;
++
++  // If hover already entered, over+drop is enough; else enter→over→drop (Exp 3).
++  if (sessions.find(web_contents) == sessions.end()) {
++    rwh->DragTargetDragEnter(drop_data, client_pt, screen_pt, ops, 0,
++                             base::DoNothing());
++  }
++  rwh->DragTargetDragOver(client_pt, screen_pt, ops, 0, base::DoNothing());
++  rwh->DragTargetDrop(drop_data, client_pt, screen_pt, 0, base::DoNothing());
++  sessions.erase(web_contents);
++  return true;
++}
++
++void TsClearFileTransferStateForWebContents(WebContents* web_contents) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!web_contents) {
++    return;
++  }
++
++  auto& pending = PendingChoosers();
++  auto pit = pending.find(web_contents);
++  if (pit != pending.end()) {
++    LOG(INFO) << "[termsurf-file-upload] cancel pending on destroy request_id="
++              << pit->second.request_id;
++    if (pit->second.listener) {
++      pit->second.listener->FileSelectionCanceled();
++    }
++    pending.erase(pit);
++  }
++
++  auto& sessions = ExternalDragSessions();
++  if (sessions.erase(web_contents) > 0) {
++    LOG(INFO) << "[termsurf-file-drop] cleared drag session on destroy";
++  }
++}
++
+ bool RunTsFileChooser(RenderFrameHost* render_frame_host,
+                       scoped_refptr<FileSelectListener> listener,
+                       const blink::mojom::FileChooserParams& params) {
+diff --git a/content/libtermsurf_chromium/ts_file_select_helper.h b/content/libtermsurf_chromium/ts_file_select_helper.h
+index 851ed86130..6ab868042b 100644
+--- a/content/libtermsurf_chromium/ts_file_select_helper.h
++++ b/content/libtermsurf_chromium/ts_file_select_helper.h
+@@ -58,6 +58,16 @@ bool TsReplyFileChooser(WebContents* web_contents,
+                         const char* const* paths,
+                         size_t path_count);
+ 
++// Host-mediated Finder/OS file drag phases onto the page
++// (Issue 26072811532404 Exp 1–4). phase: "enter"|"over"|"leave"|"drop"
++// (nullptr/empty => "drop"). Injects DropData at client (x,y) in DIP/view space.
++bool TsApplyExternalFileDrop(WebContents* web_contents,
++                             const char* const* paths,
++                             size_t path_count,
++                             double x,
++                             double y,
++                             const char* phase);
++
+ // Notify host (implemented in libtermsurf_chromium.cc via C callback).
+ void TsNotifyFileChooserRequest(void* wc_handle,
+                                 uint64_t request_id,
+@@ -66,6 +76,11 @@ void TsNotifyFileChooserRequest(void* wc_handle,
+                                 const char* const* accept,
+                                 size_t accept_count);
+ 
++// Cancel parked chooser listener (if any) and clear external-drag session for
++// |web_contents|. Call from DestroyTab / ShutdownTabs before deleting WC
++// (Issue 26073012571498 Exp 1 lifecycle cleanup).
++void TsClearFileTransferStateForWebContents(WebContents* web_contents);
++
+ }  // namespace content
+ 
+ #endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_FILE_SELECT_HELPER_H_
+-- 
+2.50.1 (Apple Git-155)
+

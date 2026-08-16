@@ -1,0 +1,468 @@
+From 9f37ba8ced4db974045da001a56cc000c7a1eca4 Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:43:31 -0500
+Subject: [PATCH 36/37] Silent Downloads and determinate progress
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |   3 +
+ .../libtermsurf_chromium.cc                   |  21 ++
+ .../libtermsurf_chromium.h                    |  11 +
+ .../ts_download_progress.cc                   | 189 ++++++++++++++++++
+ .../ts_download_progress.h                    |  28 +++
+ .../ts_download_support.cc                    |  44 +++-
+ .../shell_download_manager_delegate.cc        |  30 +--
+ 7 files changed, 312 insertions(+), 14 deletions(-)
+ create mode 100644 content/libtermsurf_chromium/ts_download_progress.cc
+ create mode 100644 content/libtermsurf_chromium/ts_download_progress.h
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 4b1742931b..783cb66367 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -51,6 +51,8 @@ shared_library("libtermsurf_chromium") {
+     "ts_content_client.h",
+     "ts_content_renderer_client.cc",
+     "ts_content_renderer_client.h",
++    "ts_download_progress.cc",
++    "ts_download_progress.h",
+     "ts_download_support.cc",
+     "ts_download_support.h",
+     "ts_file_select_helper.cc",
+@@ -105,6 +107,7 @@ shared_library("libtermsurf_chromium") {
+   deps = [
+     "//chrome/browser:resources",
+     "//chrome/browser/resources/pdf:resources",
++    "//chrome/common:constants",
+     "//chrome/common:resources",
+     "//chrome/common/extensions",
+     "//chrome/common/extensions/api",
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index 58e9673073..a806ae193f 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -16,6 +16,17 @@
+ #include "content/public/browser/web_contents.h"
+ #include "content/shell/browser/shell.h"
+ 
++// Download progress callback (Issue 26073112048720 Exp 3) — C linkage so
++// ts_download_progress.cc can emit.
++extern "C" {
++void (*g_on_download_progress)(void* wc,
++                               const char* state,
++                               uint64_t received_bytes,
++                               uint64_t total_bytes,
++                               void* user_data) = nullptr;
++void* g_on_download_progress_data = nullptr;
++}
++
+ namespace {
+ 
+ // Global state for the library.
+@@ -534,6 +545,16 @@ void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+   g_on_loading_state_data = user_data;
+ }
+ 
++void ts_set_on_download_progress(void (*cb)(ts_web_contents_t wc,
++                                            const char* state,
++                                            uint64_t received_bytes,
++                                            uint64_t total_bytes,
++                                            void* user_data),
++                                 void* user_data) {
++  g_on_download_progress = cb;
++  g_on_download_progress_data = user_data;
++}
++
+ void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index 658eac45dc..fb127009fc 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -207,6 +207,17 @@ TS_EXPORT void ts_set_on_loading_state(void (*cb)(ts_web_contents_t wc,
+                                                   void* user_data),
+                                        void* user_data);
+ 
++/* Download progress for pane surface progress bar (Issue 26073112048720 Exp 3).
++   state: "active" | "done" | "error" | "cancelled"
++   total_bytes == 0 → unknown size (indeterminate). */
++TS_EXPORT void ts_set_on_download_progress(
++    void (*cb)(ts_web_contents_t wc,
++               const char* state,
++               uint64_t received_bytes,
++               uint64_t total_bytes,
++               void* user_data),
++    void* user_data);
++
+ TS_EXPORT void ts_set_on_navigation_state(
+     void (*cb)(ts_web_contents_t wc,
+                bool can_go_back,
+diff --git a/content/libtermsurf_chromium/ts_download_progress.cc b/content/libtermsurf_chromium/ts_download_progress.cc
+new file mode 100644
+index 0000000000..3ab5f7800a
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_download_progress.cc
+@@ -0,0 +1,189 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "content/libtermsurf_chromium/ts_download_progress.h"
++
++#include <stdint.h>
++
++#include <algorithm>
++
++#include "base/logging.h"
++#include "base/memory/raw_ptr.h"
++#include "base/byte_count.h"
++#include "components/download/public/common/download_item.h"
++#include "content/public/browser/browser_context.h"
++#include "content/public/browser/download_item_utils.h"
++#include "content/public/browser/download_manager.h"
++#include "content/public/browser/web_contents.h"
++#include "net/http/http_response_headers.h"
++
++namespace content {
++namespace {
++
++// Defined in libtermsurf_chromium.cc.
++extern "C" void (*g_on_download_progress)(void* wc,
++                                          const char* state,
++                                          uint64_t received_bytes,
++                                          uint64_t total_bytes,
++                                          void* user_data);
++extern "C" void* g_on_download_progress_data;
++
++// Resolve total size for pane progress (Issue 26073112048720 Exp 4).
++// Returns 0 when size is truly unknown → indeterminate bar.
++// Prefer DownloadItem totals; fall back to Content-Length when the item has not
++// populated total_bytes_ yet (common early in Content-Length attachments).
++uint64_t ResolveDownloadTotalBytes(download::DownloadItem* item,
++                                   uint64_t received) {
++  if (!item) {
++    return 0;
++  }
++
++  const int64_t item_total = item->GetTotalBytes();
++  if (item_total > 0) {
++    return static_cast<uint64_t>(item_total);
++  }
++
++  // PercentComplete is defined only when total_bytes_ > 0 in Chromium; if it
++  // returns 1–100, recover total from received when possible.
++  const int pct = item->PercentComplete();
++  if (pct > 0 && pct <= 100 && received > 0) {
++    // total ≈ received * 100 / pct (integer). Avoid div-by-zero; pct >= 1.
++    const uint64_t recovered =
++        (received * 100ULL + static_cast<uint64_t>(pct) - 1) /
++        static_cast<uint64_t>(pct);
++    if (recovered >= received) {
++      return recovered;
++    }
++  }
++
++  const scoped_refptr<const net::HttpResponseHeaders> headers =
++      item->GetResponseHeaders();
++  if (headers) {
++    std::optional<base::ByteCount> content_length = headers->GetContentLength();
++    if (content_length.has_value() && content_length->InBytes() > 0) {
++      return static_cast<uint64_t>(content_length->InBytes());
++    }
++  }
++
++  // Completed download with unknown total: treat final size as total so the
++  // last active update before done can show 100% if we emit active first.
++  if (item->GetState() == download::DownloadItem::COMPLETE && received > 0) {
++    return received;
++  }
++
++  return 0;
++}
++
++class TsDownloadProgressObserver : public DownloadManager::Observer,
++                                   public download::DownloadItem::Observer {
++ public:
++  explicit TsDownloadProgressObserver(DownloadManager* manager)
++      : manager_(manager) {
++    manager_->AddObserver(this);
++  }
++
++  ~TsDownloadProgressObserver() override {
++    if (manager_) {
++      manager_->RemoveObserver(this);
++    }
++  }
++
++  void ManagerGoingDown(DownloadManager* manager) override {
++    if (manager_ == manager) {
++      manager_ = nullptr;
++    }
++  }
++
++  void OnDownloadCreated(DownloadManager* manager,
++                         download::DownloadItem* item) override {
++    ObserveItem(item);
++  }
++
++  void OnDownloadUpdated(download::DownloadItem* item) override {
++    NotifyItem(item);
++  }
++
++  void OnDownloadDestroyed(download::DownloadItem* item) override {
++    if (item && !item->IsDone()) {
++      Emit(item, "cancelled");
++    }
++  }
++
++ private:
++  void ObserveItem(download::DownloadItem* item) {
++    if (!item) {
++      return;
++    }
++    item->AddObserver(this);
++    NotifyItem(item);
++  }
++
++  void NotifyItem(download::DownloadItem* item) {
++    if (!item) {
++      return;
++    }
++    switch (item->GetState()) {
++      case download::DownloadItem::IN_PROGRESS:
++        Emit(item, "active");
++        break;
++      case download::DownloadItem::COMPLETE:
++        Emit(item, "done");
++        break;
++      case download::DownloadItem::CANCELLED:
++        Emit(item, "cancelled");
++        break;
++      case download::DownloadItem::INTERRUPTED:
++        Emit(item, "error");
++        break;
++      default:
++        Emit(item, "active");
++        break;
++    }
++  }
++
++  void Emit(download::DownloadItem* item, const char* state) {
++    WebContents* wc = DownloadItemUtils::GetWebContents(item);
++    if (!wc) {
++      return;
++    }
++    const uint64_t received =
++        static_cast<uint64_t>(std::max<int64_t>(0, item->GetReceivedBytes()));
++    // Exp 4: robust total so Content-Length downloads become determinate.
++    const uint64_t total = ResolveDownloadTotalBytes(item, received);
++    TsNotifyDownloadProgress(static_cast<void*>(wc), state, received, total);
++  }
++
++  raw_ptr<DownloadManager> manager_;
++};
++
++void AttachObserver(BrowserContext* browser_context) {
++  if (!browser_context) {
++    return;
++  }
++  DownloadManager* manager = browser_context->GetDownloadManager();
++  if (!manager) {
++    LOG(WARNING) << "[termsurf-download] no DownloadManager for progress";
++    return;
++  }
++  new TsDownloadProgressObserver(manager);
++  LOG(INFO) << "[termsurf-download] progress observer attached";
++}
++
++}  // namespace
++
++void ConfigureTsDownloadProgress(BrowserContext* browser_context) {
++  AttachObserver(browser_context);
++}
++
++void TsNotifyDownloadProgress(void* wc_handle,
++                              const char* state,
++                              uint64_t received_bytes,
++                              uint64_t total_bytes) {
++  if (g_on_download_progress) {
++    g_on_download_progress(wc_handle, state, received_bytes, total_bytes,
++                           g_on_download_progress_data);
++  }
++}
++
++}  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_download_progress.h b/content/libtermsurf_chromium/ts_download_progress.h
+new file mode 100644
+index 0000000000..557969bd4c
+--- /dev/null
++++ b/content/libtermsurf_chromium/ts_download_progress.h
+@@ -0,0 +1,28 @@
++// Copyright 2026 TermSurf
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_PROGRESS_H_
++#define CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_PROGRESS_H_
++
++#include <stdint.h>
++
++namespace content {
++
++class BrowserContext;
++
++// Attach DownloadManager observer that emits pane progress callbacks
++// (Issue 26073112048720 Exp 3).
++void ConfigureTsDownloadProgress(BrowserContext* browser_context);
++
++// Fire C callback registered via ts_set_on_download_progress.
++// state: "active" | "done" | "error" | "cancelled"
++// total_bytes == 0 means unknown size → indeterminate surface progress.
++void TsNotifyDownloadProgress(void* wc_handle,
++                              const char* state,
++                              uint64_t received_bytes,
++                              uint64_t total_bytes);
++
++}  // namespace content
++
++#endif  // CONTENT_LIBTERMSURF_CHROMIUM_TS_DOWNLOAD_PROGRESS_H_
+diff --git a/content/libtermsurf_chromium/ts_download_support.cc b/content/libtermsurf_chromium/ts_download_support.cc
+index 48693925b7..7c9a96f5fc 100644
+--- a/content/libtermsurf_chromium/ts_download_support.cc
++++ b/content/libtermsurf_chromium/ts_download_support.cc
+@@ -4,25 +4,64 @@
+ 
+ #include "content/libtermsurf_chromium/ts_download_support.h"
+ 
++#include "base/base_paths.h"
+ #include "base/command_line.h"
+ #include "base/files/file_path.h"
+ #include "base/files/file_util.h"
+ #include "base/logging.h"
++#include "base/path_service.h"
++#include "chrome/common/chrome_paths.h"
++#include "content/libtermsurf_chromium/ts_download_progress.h"
+ #include "content/shell/browser/shell_browser_context.h"
+ #include "content/shell/browser/shell_download_manager_delegate.h"
+ 
+ namespace content {
+ namespace {
+ 
++// Automation / test override for the product default OS Downloads directory.
++// Example: --termsurf-download-dir=/tmp/termsurf-dl
+ constexpr char kTermSurfDownloadDirSwitch[] = "termsurf-download-dir";
+ 
++base::FilePath OsDefaultDownloadsDirectory() {
++  // Ensure chrome path keys (DIR_DEFAULT_DOWNLOADS) resolve.
++  static bool registered = []() {
++    chrome::RegisterPathProvider();
++    return true;
++  }();
++  (void)registered;
++
++  base::FilePath download_dir;
++  if (base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &download_dir) &&
++      !download_dir.empty()) {
++    return download_dir;
++  }
++
++  // Fallback: ~/Downloads (typical macOS / Linux layout).
++  base::FilePath home;
++  if (base::PathService::Get(base::DIR_HOME, &home) && !home.empty()) {
++    return home.Append(FILE_PATH_LITERAL("Downloads"));
++  }
++
++  return base::FilePath();
++}
++
+ base::FilePath DownloadDirectoryForContext(
+     ShellBrowserContext* browser_context) {
+   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();
+   if (command_line->HasSwitch(kTermSurfDownloadDirSwitch)) {
+     return command_line->GetSwitchValuePath(kTermSurfDownloadDirSwitch);
+   }
+-  return browser_context->GetPath().Append(FILE_PATH_LITERAL("Downloads"));
++
++  base::FilePath os_downloads = OsDefaultDownloadsDirectory();
++  if (!os_downloads.empty()) {
++    return os_downloads;
++  }
++
++  // Last resort: profile-internal Downloads (should be rare).
++  if (browser_context) {
++    return browser_context->GetPath().Append(FILE_PATH_LITERAL("Downloads"));
++  }
++  return base::FilePath();
+ }
+ 
+ }  // namespace
+@@ -46,7 +85,10 @@ void ConfigureTsDownloads(ShellBrowserContext* browser_context) {
+ 
+   auto* delegate = static_cast<ShellDownloadManagerDelegate*>(
+       browser_context->GetDownloadManagerDelegate());
++  // Product silent policy + default directory (API name is historical).
+   delegate->SetDownloadBehaviorForTesting(download_dir);
++  // Pane progress bar updates (Exp 3).
++  ConfigureTsDownloadProgress(browser_context);
+   LOG(INFO) << "[termsurf-download] configured path="
+             << download_dir.AsUTF8Unsafe() << " off_the_record="
+             << (browser_context->IsOffTheRecord() ? 1 : 0);
+diff --git a/content/shell/browser/shell_download_manager_delegate.cc b/content/shell/browser/shell_download_manager_delegate.cc
+index b5069bac74..240a01ae8b 100644
+--- a/content/shell/browser/shell_download_manager_delegate.cc
++++ b/content/shell/browser/shell_download_manager_delegate.cc
+@@ -45,7 +45,9 @@
+ namespace content {
+ 
+ ShellDownloadManagerDelegate::ShellDownloadManagerDelegate()
+-    : download_manager_(nullptr), suppress_prompting_(false) {}
++    : download_manager_(nullptr),
++      // Product default: silent downloads (Issue 26073112048720).
++      suppress_prompting_(true) {}
+ 
+ ShellDownloadManagerDelegate::~ShellDownloadManagerDelegate() {
+   if (download_manager_) {
+@@ -136,7 +138,9 @@ void ShellDownloadManagerDelegate::GenerateFilename(
+   if (!base::PathExists(suggested_directory))
+     base::CreateDirectory(suggested_directory);
+ 
+-  base::FilePath suggested_path(suggested_directory.Append(generated_name));
++  // Prefer a unique path so repeated downloads do not clobber the prior file.
++  base::FilePath suggested_path =
++      base::GetUniquePath(suggested_directory.Append(generated_name));
+   GetUIThreadTaskRunner({})->PostTask(
+       FROM_HERE, base::BindOnce(std::move(callback), suggested_path));
+ }
+@@ -146,18 +150,18 @@ void ShellDownloadManagerDelegate::OnDownloadPathGenerated(
+     download::DownloadTargetCallback callback,
+     const base::FilePath& suggested_path) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
+-  if (suppress_prompting_) {
+-    // Testing exit.
+-    download::DownloadTargetInfo target_info;
+-    target_info.target_path = suggested_path;
+-    target_info.intermediate_path =
+-        suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
+-
+-    std::move(callback).Run(std::move(target_info));
+-    return;
+-  }
++  // TermSurf product policy (Issue 26073112048720 Exp 1): always resolve a
++  // full target path silently. Do not call ChooseDownloadPath (Mac:
++  // NOTIMPLEMENTED). suppress_prompting_ is retained for test API compatibility
++  // but the product path never prompts regardless.
++  (void)download_id;
++  (void)suppress_prompting_;
++  download::DownloadTargetInfo target_info;
++  target_info.target_path = suggested_path;
++  target_info.intermediate_path =
++      suggested_path.AddExtension(FILE_PATH_LITERAL(".crdownload"));
+ 
+-  ChooseDownloadPath(download_id, std::move(callback), suggested_path);
++  std::move(callback).Run(std::move(target_info));
+ }
+ 
+ void ShellDownloadManagerDelegate::ChooseDownloadPath(
+-- 
+2.50.1 (Apple Git-155)
+

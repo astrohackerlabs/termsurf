@@ -1,0 +1,740 @@
+From 9a7c104ff2af9310f03afb327c38cff175789f9f Mon Sep 17 00:00:00 2001
+From: astrohacker <dev@local>
+Date: Sun, 16 Aug 2026 11:42:27 -0500
+Subject: [PATCH 26/37] Port remaining libtermsurf APIs to Chromium 150
+
+---
+ content/libtermsurf_chromium/BUILD.gn         |  3 ++
+ .../ts_extension_resource_loader.cc           |  5 +--
+ .../ts_extensions_browser_client.cc           | 32 +++++++++----
+ .../extensions/ts_extensions_browser_client.h | 10 ++++-
+ .../extensions/ts_pdf_resource_bundle.cc      | 16 ++++---
+ .../libtermsurf_chromium/ts_browser_client.cc | 11 ++---
+ .../libtermsurf_chromium/ts_browser_client.h  |  2 +
+ .../ts_browser_main_parts.cc                  |  7 +--
+ .../ts_compositor_bridge_mac.h                |  2 +-
+ .../ts_compositor_bridge_mac.mm               |  9 ++--
+ .../ts_mime_handler_binders.cc                |  3 +-
+ .../ts_pdf_browser_support.cc                 | 45 ++++++++++++-------
+ .../ts_pdf_browser_support.h                  |  1 +
+ .../ts_pdf_help_bubble_handler_factory.cc     | 15 +++++--
+ .../ts_pdf_print_manager.cc                   |  8 ++--
+ .../ts_pdf_print_manager.h                    |  5 +--
+ .../ts_pdf_renderer_support.cc                |  6 +--
+ .../ts_pdf_stream_delegate.cc                 | 14 +++---
+ ...esponse_interceptor_url_loader_throttle.cc | 18 ++++----
+ .../libtermsurf_chromium/ts_plugin_utils.cc   |  4 +-
+ 20 files changed, 136 insertions(+), 80 deletions(-)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index d6f073118c..01278ce254 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -147,6 +147,9 @@ shared_library("libtermsurf_chromium") {
+       "//ui/accelerated_widget_mac",
+       "//ui/compositor",
+     ]
++    # system_media_capture_permissions_mac (pulled via chrome permissions)
++    # references AVCaptureDevice.
++    frameworks = [ "AVFoundation.framework" ]
+   }
+ }
+ 
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+index 6d740f0a47..2ff2b9be5d 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+@@ -28,6 +28,7 @@
+ #include "net/base/net_errors.h"
+ #include "net/http/http_request_headers.h"
+ #include "net/http/http_response_headers.h"
++#include "services/network/public/cpp/http_request_headers_update_params.h"
+ #include "services/network/public/cpp/resource_request.h"
+ #include "services/network/public/mojom/url_loader.mojom.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
+@@ -120,9 +121,7 @@ class TsResourceBundleFileLoader : public network::mojom::URLLoader {
+ 
+   // network::mojom::URLLoader:
+   void FollowRedirect(
+-      const std::vector<std::string>& removed_headers,
+-      const net::HttpRequestHeaders& modified_headers,
+-      const net::HttpRequestHeaders& modified_cors_exempt_headers,
++      network::HttpRequestHeadersUpdateParams headers_update_params,
+       const std::optional<GURL>& new_url) override {
+     NOTREACHED() << "No redirects for resource bundle loads.";
+   }
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index 234d1842a3..fb11a52125 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -23,7 +23,9 @@
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/media_stream_request.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "third_party/blink/public/mojom/mediastream/media_stream.mojom.h"
+ #include "content/public/browser/site_instance.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/web_contents.h"
+ #include "content/public/browser/web_contents_delegate.h"
+ #include "content/public/browser/web_contents_user_data.h"
+@@ -36,7 +38,6 @@
+ #include "extensions/browser/extension_web_contents_observer.h"
+ #include "extensions/browser/extensions_browser_api_provider.h"
+ #include "extensions/browser/extensions_browser_interface_binders.h"
+-#include "extensions/browser/media_capture_util.h"
+ #include "extensions/browser/safe_browsing_delegate.h"
+ #include "extensions/browser/updater/null_extension_cache.h"
+ #include "extensions/browser/url_request_util.h"
+@@ -95,8 +96,12 @@ class TsExtensionHostDelegate : public extensions::ExtensionHostDelegate {
+       const MediaStreamRequest& request,
+       MediaResponseCallback callback,
+       const extensions::Extension* extension) override {
+-    extensions::media_capture_util::GrantMediaStreamRequest(
+-        web_contents, request, std::move(callback), extension);
++    // extensions::media_capture_util was removed in Chromium 150; TermSurf
++    // does not host camera/mic for the PDF extension path.
++    std::move(callback).Run(
++        blink::mojom::StreamDevicesSet(),
++        blink::mojom::MediaStreamRequestResult::NOT_SUPPORTED,
++        std::unique_ptr<MediaStreamUI>());
+   }
+ 
+   bool CheckMediaAccessPermission(
+@@ -104,9 +109,7 @@ class TsExtensionHostDelegate : public extensions::ExtensionHostDelegate {
+       const url::Origin& security_origin,
+       blink::mojom::MediaStreamType type,
+       const extensions::Extension* extension) override {
+-    extensions::media_capture_util::VerifyMediaAccessPermission(type,
+-                                                                extension);
+-    return true;
++    return false;
+   }
+ 
+   PictureInPictureResult EnterPictureInPicture(
+@@ -267,6 +270,13 @@ BrowserContext* TsExtensionsBrowserClient::GetContextRedirectedToOriginal(
+   return OriginalContextFor(context);
+ }
+ 
++BrowserContext*
++TsExtensionsBrowserClient::GetContextRedirectedToOriginalWithoutAshInternals(
++    BrowserContext* context) {
++  // TermSurf has no ash-internal profiles; same as redirected-to-original.
++  return OriginalContextFor(context);
++}
++
+ BrowserContext* TsExtensionsBrowserClient::GetContextOwnInstance(
+     BrowserContext* context) {
+   return context;
+@@ -292,6 +302,12 @@ bool TsExtensionsBrowserClient::IsExtensionIncognitoEnabled(
+   return false;
+ }
+ 
++bool TsExtensionsBrowserClient::IsExtensionIncognitoEnabled(
++    const extensions::Extension* extension,
++    BrowserContext* context) const {
++  return false;
++}
++
+ bool TsExtensionsBrowserClient::CanExtensionCrossIncognito(
+     const extensions::Extension* extension,
+     BrowserContext* context) const {
+@@ -336,7 +352,7 @@ bool TsExtensionsBrowserClient::AllowCrossRendererResourceLoad(
+     const network::ResourceRequest& request,
+     network::mojom::RequestDestination destination,
+     ui::PageTransition page_transition,
+-    int child_id,
++    content::ChildProcessId child_id,
+     bool is_incognito,
+     const extensions::Extension* extension,
+     const extensions::ExtensionSet& extensions,
+@@ -428,7 +444,7 @@ void TsExtensionsBrowserClient::RegisterBrowserInterfaceBindersForFrame(
+     const extensions::Extension* extension) const {
+   LOG(INFO) << "[termsurf-pdf] extensions-frame-binder-invoked frame_url="
+             << render_frame_host->GetLastCommittedURL() << " site_url="
+-            << render_frame_host->GetSiteInstance()->GetSiteURL()
++            << render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL()
+             << " extension_id=" << extension->id() << " populate_called=1";
+   extensions::PopulateExtensionFrameBinders(binder_map, render_frame_host,
+                                             extension);
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+index 6417afcdd0..c8316ce3cc 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+@@ -41,12 +41,16 @@ class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
+   BrowserContext* GetOriginalContext(BrowserContext* context) override;
+   BrowserContext* GetContextRedirectedToOriginal(
+       BrowserContext* context) override;
++  BrowserContext* GetContextRedirectedToOriginalWithoutAshInternals(
++      BrowserContext* context) override;
+   BrowserContext* GetContextOwnInstance(BrowserContext* context) override;
+   BrowserContext* GetContextForOriginalOnly(BrowserContext* context) override;
+   bool AreExtensionsDisabledForContext(BrowserContext* context) override;
+   bool IsGuestSession(BrowserContext* context) const override;
+   bool IsExtensionIncognitoEnabled(const extensions::ExtensionId& extension_id,
+                                    BrowserContext* context) const override;
++  bool IsExtensionIncognitoEnabled(const extensions::Extension* extension,
++                                   BrowserContext* context) const override;
+   bool CanExtensionCrossIncognito(const extensions::Extension* extension,
+                                   BrowserContext* context) const override;
+   base::FilePath GetBundleResourcePath(
+@@ -64,13 +68,15 @@ class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
+       const network::ResourceRequest& request,
+       network::mojom::RequestDestination destination,
+       ui::PageTransition page_transition,
+-      int child_id,
++      content::ChildProcessId child_id,
+       bool is_incognito,
+       const extensions::Extension* extension,
+       const extensions::ExtensionSet& extensions,
+       const extensions::ProcessMap& process_map,
+       const GURL& upstream_url) override;
+-  PrefService* GetPrefServiceForContext(BrowserContext* context) override;
++  // Not part of ExtensionsBrowserClient on Chromium 150; kept for TermSurf
++  // context registration (RegisterContext).
++  PrefService* GetPrefServiceForContext(BrowserContext* context);
+   void GetEarlyExtensionPrefsObservers(
+       BrowserContext* context,
+       std::vector<extensions::EarlyExtensionPrefsObserver*>* observers)
+diff --git a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+index 1385544001..c0dc48bd99 100644
+--- a/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
++++ b/content/libtermsurf_chromium/extensions/ts_pdf_resource_bundle.cc
+@@ -18,6 +18,7 @@
+ #include "chrome/grit/pdf_resources.h"
+ #include "components/grit/components_resources.h"
+ #include "components/strings/grit/components_strings.h"
++#include "extensions/grit/extensions_renderer_generated_resources.h"
+ #include "extensions/grit/extensions_renderer_resources.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
+@@ -159,15 +160,16 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+             << common_pak_path.AsUTF8Unsafe() << " found=" << common_found
+             << " loaded=" << !api_features.empty();
+ 
+-  base::FilePath extensions_renderer_pak_path =
++  // Chromium 150 ships generated MIME-handler bindings in a separate pak.
++  base::FilePath extensions_renderer_generated_pak_path =
+       assets_path.AppendASCII("gen")
+           .AppendASCII("extensions")
+-          .AppendASCII("extensions_renderer_resources.pak");
++          .AppendASCII("extensions_renderer_generated_resources.pak");
+   const bool extensions_renderer_found =
+-      base::PathExists(extensions_renderer_pak_path);
++      base::PathExists(extensions_renderer_generated_pak_path);
+   if (extensions_renderer_found) {
+     ui::ResourceBundle::GetSharedInstance().AddDataPackFromPath(
+-        extensions_renderer_pak_path, ui::kScaleFactorNone);
++        extensions_renderer_generated_pak_path, ui::kScaleFactorNone);
+   }
+ 
+   std::string mime_handler_private;
+@@ -175,15 +177,15 @@ void LoadTsPdfResourceBundle(const std::string& process_type) {
+   if (extensions_renderer_found) {
+     mime_handler_private =
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+-            IDR_MIME_HANDLER_PRIVATE_CUSTOM_BINDINGS_JS);
++            IDR_EXTENSIONS_RENDERER_GENERATED_MIME_HANDLER_PRIVATE_CUSTOM_BINDINGS_JS);
+     mime_handler_mojom =
+         ui::ResourceBundle::GetSharedInstance().LoadDataResourceString(
+-            IDR_MIME_HANDLER_MOJOM_JS);
++            IDR_EXTENSIONS_RENDERER_GENERATED_EXTENSIONS_COMMON_API_MIME_HANDLER_MOJOM_JS);
+   }
+   const bool extensions_renderer_loaded =
+       !mime_handler_private.empty() && !mime_handler_mojom.empty();
+   LOG(INFO) << "[termsurf-pdf] extensions-renderer-pak path="
+-            << extensions_renderer_pak_path.AsUTF8Unsafe()
++            << extensions_renderer_generated_pak_path.AsUTF8Unsafe()
+             << " found=" << extensions_renderer_found
+             << " loaded=" << extensions_renderer_loaded
+             << " mimeHandlerPrivate_bytes=" << mime_handler_private.size()
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 4d946ada99..2a316c8990 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -212,12 +212,13 @@ TsBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+ 
+ void TsBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+     BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator,
++    network::mojom::RequestDestination request_destination,
+     NonNetworkURLLoaderFactoryMap* factories) {
+-  ShellContentBrowserClient::
+-      RegisterNonNetworkWorkerMainResourceURLLoaderFactories(browser_context,
+-                                                             factories);
+-  RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(browser_context,
+-                                                           factories);
++  ContentBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
++      browser_context, request_initiator, request_destination, factories);
++  RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(
++      browser_context, request_initiator, factories);
+ }
+ 
+ void TsBrowserClient::RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 12f65f7ac1..67133a93ae 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -86,6 +86,8 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       FrameTreeNodeId frame_tree_node_id) override;
+   void RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+       BrowserContext* browser_context,
++      const std::optional<url::Origin>& request_initiator,
++      network::mojom::RequestDestination request_destination,
+       NonNetworkURLLoaderFactoryMap* factories) override;
+   void RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+       BrowserContext* browser_context,
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 700352ddca..048817c14d 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -37,6 +37,7 @@
+ #include "content/public/browser/origin_trials_controller_delegate.h"
+ #include "content/public/browser/reload_type.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
+@@ -130,7 +131,7 @@ void LogIssue794InputFrames(const char* tag,
+     auto* frame_view = rfh->GetView();
+     std::string site_url;
+     if (rfh->GetSiteInstance()) {
+-      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++      site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+     }
+     const bool pdf_related =
+         rfh->GetLastCommittedURL().spec().find(
+@@ -170,7 +171,7 @@ void LogIssue794InputFrames(const char* tag,
+ std::string Issue794FrameClassification(RenderFrameHost* rfh) {
+   std::string site_url;
+   if (rfh->GetSiteInstance()) {
+-    site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++    site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+   }
+   const std::string url = rfh->GetLastCommittedURL().spec();
+   if (!rfh->GetParent()) {
+@@ -204,7 +205,7 @@ void LogIssue794KeyTarget(const char* tag,
+     found = true;
+     std::string site_url;
+     if (rfh->GetSiteInstance()) {
+-      site_url = rfh->GetSiteInstance()->GetSiteURL().spec();
++      site_url = rfh->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+     }
+     LOG(INFO) << tag
+               << " key-target frame_tree_node_id=" << rfh->GetFrameTreeNodeId()
+diff --git a/content/libtermsurf_chromium/ts_compositor_bridge_mac.h b/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
+index eb503b139f..49703bf344 100644
+--- a/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
++++ b/content/libtermsurf_chromium/ts_compositor_bridge_mac.h
+@@ -35,7 +35,7 @@ class PersistentCompositorBridge : public ui::AcceleratedWidgetMacNSView {
+   void SetCallback(CALayerParamsCallback callback);
+ 
+   // ui::AcceleratedWidgetMacNSView:
+-  void AcceleratedWidgetCALayerParamsUpdated() override;
++  void AcceleratedWidgetCALayerParamsUpdated(gfx::CALayerParams params) override;
+ 
+  private:
+   raw_ptr<ui::AcceleratedWidgetMac> widget_;
+diff --git a/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm b/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
+index f8a5d5e72e..51d855fbce 100644
+--- a/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
++++ b/content/libtermsurf_chromium/ts_compositor_bridge_mac.mm
+@@ -26,10 +26,11 @@ void SetParentUiLayerOnView(RenderWidgetHostView* view, ui::Layer* layer) {
+   callback_ = std::move(callback);
+ }
+ 
+-void PersistentCompositorBridge::AcceleratedWidgetCALayerParamsUpdated() {
+-  const auto* params = widget_->GetCALayerParams();
+-  if (params && callback_)
+-    callback_.Run(*params);
++void PersistentCompositorBridge::AcceleratedWidgetCALayerParamsUpdated(
++    gfx::CALayerParams params) {
++  if (callback_) {
++    callback_.Run(params);
++  }
+ }
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_mime_handler_binders.cc b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+index bc20b42695..81f53344c1 100644
+--- a/content/libtermsurf_chromium/ts_mime_handler_binders.cc
++++ b/content/libtermsurf_chromium/ts_mime_handler_binders.cc
+@@ -13,6 +13,7 @@
+ #include "extensions/browser/mime_handler/mime_handler_stream_manager.h"
+ #include "content/public/browser/render_frame_host.h"
+ #include "content/public/browser/site_instance.h"
++#include "content/public/browser/security_principal.h"
+ #include "extensions/browser/api/mime_handler_private/mime_handler_private.h"
+ #include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/api/mime_handler.mojom.h"
+@@ -34,7 +35,7 @@ std::string FrameUrl(RenderFrameHost* render_frame_host) {
+ }
+ 
+ std::string SiteUrl(RenderFrameHost* render_frame_host) {
+-  return render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++  return render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+ }
+ 
+ class TsBeforeUnloadControl
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.cc b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+index aad634bb80..d91a42fcfc 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.cc
+@@ -23,6 +23,7 @@
+ #include "content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.h"
+ #include "content/libtermsurf_chromium/ts_plugin_utils.h"
+ #include "content/public/browser/browser_context.h"
++#include "content/public/common/child_process_id.h"
+ #include "content/public/browser/child_process_security_policy.h"
+ #include "content/public/browser/navigation_handle.h"
+ #include "content/public/browser/navigation_throttle_registry.h"
+@@ -178,7 +179,7 @@ void RegisterTsPdfBrowserInterfaceBindersForFrame(
+   const bool is_pdf_extension = IsTsPdfComponentExtension(extension);
+   const std::string frame_url = render_frame_host->GetLastCommittedURL().spec();
+   const std::string site_url =
+-      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++      render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+   const std::string extension_id = extension ? extension->id() : "none";
+ 
+   LOG(INFO) << "[termsurf-pdf] extension-frame-binder-check frame_url="
+@@ -203,7 +204,7 @@ void RegisterTsPdfBrowserInterfaceBindersForFrame(
+   if (!populated_extension_binders &&
+       (IsTsPdfComponentExtensionUrl(render_frame_host->GetLastCommittedURL()) ||
+        IsTsPdfComponentExtensionUrl(
+-           render_frame_host->GetSiteInstance()->GetSiteURL()))) {
++           render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL()))) {
+     const extensions::Extension* pdf_extension = GetEnabledPdfExtension(
+         render_frame_host->GetProcess()->GetBrowserContext());
+     if (pdf_extension) {
+@@ -252,7 +253,7 @@ void RegisterTsPdfAssociatedInterfaceBindersForRenderFrameHost(
+          mojo::PendingAssociatedReceiver<pdf::mojom::PdfHost> receiver) {
+         LOG(INFO) << "[termsurf-pdf] pdf-host-binder frame_url="
+                   << render_frame_host->GetLastCommittedURL() << " site_url="
+-                  << render_frame_host->GetSiteInstance()->GetSiteURL();
++                  << render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL();
+         pdf::PDFDocumentHelper::BindPdfHost(
+             std::move(receiver), render_frame_host,
+             std::make_unique<pdf::TsPDFDocumentHelperClient>());
+@@ -314,13 +315,14 @@ CreateTsPdfExtensionNavigationURLLoaderFactory(
+ 
+ void RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(
+     BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator,
+     ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories) {
+   LOG(INFO) << "[termsurf-pdf] extension-factory"
+             << " scheme=chrome-extension type=worker-main";
+   factories->emplace(
+       extensions::kExtensionScheme,
+       extensions::CreateExtensionWorkerMainResourceURLLoaderFactory(
+-          browser_context));
++          browser_context, request_initiator));
+ }
+ 
+ void RegisterTsPdfExtensionServiceWorkerUpdateURLLoaderFactory(
+@@ -341,9 +343,11 @@ void RegisterTsPdfExtensionSubresourceURLLoaderFactory(
+     ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories) {
+   LOG(INFO) << "[termsurf-pdf] extension-factory"
+             << " scheme=chrome-extension type=subresource";
+-  factories->emplace(extensions::kExtensionScheme,
+-                     extensions::CreateExtensionURLLoaderFactory(
+-                         render_process_id, render_frame_id));
++  factories->emplace(
++      extensions::kExtensionScheme,
++      extensions::CreateExtensionURLLoaderFactory(
++          content::ChildProcessId::FromUnsafeValue(render_process_id),
++          render_frame_id));
+ 
+   RenderProcessHost* process_host =
+       RenderProcessHost::FromID(render_process_id);
+@@ -410,7 +414,7 @@ bool MaybeHandleTsPdfExtensionURL(const GURL& url, bool* handled) {
+ }
+ 
+ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+-  if (!IsTsPdfComponentExtensionUrl(site_instance->GetSiteURL())) {
++  if (!IsTsPdfComponentExtensionUrl(site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL())) {
+     return;
+   }
+ 
+@@ -428,7 +432,7 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+       registry->enabled_extensions().GetByID(extension_misc::kPdfExtensionId);
+   if (!IsTsPdfComponentExtension(extension)) {
+     LOG(INFO) << "[termsurf-pdf] process-map-miss site_url="
+-              << site_instance->GetSiteURL();
++              << site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL();
+     return;
+   }
+ 
+@@ -436,32 +440,39 @@ void MaybeActivateTsPdfSiteInstance(SiteInstance* site_instance) {
+     return;
+   }
+ 
+-  const int process_id = site_instance->GetProcess()->GetDeprecatedID();
++  const content::ChildProcessId process_id =
++      site_instance->GetProcess()->GetID();
+   extensions::ProcessMap::Get(browser_context)
+       ->Insert(extension->id(), process_id);
+   LOG(INFO) << "[termsurf-pdf] process-map-insert extension_id="
+-            << extension->id() << " process_id=" << process_id
+-            << " site_url=" << site_instance->GetSiteURL();
++            << extension->id()
++            << " process_id=" << process_id.GetUnsafeValue()
++            << " site_url=" << site_instance->GetSecurityPrincipal().GetDeprecatedSiteURL();
+ 
+   auto* renderer_startup_helper =
+       extensions::RendererStartupHelperFactory::GetForBrowserContext(
+           browser_context);
+   LOG(INFO) << "[termsurf-pdf] pdf-process-map-helper extension_id="
+-            << extension->id() << " process_id=" << process_id
++            << extension->id()
++            << " process_id=" << process_id.GetUnsafeValue()
+             << " helper=" << (renderer_startup_helper != nullptr);
+   if (renderer_startup_helper) {
+     renderer_startup_helper->ActivateExtensionInProcess(
+         *extension, site_instance->GetProcess());
+     LOG(INFO) << "[termsurf-pdf] pdf-activate-request extension_id="
+-              << extension->id() << " process_id=" << process_id << " called=1";
++              << extension->id()
++              << " process_id=" << process_id.GetUnsafeValue()
++              << " called=1";
+   }
+   // This grant is process-scoped. It is safe only because the process policy
+   // above is restricted to the PDF component extension's site URL.
+   ChildProcessSecurityPolicy::GetInstance()->GrantRequestOrigin(
+-      process_id, url::Origin::CreateFromNormalizedTuple(
+-                      kChromeUIScheme, kChromeUIResourcesHost, 0));
++      process_id.GetUnsafeValue(),
++      url::Origin::CreateFromNormalizedTuple(kChromeUIScheme,
++                                             kChromeUIResourcesHost, 0));
+   LOG(INFO) << "[termsurf-pdf] chrome-resources-grant extension_id="
+-            << extension->id() << " process_id=" << process_id;
++            << extension->id()
++            << " process_id=" << process_id.GetUnsafeValue();
+ }
+ 
+ }  // namespace content
+diff --git a/content/libtermsurf_chromium/ts_pdf_browser_support.h b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+index 3b0a3598e9..37bfc76728 100644
+--- a/content/libtermsurf_chromium/ts_pdf_browser_support.h
++++ b/content/libtermsurf_chromium/ts_pdf_browser_support.h
+@@ -75,6 +75,7 @@ CreateTsPdfExtensionNavigationURLLoaderFactory(
+     FrameTreeNodeId frame_tree_node_id);
+ void RegisterTsPdfExtensionWorkerMainResourceURLLoaderFactory(
+     BrowserContext* browser_context,
++    const std::optional<url::Origin>& request_initiator,
+     ContentBrowserClient::NonNetworkURLLoaderFactoryMap* factories);
+ void RegisterTsPdfExtensionServiceWorkerUpdateURLLoaderFactory(
+     BrowserContext* browser_context,
+diff --git a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+index d7e3f39291..3ed8acb439 100644
+--- a/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
++++ b/content/libtermsurf_chromium/ts_pdf_help_bubble_handler_factory.cc
+@@ -10,9 +10,11 @@
+ 
+ #include "base/logging.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/security_principal.h"
+ #include "content/public/browser/site_instance.h"
+ #include "extensions/common/constants.h"
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
++#include "ui/webui/resources/js/tracked_element/tracked_element.mojom.h"
+ #include "url/gurl.h"
+ 
+ namespace pdf {
+@@ -39,10 +41,17 @@ class TsPdfHelpBubbleHandlerFactory
+   // help_bubble::mojom::PdfHelpBubbleHandlerFactory:
+   void CreateHelpBubbleHandler(
+       mojo::PendingRemote<help_bubble::mojom::HelpBubbleClient> client,
+-      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler> handler)
+-      override {
++      mojo::PendingReceiver<help_bubble::mojom::HelpBubbleHandler>
++          help_bubble_handler,
++      mojo::PendingReceiver<tracked_element::mojom::TrackedElementHandler>
++          tracked_element_handler) override {
++    // TermSurf does not host ink-signature help bubbles; accept the pipes so
++    // the PDF extension does not hang on an unbound factory method.
+     LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-create-handler frame_url="
+               << frame_url_ << " site_url=" << site_url_;
++    std::ignore = client;
++    std::ignore = help_bubble_handler;
++    std::ignore = tracked_element_handler;
+   }
+ 
+  private:
+@@ -59,7 +68,7 @@ void BindTsPdfHelpBubbleHandlerFactory(
+   const std::string frame_url =
+       render_frame_host->GetLastCommittedURL().spec();
+   const std::string site_url =
+-      render_frame_host->GetSiteInstance()->GetSiteURL().spec();
++      render_frame_host->GetSiteInstance()->GetSecurityPrincipal().GetDeprecatedSiteURL().spec();
+ 
+   if (!IsPdfExtensionFrame(render_frame_host)) {
+     LOG(INFO) << "[termsurf-pdf] pdf-help-bubble-binder-reject frame_url="
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.cc b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+index 325afb39d0..b1b8e56d2c 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+@@ -225,9 +225,9 @@ void TsPdfPrintManager::ScriptedPrint(
+ }
+ 
+ #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+-void TsPdfPrintManager::UpdatePrintSettings(
+-    base::DictValue job_settings,
+-    UpdatePrintSettingsCallback callback) {
++void TsPdfPrintManager::GetPrintPreviewParams(
++    GetPrintPreviewParamsCallback callback) {
++  // Contained PDF path uses system/native print, not scripted preview.
+   std::move(callback).Run(nullptr);
+ }
+ 
+@@ -236,7 +236,7 @@ void TsPdfPrintManager::SetupScriptedPrintPreview(
+   std::move(callback).Run();
+ }
+ 
+-void TsPdfPrintManager::ShowScriptedPrintPreview(bool source_is_modifiable) {}
++void TsPdfPrintManager::ShowScriptedPrintPreview() {}
+ 
+ void TsPdfPrintManager::RequestPrintPreview(
+     printing::mojom::RequestPrintPreviewParamsPtr params) {}
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.h b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+index f79e13babc..080bc5cbeb 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.h
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+@@ -52,11 +52,10 @@ class TsPdfPrintManager
+                      ScriptedPrintCallback callback) override;
+ 
+ #if BUILDFLAG(ENABLE_PRINT_PREVIEW)
+-  void UpdatePrintSettings(base::DictValue job_settings,
+-                           UpdatePrintSettingsCallback callback) override;
++  void GetPrintPreviewParams(GetPrintPreviewParamsCallback callback) override;
+   void SetupScriptedPrintPreview(
+       SetupScriptedPrintPreviewCallback callback) override;
+-  void ShowScriptedPrintPreview(bool source_is_modifiable) override;
++  void ShowScriptedPrintPreview() override;
+   void RequestPrintPreview(
+       printing::mojom::RequestPrintPreviewParamsPtr params) override;
+   void CheckForCancel(int32_t preview_ui_id,
+diff --git a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+index 206bc8fdaf..9f50ba8de6 100644
+--- a/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
++++ b/content/libtermsurf_chromium/ts_pdf_renderer_support.cc
+@@ -55,7 +55,7 @@ class TsPrintRenderFrameHelperDelegate
+ #endif  // BUILDFLAG(ENABLE_PRINTING)
+ 
+ bool HasInternalId(const blink::WebElement& plugin_element) {
+-  return plugin_element.HasAttribute(blink::WebString::FromUTF8("internalid"));
++  return plugin_element.HasAttribute(blink::WebString::FromUtf8("internalid"));
+ }
+ 
+ }  // namespace
+@@ -67,8 +67,8 @@ void AllowTsPdfViewerChromeResources() {
+       GURL(std::string(extensions::kExtensionScheme) + "://" +
+            extension_misc::kPdfExtensionId);
+   blink::WebSecurityPolicy::AddOriginAccessAllowListEntry(
+-      pdf_viewer_origin, blink::WebString::FromUTF8(kChromeUIScheme),
+-      blink::WebString::FromUTF8(kChromeUIResourcesHost), /*port=*/0,
++      pdf_viewer_origin, blink::WebString::FromUtf8(kChromeUIScheme),
++      blink::WebString::FromUtf8(kChromeUIResourcesHost), /*port=*/0,
+       network::mojom::CorsDomainMatchMode::kDisallowSubdomains,
+       network::mojom::CorsPortMatchMode::kAllowAnyPort,
+       network::mojom::CorsOriginAccessMatchPriority::kMaxPriority);
+diff --git a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+index 4c94f66eed..32bf25a8ea 100644
+--- a/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
++++ b/content/libtermsurf_chromium/ts_pdf_stream_delegate.cc
+@@ -197,9 +197,11 @@ bool TsPdfStreamDelegate::ShouldAllowPdfFrameNavigation(
+   base::WeakPtr<extensions::StreamContainer> stream =
+       manager->GetStreamContainer(parent_frame);
+   if (stream) {
+-    return !manager->IsPdfExtensionFrameTreeNodeId(parent_frame,
+-                                                  frame_tree_node_id) ||
+-           (!manager->DidPdfExtensionFinishNavigation(parent_frame) &&
++    // Chromium 150 renamed PDF-specific trackers to generic MIME-handler
++    // extension/content frame trackers on MimeHandlerStreamManager.
++    return !manager->IsExtensionFrameTreeNodeId(parent_frame,
++                                                frame_tree_node_id) ||
++           (!manager->DidExtensionFrameFinishNavigation(parent_frame) &&
+             url == stream->handler_url());
+   }
+ 
+@@ -213,9 +215,9 @@ bool TsPdfStreamDelegate::ShouldAllowPdfFrameNavigation(
+     return true;
+   }
+ 
+-  return !manager->IsPdfContentFrameTreeNodeId(grandparent_frame,
+-                                               frame_tree_node_id) ||
+-         (!manager->DidPdfContentNavigate(grandparent_frame) &&
++  return !manager->IsContentFrameTreeNodeId(grandparent_frame,
++                                            frame_tree_node_id) ||
++         (!manager->DidContentFrameFinishNavigation(grandparent_frame) &&
+           url == stream->original_url());
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index 8bc1e21673..ae08e9bcaf 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -23,7 +23,7 @@
+ #include "content/public/browser/download_utils.h"
+ #include "content/public/browser/web_contents.h"
+ #include "extensions/browser/extension_registry.h"
+-#include "extensions/browser/guest_view/mime_handler_view/mime_handler_view_attach_helper.h"
++#include "extensions/browser/mime_handler/mime_handler_page.h"
+ #include "extensions/browser/mime_handler/stream_container.h"
+ #include "extensions/common/constants.h"
+ #include "extensions/common/extension.h"
+@@ -114,14 +114,16 @@ bool AddPdfStreamContainer(
+     return false;
+   }
+ 
+-  auto* handler = MimeTypesHandler::GetHandler(extension);
++  const MimeTypesHandler* handler = MimeTypesHandler::Get(*extension);
+   if (!handler || !handler->HasPlugin()) {
+     return false;
+   }
+ 
+-  GURL handler_url(
+-      extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec() +
+-      handler->handler_url());
++  // Chromium 150 resolves the handler URL per MIME type.
++  const GURL handler_url = handler->GetHandlerUrl(pdf::kPDFMimeType);
++  if (!handler_url.is_valid()) {
++    return false;
++  }
+   auto stream_container = std::make_unique<extensions::StreamContainer>(
+       -1, embedded, handler_url, extension_id, std::move(transferrable_loader),
+       original_url);
+@@ -205,9 +207,9 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   LOG(INFO) << "[termsurf-pdf] oopif-template-body frame_tree_node_id="
+             << frame_tree_node_id_ << " internal_id=" << internal_id
+             << " original_url=" << response_url;
+-  std::string payload =
+-      extensions::MimeHandlerViewAttachHelper::CreateTemplateMimeHandlerPage(
+-          response_url, response_head->mime_type, internal_id);
++  std::string payload = extensions::CreateTemplateMimeHandlerPage(
++      response_url, response_head->mime_type, internal_id,
++      /*use_oopif=*/true, /*is_oopif_pdf=*/true);
+   const std::string pdf_extension_url =
+       extensions::Extension::GetBaseURLFromExtensionId(extension_id).spec();
+   std::string pdf_extension_origin = pdf_extension_url;
+diff --git a/content/libtermsurf_chromium/ts_plugin_utils.cc b/content/libtermsurf_chromium/ts_plugin_utils.cc
+index 45c8077605..2a86146445 100644
+--- a/content/libtermsurf_chromium/ts_plugin_utils.cc
++++ b/content/libtermsurf_chromium/ts_plugin_utils.cc
+@@ -28,12 +28,12 @@ base::flat_map<std::string, std::string> GetTsPluginMimeTypeToExtensionIdMap(
+     return result;
+   }
+ 
+-  const auto* handler = MimeTypesHandler::GetHandler(extension);
++  const auto* handler = MimeTypesHandler::Get(*extension);
+   if (!handler) {
+     return result;
+   }
+ 
+-  for (const auto& mime_type : handler->mime_type_set()) {
++  for (const auto& mime_type : handler->GetSupportedMimeTypes()) {
+     if (mime_type == pdf::kPDFMimeType) {
+       result[mime_type] = extension_misc::kPdfExtensionId;
+     }
+-- 
+2.50.1 (Apple Git-155)
+
