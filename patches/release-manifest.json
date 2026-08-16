@@ -19,24 +19,24 @@
     {
       "name": "nushell",
       "checkout": "forks/nushell",
-      "base": "c68420afd55f8dd3a3ec09e14f779ff48aebc8e5",
-      "branch": "issue-26081311412273-exp5-nushell-main",
-      "expected_head": "07823d55131289ead112821171c118c87825adbf",
-      "expected_tree": "9f58c51bd9c3efb85a86a29a9f5736497308a0dd",
+      "base": "8e03210652f3c48c4521cec982d96e4cb6c67181",
+      "branch": "issue-26081615463315-exp2-nushell-main",
+      "expected_head": "789490788161dd8d5ab5770e27b13b160d04a496",
+      "expected_tree": "b88140e054dc825c0e3b61797bd482ff7e27ebcc",
       "patch_directories": [
-        "patches/nushell/patches/issue-26081311412273"
+        "patches/nushell/patches/issue-26081615463315"
       ],
       "patch_count": 8,
-      "archive_sha256": "25a8e0a3efd0fe0d9a6779fecaa4482810bf04a8c3fb641be499f0c442c3d464",
+      "archive_sha256": "a2e90a980fafb55c6b041f1d1d191e92af1e97d81fb16228a038828595ddb5cf",
       "allowed_untracked": []
     },
     {
       "name": "reedline",
       "checkout": "forks/reedline",
-      "base": "464efb2ed5b8d294f81b787e70418006d48428f3",
-      "branch": "issue-26081311412273-exp5-reedline-main",
-      "expected_head": "464efb2ed5b8d294f81b787e70418006d48428f3",
-      "expected_tree": "c904d8f3393e8e67ee4d02f8624656ac9804675f",
+      "base": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
+      "branch": "issue-26081615463315-exp2-reedline-main",
+      "expected_head": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
+      "expected_tree": "c0f4a5ff6ff58b9f4756f567d5576da7daeb8177",
       "patch_directories": [],
       "patch_count": 0,
       "archive_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",

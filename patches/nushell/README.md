@@ -5,25 +5,37 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26081311412273 Exp 5)
+## Current State (Issue 26081615463315 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26081615463315-exp2-nushell-main`
+- Product HEAD: `789490788161dd8d5ab5770e27b13b160d04a496`
+- Product tree: `b88140e054dc825c0e3b61797bd482ff7e27ebcc`
+- Local fork working tree: `forks/nushell`
+- Issue archive (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8** from `base..HEAD`;
+  prior `issue-26081311412273` stays historical)
+- Total patch count: **8**
+- Archive aggregate SHA-256:
+  `a2e90a980fafb55c6b041f1d1d191e92af1e97d81fb16228a038828595ddb5cf`
+- Reedline path pin: sibling `forks/reedline` at tip
+  `9230319ae57f88bac5a2a17dc3f9a313cff3330d` (`0.50.0`, helix default off
+  via `default-features = false`)
+- Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
+
+## Prior State (Issue 26081311412273 Exp 5)
+
 - Upstream base commit (main tip): `c68420afd55f8dd3a3ec09e14f779ff48aebc8e5`
-- Workspace version: `0.114.2` (confirm in workspace `Cargo.toml` if bumped)
+- Workspace version: `0.114.2`
 - Product branch: `issue-26081311412273-exp5-nushell-main`
 - Product HEAD: `07823d55131289ead112821171c118c87825adbf`
 - Product tree: `9f58c51bd9c3efb85a86a29a9f5736497308a0dd`
-- Local fork working tree: `forks/nushell`
-- Issue archive (release authority):
-  `patches/nushell/patches/issue-26081311412273/` (**8** from `base..HEAD`;
-  prior `issue-26080213543507` / `issue-26080510416061` stay historical)
-- Total patch count: **8**
-- Archive aggregate SHA-256:
+- Issue archive: `patches/nushell/patches/issue-26081311412273/` (**8**)
+- Archive SHA-256:
   `25a8e0a3efd0fe0d9a6779fecaa4482810bf04a8c3fb641be499f0c442c3d464`
-- Reedline path pin: sibling `forks/reedline` at tip
-  `464efb2ed5b8d294f81b787e70418006d48428f3` (`0.49.0`, helix default off
-  via `default-features = false`)
-- Verification: **TREE_MATCH**; `scripts/build.sh ahsh --release`
+- Reedline path pin: `464efb2ed5b8d294f81b787e70418006d48428f3` (`0.49.0`)
 
 ## Prior State (Issue 26080510416061 Exp 1)
 

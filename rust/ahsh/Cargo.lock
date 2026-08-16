@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "ahsh"
-version = "0.1.121"
+version = "0.1.122"
 dependencies = [
  "chrono",
  "crossterm",
@@ -3353,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-base"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "indexmap",
  "miette 7.6.0",
@@ -3365,7 +3365,7 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-extra"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "fancy-regex",
  "heck",
@@ -3390,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-lang"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "itertools 0.15.0",
  "nu-cmd-base",
@@ -3405,7 +3405,7 @@ dependencies = [
 
 [[package]]
 name = "nu-cmd-plugin"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "itertools 0.15.0",
  "nu-engine",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "nu-color-config"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "nu-ansi-term",
  "nu-engine",
@@ -3427,7 +3427,7 @@ dependencies = [
 
 [[package]]
 name = "nu-command"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "aegis-password-generator",
  "alphanumeric-sort",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "nu-config"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "derive_more",
  "derive_setters",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "nu-derive-value"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "heck",
  "proc-macro-error2",
@@ -3571,7 +3571,7 @@ dependencies = [
 
 [[package]]
 name = "nu-engine"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "fancy-regex",
  "log",
@@ -3584,7 +3584,7 @@ dependencies = [
 
 [[package]]
 name = "nu-experimental"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "itertools 0.15.0",
  "thiserror 2.0.19",
@@ -3592,7 +3592,7 @@ dependencies = [
 
 [[package]]
 name = "nu-explore"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "ansi-str",
  "anyhow",
@@ -3622,7 +3622,7 @@ dependencies = [
 
 [[package]]
 name = "nu-glob"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "anyhow",
  "log",
@@ -3632,7 +3632,7 @@ dependencies = [
 
 [[package]]
 name = "nu-heavy-utils"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "base64 0.23.1",
  "better_default",
@@ -3650,7 +3650,7 @@ dependencies = [
 
 [[package]]
 name = "nu-json"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "linked-hash-map",
  "nu-protocol",
@@ -3662,7 +3662,7 @@ dependencies = [
 
 [[package]]
 name = "nu-mcp"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -3688,7 +3688,7 @@ dependencies = [
 
 [[package]]
 name = "nu-parser"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "bytesize",
  "chrono",
@@ -3705,7 +3705,7 @@ dependencies = [
 
 [[package]]
 name = "nu-path"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "dirs 6.0.0",
  "omnipath",
@@ -3715,7 +3715,7 @@ dependencies = [
 
 [[package]]
 name = "nu-plugin-core"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "interprocess",
  "log",
@@ -3730,7 +3730,7 @@ dependencies = [
 
 [[package]]
 name = "nu-plugin-engine"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "log",
  "nu-engine",
@@ -3745,7 +3745,7 @@ dependencies = [
 
 [[package]]
 name = "nu-plugin-protocol"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "nu-protocol",
  "nu-utils",
@@ -3757,14 +3757,14 @@ dependencies = [
 
 [[package]]
 name = "nu-pretty-hex"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "nu-ansi-term",
 ]
 
 [[package]]
 name = "nu-protocol"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "brotli",
  "bstr",
@@ -3808,7 +3808,7 @@ dependencies = [
 
 [[package]]
 name = "nu-std"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "log",
  "miette 7.6.0",
@@ -3819,7 +3819,7 @@ dependencies = [
 
 [[package]]
 name = "nu-system"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "chrono",
  "itertools 0.15.0",
@@ -3839,7 +3839,7 @@ dependencies = [
 
 [[package]]
 name = "nu-table"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "fancy-regex",
  "nu-ansi-term",
@@ -3852,7 +3852,7 @@ dependencies = [
 
 [[package]]
 name = "nu-term-grid"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "nu-utils",
  "unicode-width 0.2.2",
@@ -3860,7 +3860,7 @@ dependencies = [
 
 [[package]]
 name = "nu-utils"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "byteyarn",
  "crossterm",
@@ -3966,7 +3966,7 @@ dependencies = [
 
 [[package]]
 name = "nuon"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "nu-engine",
  "nu-parser",
@@ -4814,7 +4814,7 @@ dependencies = [
 
 [[package]]
 name = "reedline"
-version = "0.49.0"
+version = "0.50.0"
 dependencies = [
  "chrono",
  "crossterm",
@@ -5357,7 +5357,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-nu-cli"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "chrono",
  "crossterm",
@@ -5395,7 +5395,7 @@ dependencies = [
 
 [[package]]
 name = "shannon-nu-lsp"
-version = "0.114.2"
+version = "0.115.1"
 dependencies = [
  "crossbeam-channel",
  "fancy-regex",
