@@ -1,0 +1,40 @@
+From 1744d3123b7b19d633ef34d2ccc70ee0f4717e2c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 14 Aug 2026 06:50:16 -0500
+Subject: [PATCH 72/75] fix: repair Swift merges after main rebase
+
+A stray END and a dangling #if
+Kept Xcode from ever taking off.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift           | 1 -
+ macos/Sources/Ghostty/Surface View/SurfaceView.swift | 2 --
+ 2 files changed, 3 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 581c68790..2024c5eea 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -456,7 +456,6 @@ extension Ghostty {
+         }
+ 
+         var macosCustomIcon: String {
+-            #if os(macOS)
+             let defaultValue = NSString("~/.config/astrohacker/termsurf/Astrohacker TermSurf.icns").expandingTildeInPath
+             guard let config = self.config else { return defaultValue }
+             var v: UnsafePointer<Int8>?
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index c8ccfa56a..0685c0179 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -851,8 +851,6 @@ extension Ghostty {
+             }
+         }
+ 
+-END 26350
+-
+     struct SurfaceRendererUnhealthyView: View {
+         var body: some View {
+             HStack {
+-- 
+2.50.1 (Apple Git-155)
+

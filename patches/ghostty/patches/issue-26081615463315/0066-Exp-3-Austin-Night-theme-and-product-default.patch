@@ -1,0 +1,88 @@
+From f41969caa67ee97e76ea040b3df03296d4b9caec Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 4 Aug 2026 05:26:07 -0500
+Subject: [PATCH 66/75] Exp 3: Austin Night theme and product default
+
+Ship Austin Night (TokyoNight + background #09090d) as a product
+theme resource and default light/dark theme when unset.
+---
+ src/astrohacker/themes/Austin Night | 22 ++++++++++++++++++++++
+ src/build/GhosttyResources.zig      |  9 +++++++++
+ src/config/Config.zig               | 11 ++++++-----
+ 3 files changed, 37 insertions(+), 5 deletions(-)
+ create mode 100644 src/astrohacker/themes/Austin Night
+
+diff --git a/src/astrohacker/themes/Austin Night b/src/astrohacker/themes/Austin Night
+new file mode 100644
+index 000000000..95e0b7241
+--- /dev/null
++++ b/src/astrohacker/themes/Austin Night	
+@@ -0,0 +1,22 @@
++palette = 0=#15161e
++palette = 1=#f7768e
++palette = 2=#9ece6a
++palette = 3=#e0af68
++palette = 4=#7aa2f7
++palette = 5=#bb9af7
++palette = 6=#7dcfff
++palette = 7=#a9b1d6
++palette = 8=#414868
++palette = 9=#f7768e
++palette = 10=#9ece6a
++palette = 11=#e0af68
++palette = 12=#7aa2f7
++palette = 13=#bb9af7
++palette = 14=#7dcfff
++palette = 15=#c0caf5
++background = #09090d
++foreground = #c0caf5
++cursor-color = #c0caf5
++cursor-text = #15161e
++selection-background = #33467c
++selection-foreground = #c0caf5
+diff --git a/src/build/GhosttyResources.zig b/src/build/GhosttyResources.zig
+index 6ed4fcab4..c9e6237e1 100644
+--- a/src/build/GhosttyResources.zig
++++ b/src/build/GhosttyResources.zig
+@@ -136,6 +136,15 @@ pub fn init(b: *std.Build, cfg: *const Config, deps: *const SharedDeps) !Ghostty
+             });
+             try steps.append(b.allocator, &install_step.step);
+         }
++
++        // Astrohacker product themes (e.g. Austin Night) installed alongside upstream pack.
++        const product_themes = b.addInstallDirectory(.{
++            .source_dir = b.path("src/astrohacker/themes"),
++            .install_dir = .{ .custom = "share" },
++            .install_subdir = b.pathJoin(&.{ "ghostty", "themes" }),
++            .exclude_extensions = &.{".md"},
++        });
++        try steps.append(b.allocator, &product_themes.step);
+     }
+ 
+     // Fish shell completions
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 5f9d6be34..f9504a1d9 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -594,12 +594,13 @@ language: ?[:0]const u8 = null,
+ ///
+ ///   - macOS: titlebar tabs style is not updated when switching themes.
+ ///
+-/// Astrohacker TermSurf defaults to the built-in **TokyoNight** theme (exact
+-/// resource name; case-sensitive on case-sensitive filesystems). Set `theme`
+-/// explicitly to use a different theme or light/dark pair.
++/// Astrohacker TermSurf defaults to the product **Austin Night** theme (exact
++/// resource name; case-sensitive on case-sensitive filesystems). Austin Night is
++/// TokyoNight with a darker page ground (#09090d). Set `theme` explicitly to use
++/// a different theme (e.g. TokyoNight) or light/dark pair.
+ theme: ?Theme = .{
+-    .light = "TokyoNight",
+-    .dark = "TokyoNight",
++    .light = "Austin Night",
++    .dark = "Austin Night",
+ },
+ 
+ /// Background color for the window.
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,66 @@
+From 11b4d13b7cd3722e0659dfa7ee6aa8a302e2cb09 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 14 Aug 2026 06:56:44 -0500
+Subject: [PATCH 74/75] fix: clipboard, OSSize, and splitDivider after rebase
+
+Main taught the surface a new confirm,
+And two colors tried to share one name.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift    | 21 -------------------
+ .../Ghostty/Surface View/SurfaceView.swift    |  4 ++--
+ 2 files changed, 2 insertions(+), 23 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 2024c5eea..0023326d9 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -691,27 +691,6 @@ extension Ghostty {
+             return value
+         }
+ 
+-
+-        var splitDividerColor: Color {
+-            let backgroundColor = NSColor(backgroundColor)
+-            let isLightBackground = backgroundColor.isLightColor
+-            let newColor = isLightBackground ? backgroundColor.darken(by: 0.08) : backgroundColor.darken(by: 0.4)
+-
+-            guard let config = self.config else { return Color(newColor) }
+-
+-            var color: ghostty_config_color_s = .init()
+-            let key = "split-divider-color"
+-            if !ghostty_config_get(config, &color, key, UInt(key.lengthOfBytes(using: .utf8))) {
+-                return Color(newColor)
+-            }
+-
+-            return .init(
+-                red: Double(color.r) / 255,
+-                green: Double(color.g) / 255,
+-                blue: Double(color.b) / 255
+-            )
+-        }
+-
+         var quickTerminalPosition: QuickTerminalPosition {
+             guard let config = self.config else { return .top }
+             var v: UnsafePointer<Int8>?
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView.swift b/macos/Sources/Ghostty/Surface View/SurfaceView.swift
+index 58a7fb84c..755b0c7ad 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView.swift	
+@@ -1447,12 +1447,12 @@ extension FocusedValues {
+         typealias Value = String
+     }
+ 
+-    var ghosttySurfaceCellSize: OSSize? {
++    var ghosttySurfaceCellSize: CGSize? {
+         get { self[FocusedGhosttySurfaceCellSize.self] }
+         set { self[FocusedGhosttySurfaceCellSize.self] = newValue }
+     }
+ 
+     struct FocusedGhosttySurfaceCellSize: FocusedValueKey {
+-        typealias Value = OSSize
++        typealias Value = CGSize
+     }
+ }
+-- 
+2.50.1 (Apple Git-155)
+

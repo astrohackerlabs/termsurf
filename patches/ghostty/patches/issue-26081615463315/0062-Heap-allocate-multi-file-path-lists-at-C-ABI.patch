@@ -1,0 +1,139 @@
+From 051b80a80861cfe6a2fab43cac8355d08107a036 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 31 Jul 2026 05:31:51 -0500
+Subject: [PATCH 62/75] Heap-allocate multi-file path lists at C ABI
+
+No more silent sixty-four: full path_count
+or fail closed above ten thousand.
+---
+ src/main_c.zig | 96 ++++++++++++++++++++++++++++++++++++--------------
+ 1 file changed, 70 insertions(+), 26 deletions(-)
+
+diff --git a/src/main_c.zig b/src/main_c.zig
+index 96ad70a01..a464cf731 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -325,6 +325,30 @@ pub export fn termsurf_gui_active_changed(active: i32) void {
+     termsurf.guiActiveChanged(active != 0);
+ }
+ 
++/// Safety max for multi-file C bridges (Issue 26073012595926). Above this we
++/// fail closed rather than allocate unbounded host memory. Not a silent clamp.
++const max_host_file_paths: usize = 10_000;
++
++/// Copy C path pointer array into a heap slice of views (full path_count).
++/// Returns null on OOM or when path_count exceeds max_host_file_paths.
++/// Caller must free with c_allocator.free when non-null and non-empty.
++fn collectCPathSlices(paths: ?[*]?[*:0]const u8, path_count: usize) ?[][]const u8 {
++    if (path_count == 0 or paths == null) return &.{};
++    if (path_count > max_host_file_paths) return null;
++    const allocator = std.heap.c_allocator;
++    const path_slices = allocator.alloc([]const u8, path_count) catch return null;
++    const path_array = paths.?;
++    var i: usize = 0;
++    while (i < path_count) : (i += 1) {
++        if (path_array[i]) |p| {
++            path_slices[i] = std.mem.span(p);
++        } else {
++            path_slices[i] = "";
++        }
++    }
++    return path_slices;
++}
++
+ /// AppKit NSOpenPanel completion → FileChooserReply on the engine connection.
+ /// pane_id scopes the pending slot to the correct browser_fd (multi-engine isolation).
+ pub export fn termsurf_file_chooser_complete(
+@@ -336,19 +360,25 @@ pub export fn termsurf_file_chooser_complete(
+     path_count: usize,
+ ) void {
+     const pane_slice: []const u8 = if (pane_id) |p| std.mem.span(p) else "";
+-    var path_slices: [64][]const u8 = undefined;
+-    const n = @min(path_count, path_slices.len);
+-    if (accepted != 0 and paths != null and n > 0) {
+-        const path_array = paths.?;
+-        var i: usize = 0;
+-        while (i < n) : (i += 1) {
+-            if (path_array[i]) |p| {
+-                path_slices[i] = std.mem.span(p);
+-            } else {
+-                path_slices[i] = "";
+-            }
++    if (accepted != 0 and paths != null and path_count > 0) {
++        if (path_count > max_host_file_paths) {
++            std.log.warn(
++                "termsurf_file_chooser_complete: path_count={} exceeds max {}; cancelling",
++                .{ path_count, max_host_file_paths },
++            );
++            termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
++            return;
+         }
+-        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, true, path_slices[0..n]);
++        const path_slices = collectCPathSlices(paths, path_count) orelse {
++            std.log.warn(
++                "termsurf_file_chooser_complete: alloc failed path_count={}; cancelling",
++                .{path_count},
++            );
++            termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
++            return;
++        };
++        defer if (path_slices.len > 0) std.heap.c_allocator.free(path_slices);
++        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, true, path_slices);
+     } else {
+         termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
+     }
+@@ -364,23 +394,37 @@ pub export fn termsurf_external_file_drop(
+     y: f64,
+     phase: ?[*:0]const u8,
+ ) c_int {
+-    var path_slices: [64][]const u8 = undefined;
+-    const n = @min(path_count, path_slices.len);
+-    if (paths != null and n > 0) {
+-        const path_array = paths.?;
+-        var i: usize = 0;
+-        while (i < n) : (i += 1) {
+-            if (path_array[i]) |p| {
+-                path_slices[i] = std.mem.span(p);
+-            } else {
+-                path_slices[i] = "";
+-            }
+-        }
+-    }
+     const phase_slice: []const u8 = if (phase) |p| std.mem.span(p) else "drop";
++    if (path_count > max_host_file_paths) {
++        std.log.warn(
++            "termsurf_external_file_drop: path_count={} exceeds max {}; rejecting",
++            .{ path_count, max_host_file_paths },
++        );
++        return 0;
++    }
++    const path_slices = collectCPathSlices(paths, path_count) orelse {
++        if (path_count > 0) {
++            std.log.warn(
++                "termsurf_external_file_drop: alloc failed path_count={}; rejecting",
++                .{path_count},
++            );
++            return 0;
++        }
++        return if (termsurf.externalFileDrop(
++            std.mem.span(pane_id),
++            &.{},
++            x,
++            y,
++            phase_slice,
++        ))
++            1
++        else
++            0;
++    };
++    defer if (path_slices.len > 0) std.heap.c_allocator.free(path_slices);
+     return if (termsurf.externalFileDrop(
+         std.mem.span(pane_id),
+-        if (n > 0) path_slices[0..n] else &.{},
++        path_slices,
+         x,
+         y,
+         phase_slice,
+-- 
+2.50.1 (Apple Git-155)
+

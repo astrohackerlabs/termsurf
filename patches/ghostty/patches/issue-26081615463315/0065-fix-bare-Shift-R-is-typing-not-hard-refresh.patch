@@ -1,0 +1,41 @@
+From 7bbf8688ce6afe75df0a260db241e8ac534e0f06 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 1 Aug 2026 16:51:23 -0500
+Subject: [PATCH 65/75] fix: bare Shift+R is typing, not hard refresh
+
+Cmd+Shift+R remains hard refresh; bare Shift+R
+forwards to the webview as capital R.
+Issue 26080121448364 Exp 1.
+---
+ macos/Tests/Ghostty/SurfaceViewAppKitTests.swift | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 1127a3b51..a1a025e34 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -45,7 +45,7 @@ struct SurfaceViewAppKitTests {
+         )
+     }
+ 
+-    /// Issue 26072209562907 Exp 1: hard refresh key classification (R = 0x0F).
++    /// Issue 26080121448364 Exp 1: bare Shift+R is typing, not hard refresh (R = 0x0F).
+     @Test func hardRefreshShiftRWithoutCommand() {
+         #expect(
+             Ghostty.SurfaceView.termSurfHardRefreshAction(
+@@ -54,10 +54,11 @@ struct SurfaceViewAppKitTests {
+                 shift: true,
+                 control: false,
+                 option: false
+-            ) == "refresh_ignore_cache"
++            ) == nil
+         )
+     }
+ 
++    /// Issue 26072209562907 / 26080121448364: Cmd+Shift+R remains hard refresh.
+     @Test func hardRefreshCmdShiftR() {
+         #expect(
+             Ghostty.SurfaceView.termSurfHardRefreshAction(
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,0 +1,111 @@
+From 95f4de6258f77da45753473f52b89def717326ec Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 22 Jul 2026 14:13:03 -0500
+Subject: [PATCH 45/75] Add hard refresh_ignore_cache for Browse AppKit keys
+
+Issue 26072209562907 Exp 1: classify Shift+R / Cmd+Shift+R as
+refresh_ignore_cache before Browse bulk-forward; allow-list and
+request_id hard NavigationAction like soft refresh; unit-test classifier.
+---
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 49 +++++++++++++++++++
+ src/apprt/termsurf.zig                        | 10 ++--
+ 2 files changed, 56 insertions(+), 3 deletions(-)
+
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index e276f748a..1127a3b51 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -45,6 +45,55 @@ struct SurfaceViewAppKitTests {
+         )
+     }
+ 
++    /// Issue 26072209562907 Exp 1: hard refresh key classification (R = 0x0F).
++    @Test func hardRefreshShiftRWithoutCommand() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: false,
++                shift: true,
++                control: false,
++                option: false
++            ) == "refresh_ignore_cache"
++        )
++    }
++
++    @Test func hardRefreshCmdShiftR() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: true,
++                shift: true,
++                control: false,
++                option: false
++            ) == "refresh_ignore_cache"
++        )
++    }
++
++    @Test func hardRefreshRejectsCmdRWithoutShift() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: true,
++                shift: false,
++                control: false,
++                option: false
++            ) == nil
++        )
++    }
++
++    @Test func hardRefreshRejectsControlChord() {
++        #expect(
++            Ghostty.SurfaceView.termSurfHardRefreshAction(
++                keyCode: 0x0F,
++                command: false,
++                shift: true,
++                control: true,
++                option: false
++            ) == nil
++        )
++    }
++
+     @Test func attachedWindowNeverChangesOverlayLifetime() {
+         #expect(
+             Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index bf7b8c067..9e9a0c575 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -2892,7 +2892,8 @@ fn handleNavigationAction(
+     const action = cString(action_req.*.action);
+     if (action_req.*.tab_id != 0 or action_req.*.request_id != 0 or pane_id.len == 0 or
+         (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
+-            !std.mem.eql(u8, action, "refresh")))
++            !std.mem.eql(u8, action, "refresh") and
++            !std.mem.eql(u8, action, "refresh_ignore_cache")))
+     {
+         log.warn(
+             "NavigationAction: invalid TUI request pane_id={s} tab_id={} action={s}",
+@@ -2914,7 +2915,8 @@ fn sendNavigationActionForPaneOwned(
+     required_tui_fd: ?std.posix.fd_t,
+ ) bool {
+     if (!std.mem.eql(u8, action, "back") and !std.mem.eql(u8, action, "forward") and
+-        !std.mem.eql(u8, action, "refresh"))
++        !std.mem.eql(u8, action, "refresh") and
++        !std.mem.eql(u8, action, "refresh_ignore_cache"))
+     {
+         log.warn("NavigationAction: invalid product action pane_id={s} action={s}", .{ pane_id, action });
+         return false;
+@@ -2989,7 +2991,9 @@ fn snapshotEnabledNavigationAction(
+         .browser_fd = servers[server_index].attached_fd,
+         .tab_id = pane.tab_id,
+     };
+-    if (std.mem.eql(u8, action, "refresh")) {
++    if (std.mem.eql(u8, action, "refresh") or
++        std.mem.eql(u8, action, "refresh_ignore_cache"))
++    {
+         snapshot.navigation_request_id = next_navigation_request_id;
+         next_navigation_request_id +%= 1;
+         if (next_navigation_request_id == 0) next_navigation_request_id = 1;
+-- 
+2.50.1 (Apple Git-155)
+

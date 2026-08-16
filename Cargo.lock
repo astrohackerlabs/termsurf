@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ah-chromiumd"
-version = "0.1.120"
+version = "0.1.121"
 dependencies = [
  "prost",
  "prost-build",
@@ -18,7 +18,7 @@ dependencies = [
 
 [[package]]
 name = "ahnexus"
-version = "0.1.120"
+version = "0.1.121"
 dependencies = [
  "axum",
  "clap",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ahweb"
-version = "0.1.120"
+version = "0.1.121"
 dependencies = [
  "arboard",
  "clap",
@@ -2057,7 +2057,7 @@ checksum = "1d87ecb2933e8aeadb3e3a02b828fed80a7528047e68b4f424523a0981a3a084"
 
 [[package]]
 name = "nexus-common"
-version = "0.9.7"
+version = "0.9.10"
 dependencies = [
  "blake3",
  "hex",

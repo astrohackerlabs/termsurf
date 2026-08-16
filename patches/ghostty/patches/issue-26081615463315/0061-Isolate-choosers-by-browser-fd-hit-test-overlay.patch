@@ -1,0 +1,253 @@
+From b2e07af55f12bce915bf9efba610fc4b338e7963 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 30 Jul 2026 08:05:56 -0500
+Subject: [PATCH 61/75] Isolate choosers by browser fd; hit-test overlay
+
+Pending slots key connection with tab and request.
+Disconnect clears; drag requires overlay contains.
+---
+ include/ghostty.h                            |  2 +
+ macos/Sources/App/AppDelegate+TermSurf.swift | 11 ++--
+ src/apprt/termsurf.zig                       | 59 ++++++++++++++++----
+ src/main_c.zig                               |  7 ++-
+ 4 files changed, 62 insertions(+), 17 deletions(-)
+
+diff --git a/include/ghostty.h b/include/ghostty.h
+index 8ca0f8ec3..84f8d152f 100644
+--- a/include/ghostty.h
++++ b/include/ghostty.h
+@@ -1113,7 +1113,9 @@ GHOSTTY_API size_t termsurf_copy_current_url(const char*, uint8_t*, size_t);
+ // Host-mediated file chooser (Exp 3): Zig → AppKit request; AppKit → Zig complete.
+ // termsurf_request_file_chooser is implemented in Swift (@_cdecl).
+ // termsurf_file_chooser_complete is implemented in Zig (engine IPC reply).
++// pane_id scopes multi-engine pending slots (Issue 26073012571498 Exp 1).
+ GHOSTTY_API void termsurf_file_chooser_complete(
++    const char* pane_id,
+     int64_t tab_id,
+     uint64_t request_id,
+     int accepted,
+diff --git a/macos/Sources/App/AppDelegate+TermSurf.swift b/macos/Sources/App/AppDelegate+TermSurf.swift
+index 191bbfbdd..6caddbeb7 100644
+--- a/macos/Sources/App/AppDelegate+TermSurf.swift
++++ b/macos/Sources/App/AppDelegate+TermSurf.swift
+@@ -590,7 +590,7 @@ func termsurf_request_file_chooser(
+ ) {
+   guard let paneIDPointer else {
+     termsurfLogFileChooser("TermSurf file chooser rejected: missing pane id")
+-    termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++    termsurf_file_chooser_complete(nil, tabID, requestID, 0, nil, 0)
+     return
+   }
+ 
+@@ -607,17 +607,17 @@ func termsurf_request_file_chooser(
+   DispatchQueue.main.async {
+     guard let appDelegate = NSApplication.shared.delegate as? AppDelegate else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: missing app delegate")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+     guard let uuid = UUID(uuidString: paneID) else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: invalid pane id \(paneID)")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+     guard let target = appDelegate.findSurface(forUUID: uuid) else {
+       termsurfLogFileChooser("TermSurf file chooser rejected: no surface for pane id \(paneID)")
+-      termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++      termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       return
+     }
+ 
+@@ -660,6 +660,7 @@ func termsurf_request_file_chooser(
+           let constBuf = UnsafeMutableRawPointer(ptrBuf.baseAddress)
+             .map { $0.assumingMemoryBound(to: UnsafePointer<CChar>?.self) }
+           termsurf_file_chooser_complete(
++            paneID,
+             tabID,
+             requestID,
+             1,
+@@ -671,7 +672,7 @@ func termsurf_request_file_chooser(
+         termsurfLogFileChooser(
+           "TermSurf file chooser cancelled tab_id=\(tabID) request_id=\(requestID)"
+         )
+-        termsurf_file_chooser_complete(tabID, requestID, 0, nil, 0)
++        termsurf_file_chooser_complete(paneID, tabID, requestID, 0, nil, 0)
+       }
+     }
+ 
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 8a9e3e91a..5f6e99389 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -4318,8 +4318,12 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+     var server_shutdown: ?ServerShutdownSnapshot = null;
+     var navigation_states: [max_panes]NavigationStateSnapshot = undefined;
+     var navigation_state_count: usize = 0;
++    var cleared_choosers: usize = 0;
+ 
+     state_mutex.lockUncancelable(global.io());
++    // Drop pending host chooser slots for this engine so a late panel cannot
++    // reply into a dead FD (Issue 26073012571498 Exp 1).
++    cleared_choosers = clearPendingFileChoosersForBrowserFd(fd);
+     if (findServerByFd(fd)) |server_index| {
+         const server = &servers[server_index];
+         for (&panes) |*pane| {
+@@ -4358,6 +4362,13 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+     }
+     state_mutex.unlock(global.io());
+ 
++    if (cleared_choosers > 0) {
++        log.info(
++            "Browser disconnect: cleared {} pending file chooser slot(s) fd={}",
++            .{ cleared_choosers, fd },
++        );
++    }
++
+     for (navigation_states[0..navigation_state_count]) |*state| {
+         sendNavigationStateToTui(state) catch |err| {
+             log.warn(
+@@ -5138,11 +5149,15 @@ fn msgTypeName(msg_case: c.Termsurf__TermSurfMessage__MsgCase) []const u8 {
+     };
+ }
+ 
++/// Pending chooser identity is (browser_fd, tab_id, request_id). Never replace
++/// browser_fd across different engines with the same tab/request counters
++/// (Issue 26073012571498 Exp 1 multi-engine isolation).
+ fn reservePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix.fd_t) bool {
+-    // Replace an existing slot for the same tab/request if present.
+     for (&pending_file_choosers) |*slot| {
+-        if (slot.in_use and slot.tab_id == tab_id and slot.request_id == request_id) {
+-            slot.browser_fd = browser_fd;
++        if (slot.in_use and slot.browser_fd == browser_fd and slot.tab_id == tab_id and
++            slot.request_id == request_id)
++        {
++            // Same connection re-request: keep the slot.
+             return true;
+         }
+     }
+@@ -5160,11 +5175,13 @@ fn reservePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix
+     return false;
+ }
+ 
+-fn takePendingFileChooser(tab_id: i64, request_id: u64) ?PendingFileChooser {
++fn takePendingFileChooser(tab_id: i64, request_id: u64, browser_fd: std.posix.fd_t) ?PendingFileChooser {
+     for (&pending_file_choosers) |*slot| {
+         if (!slot.in_use) continue;
+         if (slot.tab_id != tab_id) continue;
+         if (request_id != 0 and slot.request_id != request_id) continue;
++        // Prefer exact browser_fd match; browser_fd < 0 means first match (legacy tests).
++        if (browser_fd >= 0 and slot.browser_fd != browser_fd) continue;
+         const copy = slot.*;
+         slot.* = .{};
+         return copy;
+@@ -5172,6 +5189,17 @@ fn takePendingFileChooser(tab_id: i64, request_id: u64) ?PendingFileChooser {
+     return null;
+ }
+ 
++fn clearPendingFileChoosersForBrowserFd(browser_fd: std.posix.fd_t) usize {
++    var cleared: usize = 0;
++    for (&pending_file_choosers) |*slot| {
++        if (!slot.in_use) continue;
++        if (slot.browser_fd != browser_fd) continue;
++        slot.* = .{};
++        cleared += 1;
++    }
++    return cleared;
++}
++
+ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRequest) void {
+     const chooser = req orelse {
+         log.warn("FileChooserRequest: missing payload", .{});
+@@ -5217,8 +5245,8 @@ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRe
+ 
+         if (!reservePendingFileChooser(tab_id, request_id, fd)) {
+             log.warn(
+-                "FileChooserRequest: no pending slot tab_id={} request_id={}",
+-                .{ tab_id, request_id },
++                "FileChooserRequest: no pending slot tab_id={} request_id={} fd={}",
++                .{ tab_id, request_id, fd },
+             );
+             should_cancel = true;
+         } else if (!found_pane) {
+@@ -5226,7 +5254,7 @@ fn handleFileChooserRequest(fd: std.posix.fd_t, req: ?*c.Termsurf__FileChooserRe
+                 "FileChooserRequest: unknown pane tab_id={} request_id={} — cancel",
+                 .{ tab_id, request_id },
+             );
+-            _ = takePendingFileChooser(tab_id, request_id);
++            _ = takePendingFileChooser(tab_id, request_id, fd);
+             should_cancel = true;
+         } else {
+             reserved = true;
+@@ -5298,20 +5326,31 @@ fn sendFileChooserReply(
+ }
+ 
+ /// Called from AppKit after NSOpenPanel completes (Swift @_cdecl bridge).
++/// pane_id resolves the browser_fd so multi-engine same tab/request cannot collide.
+ pub fn fileChooserComplete(
++    pane_id: []const u8,
+     tab_id: i64,
+     request_id: u64,
+     accepted: bool,
+     paths: []const []const u8,
+ ) void {
+     state_mutex.lockUncancelable(global.io());
+-    const pending = takePendingFileChooser(tab_id, request_id);
++    var browser_fd: std.posix.fd_t = -1;
++    if (findPane(pane_id)) |pane_index| {
++        const profile = panes[pane_index].profileName();
++        const browser = panes[pane_index].browserName();
++        if (findServer(profile, browser)) |server_index| {
++            browser_fd = servers[server_index].attached_fd;
++        }
++    }
++    // Fall back: match tab+request alone only when browser_fd unknown (single-engine).
++    const pending = takePendingFileChooser(tab_id, request_id, browser_fd);
+     state_mutex.unlock(global.io());
+ 
+     const slot = pending orelse {
+         log.warn(
+-            "FileChooserComplete: no pending tab_id={} request_id={}",
+-            .{ tab_id, request_id },
++            "FileChooserComplete: no pending tab_id={} request_id={} pane_id={s}",
++            .{ tab_id, request_id, pane_id },
+         );
+         return;
+     };
+diff --git a/src/main_c.zig b/src/main_c.zig
+index dc8d4312c..96ad70a01 100644
+--- a/src/main_c.zig
++++ b/src/main_c.zig
+@@ -326,13 +326,16 @@ pub export fn termsurf_gui_active_changed(active: i32) void {
+ }
+ 
+ /// AppKit NSOpenPanel completion → FileChooserReply on the engine connection.
++/// pane_id scopes the pending slot to the correct browser_fd (multi-engine isolation).
+ pub export fn termsurf_file_chooser_complete(
++    pane_id: ?[*:0]const u8,
+     tab_id: i64,
+     request_id: u64,
+     accepted: c_int,
+     paths: ?[*]?[*:0]const u8,
+     path_count: usize,
+ ) void {
++    const pane_slice: []const u8 = if (pane_id) |p| std.mem.span(p) else "";
+     var path_slices: [64][]const u8 = undefined;
+     const n = @min(path_count, path_slices.len);
+     if (accepted != 0 and paths != null and n > 0) {
+@@ -345,9 +348,9 @@ pub export fn termsurf_file_chooser_complete(
+                 path_slices[i] = "";
+             }
+         }
+-        termsurf.fileChooserComplete(tab_id, request_id, true, path_slices[0..n]);
++        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, true, path_slices[0..n]);
+     } else {
+-        termsurf.fileChooserComplete(tab_id, request_id, false, &.{});
++        termsurf.fileChooserComplete(pane_slice, tab_id, request_id, false, &.{});
+     }
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+

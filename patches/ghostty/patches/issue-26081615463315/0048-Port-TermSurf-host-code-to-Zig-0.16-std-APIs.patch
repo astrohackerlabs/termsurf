@@ -1,0 +1,1193 @@
+From 0d9f8b8ee68a5d6987f2613e027adab045d12bee Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 26 Jul 2026 13:52:23 -0500
+Subject: [PATCH 48/75] Port TermSurf host code to Zig 0.16 std APIs
+
+Io.Mutex+global.io, process.spawn SpawnOptions, libc getenv,
+posix.system.write for IPC frames, Config XDG env reads.
+---
+ src/apprt/termsurf.zig | 342 +++++++++++++++++++++--------------------
+ src/config/Config.zig  |   6 +-
+ 2 files changed, 180 insertions(+), 168 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 9e9a0c575..d6a5b30a4 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -2,6 +2,7 @@ const std = @import("std");
+ const builtin = @import("builtin");
+ const build_config = @import("../build_config.zig");
+ const internal_os = @import("../os/main.zig");
++const global = @import("../global.zig");
+ 
+ const c = @cImport({
+     @cInclude("stdlib.h");
+@@ -13,6 +14,13 @@ const c = @cImport({
+ 
+ const log = std.log.scoped(.termsurf);
+ 
++/// Zig 0.16: processGetenv was removed; use libc getenv.
++fn processGetenv(name: [*:0]const u8) ?[:0]const u8 {
++    const v = std.posix.system.getenv(name) orelse return null;
++    return std.mem.span(v);
++}
++
++
+ const env_key: [:0]const u8 = "TERMSURF_SOCKET";
+ const max_frame_size: usize = 1024 * 1024;
+ const max_clients: usize = 128;
+@@ -671,12 +679,12 @@ const NavigationStateSnapshot = struct {
+ };
+ 
+ fn geometryTraceEnabled() bool {
+-    const value = std.posix.getenv(geometry_trace_env) orelse return false;
++    const value = processGetenv(geometry_trace_env) orelse return false;
+     return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+ }
+ 
+ fn browserStartupTraceEnabled() bool {
+-    const value = std.posix.getenv(browser_startup_trace_env) orelse return false;
++    const value = processGetenv(browser_startup_trace_env) orelse return false;
+     return !std.mem.eql(u8, value, "0") and !std.mem.eql(u8, value, "false");
+ }
+ 
+@@ -770,7 +778,7 @@ fn geometryTraceAppKitPixels(event: []const u8, snapshot: *const ResizeSnapshot,
+ }
+ 
+ fn geometryScenario() []const u8 {
+-    return std.posix.getenv("TERMSURF_GEOMETRY_SCENARIO") orelse "unknown";
++    return processGetenv("TERMSURF_GEOMETRY_SCENARIO") orelse "unknown";
+ }
+ 
+ const ClearOverlaySnapshot = struct {
+@@ -824,9 +832,9 @@ const CreateDevtoolsTabSnapshot = struct {
+     }
+ };
+ 
+-var mutex: std.Thread.Mutex = .{};
+-var clients_mutex: std.Thread.Mutex = .{};
+-var state_mutex: std.Thread.Mutex = .{};
++var mutex: std.Io.Mutex = .init;
++var clients_mutex: std.Io.Mutex = .init;
++var state_mutex: std.Io.Mutex = .init;
+ var next_navigation_request_id: u64 = 1;
+ var listener_fd: std.posix.fd_t = -1;
+ var accept_thread: ?std.Thread = null;
+@@ -851,12 +859,12 @@ var pending_gui_activation: bool = false;
+ var current_color_scheme_dark: bool = false;
+ 
+ pub fn start() !void {
+-    mutex.lock();
+-    defer mutex.unlock();
++    mutex.lockUncancelable(global.io());
++    defer mutex.unlock(global.io());
+ 
+     if (listener_fd >= 0) return error.AlreadyStarted;
+ 
+-    const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
++    const tmpdir = processGetenv("TMPDIR") orelse "/tmp";
+     const sep = if (std.mem.endsWith(u8, tmpdir, "/")) "" else "/";
+ 
+     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+@@ -894,13 +902,13 @@ pub fn start() !void {
+ }
+ 
+ pub fn stop() void {
+-    mutex.lock();
++    mutex.lockUncancelable(global.io());
+     const fd = listener_fd;
+     const thread = accept_thread;
+     listener_fd = -1;
+     accept_thread = null;
+     stopping.store(true, .release);
+-    mutex.unlock();
++    mutex.unlock(global.io());
+ 
+     wakeAccept();
+ 
+@@ -1091,8 +1099,8 @@ fn handleClient(fd: std.posix.fd_t, slot_index: usize) void {
+ }
+ 
+ fn reserveClient(fd: std.posix.fd_t) ?usize {
+-    clients_mutex.lock();
+-    defer clients_mutex.unlock();
++    clients_mutex.lockUncancelable(global.io());
++    defer clients_mutex.unlock(global.io());
+ 
+     for (&clients, 0..) |*slot, i| {
+         if (slot.thread == null and slot.fd < 0) {
+@@ -1105,8 +1113,8 @@ fn reserveClient(fd: std.posix.fd_t) ?usize {
+ }
+ 
+ fn activateClient(index: usize, thread: std.Thread) ?std.Thread {
+-    clients_mutex.lock();
+-    defer clients_mutex.unlock();
++    clients_mutex.lockUncancelable(global.io());
++    defer clients_mutex.unlock(global.io());
+ 
+     if (clients[index].done) {
+         clients[index] = .{};
+@@ -1118,14 +1126,14 @@ fn activateClient(index: usize, thread: std.Thread) ?std.Thread {
+ }
+ 
+ fn clearClient(index: usize) void {
+-    clients_mutex.lock();
+-    defer clients_mutex.unlock();
++    clients_mutex.lockUncancelable(global.io());
++    defer clients_mutex.unlock(global.io());
+     clients[index] = .{};
+ }
+ 
+ fn markClientDone(index: usize) void {
+-    clients_mutex.lock();
+-    defer clients_mutex.unlock();
++    clients_mutex.lockUncancelable(global.io());
++    defer clients_mutex.unlock(global.io());
+ 
+     clients[index].fd = -1;
+     clients[index].done = true;
+@@ -1134,14 +1142,14 @@ fn markClientDone(index: usize) void {
+ fn reapDoneClients() [max_clients]?std.Thread {
+     var threads: [max_clients]?std.Thread = [_]?std.Thread{null} ** max_clients;
+ 
+-    clients_mutex.lock();
++    clients_mutex.lockUncancelable(global.io());
+     for (&clients, 0..) |*slot, i| {
+         if (slot.done) {
+             threads[i] = slot.thread;
+             slot.* = .{};
+         }
+     }
+-    clients_mutex.unlock();
++    clients_mutex.unlock(global.io());
+ 
+     return threads;
+ }
+@@ -1157,7 +1165,7 @@ fn joinClientThreads(threads: [max_clients]?std.Thread) void {
+ fn stopClients() [max_clients]?std.Thread {
+     var threads: [max_clients]?std.Thread = [_]?std.Thread{null} ** max_clients;
+ 
+-    clients_mutex.lock();
++    clients_mutex.lockUncancelable(global.io());
+     for (&clients, 0..) |*slot, i| {
+         if (slot.fd >= 0) {
+             std.posix.shutdown(slot.fd, .both) catch {};
+@@ -1166,7 +1174,7 @@ fn stopClients() [max_clients]?std.Thread {
+         threads[i] = slot.thread;
+         slot.* = .{};
+     }
+-    clients_mutex.unlock();
++    clients_mutex.unlock(global.io());
+ 
+     return threads;
+ }
+@@ -1231,8 +1239,8 @@ fn sendHelloReply(fd: std.posix.fd_t) !void {
+ pub fn helloConfigChanged(homepage: []const u8, browser_payload: []const u8) void {
+     const next_homepage = if (homepage.len == 0) default_homepage else homepage;
+ 
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     if (next_homepage.len > hello_homepage.len) {
+         @memcpy(hello_homepage[0..default_homepage.len], default_homepage);
+@@ -1259,16 +1267,16 @@ pub fn helloConfigChanged(homepage: []const u8, browser_payload: []const u8) voi
+ }
+ 
+ pub fn colorSchemeChanged(dark: bool) void {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     current_color_scheme_dark = dark;
+     log.info("TermSurf color scheme changed dark={}", .{dark});
+ }
+ 
+ fn currentHelloHomepage(buf: *[max_homepage_len:0]u8, len: *usize) [:0]const u8 {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const current = currentHelloHomepageLocked();
+     @memcpy(buf[0..current.len], current);
+@@ -1322,8 +1330,8 @@ fn currentHelloBrowsers(
+     lens: *[max_hello_browsers]usize,
+     ptrs: *[max_hello_browsers][*:0]u8,
+ ) usize {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     if (hello_browser_count == 0) setDefaultHelloBrowsersLocked();
+ 
+@@ -1411,8 +1419,8 @@ fn fillQueryLastReply(
+     profile_buf: []u8,
+     profile_len: *usize,
+ ) ?[:0]const u8 {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     if (last_browser_pane_len == 0) {
+         return "No browser pane yet";
+@@ -1519,8 +1527,8 @@ fn fillQueryDevtoolsReply(
+     browser_buf: []u8,
+     browser_len: *usize,
+ ) QueryDevtoolsStatus {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const now_ms = std.time.milliTimestamp();
+     const reservation_timeout_ms = devtoolsReservationTimeoutMs();
+@@ -1639,7 +1647,7 @@ fn expireDevtoolsReservations(now_ms: i64, reservation_timeout_ms: i64) void {
+ }
+ 
+ fn devtoolsReservationTimeoutMs() i64 {
+-    const value = std.posix.getenv(devtools_reservation_timeout_env) orelse return default_devtools_reservation_timeout_ms;
++    const value = processGetenv(devtools_reservation_timeout_env) orelse return default_devtools_reservation_timeout_ms;
+     return std.fmt.parseInt(i64, value, 10) catch default_devtools_reservation_timeout_ms;
+ }
+ 
+@@ -1660,8 +1668,8 @@ fn sendQueryTabsReply(fd: std.posix.fd_t, req: ?*c.Termsurf__QueryTabsRequest) !
+ fn countQueryTabsGuiPanes(req: ?*c.Termsurf__QueryTabsRequest) i64 {
+     const requested_profile = if (req) |query| cString(query.*.profile) else "";
+ 
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     var count: i64 = 0;
+     for (&panes) |*pane| {
+@@ -1681,8 +1689,8 @@ fn handleServerRegister(fd: std.posix.fd_t, req: ?*c.Termsurf__ServerRegister) v
+     const browser = serverRegisterBrowser(req);
+     log.info("ServerRegister: profile={s} browser={s}", .{ profile, browser });
+ 
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     if (findAttachableServer(profile, browser)) |index| {
+         servers[index].attached_fd = fd;
+@@ -1754,17 +1762,17 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+     var overlay_snapshot: ?OverlaySnapshot = null;
+     var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     if (findClosedPane(pane_id, tui_fd)) |_| {
+         log.info("SetOverlay ignored for closed pane_id={s} fd={}", .{ pane_id, tui_fd });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+ 
+     if (findPane(pane_id)) |pane_index| {
+         if (!updatePane(&panes[pane_index], overlay, pane_id, profile, browser, url)) {
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         }
+         panes[pane_index].tui_fd = tui_fd;
+@@ -1781,7 +1789,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+             .{ pane_id, profile, browser, pane_count },
+         );
+         geometryTracePane("set_overlay_update", &panes[pane_index], "updated-existing-pane");
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
+         if (iosurface_snapshot) |snapshot| presentIOSurfaceOverlay(&snapshot);
+         return;
+@@ -1789,11 +1797,11 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+ 
+     const pane_index = reservePane() orelse {
+         log.warn("SetOverlay: pane limit reached pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     if (!updatePane(&panes[pane_index], overlay, pane_id, profile, browser, url)) {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+     panes[pane_index].tui_fd = tui_fd;
+@@ -1822,18 +1830,18 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+     } else {
+         const browser_executable = resolveBrowserExecutable(browser) orelse {
+             panes[pane_index] = .{};
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         };
+         const server_index = reserveServer() orelse {
+             log.warn("SetOverlay: server limit reached profile={s} browser={s}", .{ profile, browser });
+             panes[pane_index] = .{};
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         };
+         if (!setServer(&servers[server_index], profile, browser)) {
+             panes[pane_index] = .{};
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         }
+         servers[server_index].set_overlay_wall_ms = set_overlay_wall_ms;
+@@ -1846,7 +1854,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+                 log.warn("SetOverlay: spawn arguments too long profile={s} browser={s}", .{ profile, browser });
+                 panes[pane_index] = .{};
+                 resetServer(server_index);
+-                state_mutex.unlock();
++                state_mutex.unlock(global.io());
+                 return;
+             }
+             should_spawn = true;
+@@ -1855,7 +1863,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+             log.warn("SetOverlay: listen socket path too long profile={s} browser={s}", .{ profile, browser });
+             panes[pane_index] = .{};
+             resetServer(server_index);
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         }
+         log.info(
+@@ -1872,7 +1880,7 @@ fn handleSetOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetOverlay) void
+             set_overlay_wall_ms,
+         );
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (should_spawn) {
+         const profile_z = spawn_profile_buf[0..spawn_profile_len :0];
+@@ -1891,7 +1899,7 @@ fn resolveBrowserExecutable(browser: []const u8) ?[]const u8 {
+ 
+ /// Returns a valid absolute path from env, or null if unset/empty/relative.
+ fn absoluteEnvPath(path_env_name: [:0]const u8) ?[]const u8 {
+-    const resolved = std.posix.getenv(path_env_name) orelse return null;
++    const resolved = processGetenv(path_env_name) orelse return null;
+     if (resolved.len == 0 or !isAbsolutePath(resolved)) {
+         log.warn(
+             "SetOverlay: browser path env ignored (empty or non-absolute) env={s} value={s}",
+@@ -1989,11 +1997,11 @@ fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoo
+         .{ pane_id, profile, browser, inspected_tab_id },
+     );
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     if (findPane(pane_id)) |pane_index| {
+         if (!updateDevtoolsPane(&panes[pane_index], overlay, pane_id, profile, browser)) {
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         }
+         clearDevtoolsReservation(profile, browser, inspected_tab_id, "set-devtools-overlay-update");
+@@ -2003,7 +2011,7 @@ fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoo
+             "SetDevtoolsOverlay: updated pane_id={s} profile={s} browser={s}",
+             .{ pane_id, profile, browser },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         if (resize_snapshot) |snapshot| {
+             sendResize(&snapshot) catch |err| {
+                 log.warn("Resize send failed pane_id={s} err={}", .{ snapshot.paneId(), err });
+@@ -2017,18 +2025,18 @@ fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoo
+             "SetDevtoolsOverlay: duplicate target rejected pane_id={s} existing_pane_id={s} profile={s} browser={s} inspected_tab_id={}",
+             .{ pane_id, panes[existing_index].paneId(), profile, browser, inspected_tab_id },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+ 
+     const pane_index = reservePane() orelse {
+         log.warn("SetDevtoolsOverlay: pane limit reached pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     if (!updateDevtoolsPane(&panes[pane_index], overlay, pane_id, profile, browser)) {
+         panes[pane_index] = .{};
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+     clearDevtoolsReservation(profile, browser, inspected_tab_id, "set-devtools-overlay-create");
+@@ -2037,13 +2045,13 @@ fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoo
+     const server_index = findServer(profile, browser) orelse {
+         log.warn("SetDevtoolsOverlay: no server profile={s} browser={s}", .{ profile, browser });
+         panes[pane_index] = .{};
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     if (servers[server_index].attached_fd < 0) {
+         log.warn("SetDevtoolsOverlay: server not attached profile={s} browser={s}", .{ profile, browser });
+         panes[pane_index] = .{};
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+ 
+@@ -2053,7 +2061,7 @@ fn handleSetDevtoolsOverlay(tui_fd: std.posix.fd_t, req: ?*c.Termsurf__SetDevtoo
+         "SetDevtoolsOverlay: created pane_id={s} profile={s} browser={s} pane_count={}",
+         .{ pane_id, profile, browser, servers[server_index].pane_count },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (create_devtools) |snapshot| {
+         sendCreateDevtoolsTab(&snapshot) catch |err| {
+@@ -2287,8 +2295,8 @@ fn sendResize(snapshot: *const ResizeSnapshot) !void {
+ }
+ 
+ fn markResizeSent(snapshot: *const ResizeSnapshot) void {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const pane_index = findPane(snapshot.paneId()) orelse return;
+     panes[pane_index].last_resize_pixel_width = snapshot.pixel_width;
+@@ -2299,7 +2307,7 @@ pub fn overlayPresentedPixels(pane_id: []const u8, pixel_width: u64, pixel_heigh
+     var trace_snapshot: ?ResizeSnapshot = null;
+     var resize_snapshot: ?ResizeSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findPane(pane_id)) |pane_index| {
+         var pane = &panes[pane_index];
+         const unchanged_appkit =
+@@ -2324,7 +2332,7 @@ pub fn overlayPresentedPixels(pane_id: []const u8, pixel_width: u64, pixel_heigh
+     } else {
+         log.warn("AppKit overlay pixels ignored: no pane pane_id={s}", .{pane_id});
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (trace_snapshot) |snapshot| {
+         geometryTraceAppKitPixels("appkit_presented_pixels", &snapshot, "received-appkit-presented-pixels");
+@@ -2343,7 +2351,7 @@ pub fn overlayPresentedPixels(pane_id: []const u8, pixel_width: u64, pixel_heigh
+ pub fn presentationVisibilityChanged(pane_id: []const u8, visible: bool) void {
+     var snapshot: ?PresentationVisibleSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findPane(pane_id)) |pane_index| {
+         var pane = &panes[pane_index];
+         pane.presentation_visible = visible;
+@@ -2353,16 +2361,16 @@ pub fn presentationVisibilityChanged(pane_id: []const u8, visible: bool) void {
+     } else {
+         log.warn("SetPresentationVisible ignored: no pane pane_id={s} visible={}", .{ pane_id, visible });
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (snapshot) |value| {
+         sendPresentationVisible(&value) catch |err| {
+-            state_mutex.lock();
++            state_mutex.lockUncancelable(global.io());
+             if (findPane(value.paneId())) |pane_index| {
+                 if (panes[pane_index].last_sent_presentation_visible == value.visible)
+                     panes[pane_index].last_sent_presentation_visible = null;
+             }
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             log.warn(
+                 "SetPresentationVisible send failed pane_id={s} tab_id={} visible={} err={}",
+                 .{ value.paneId(), value.tab_id, value.visible, err },
+@@ -2429,10 +2437,10 @@ fn handleModeChanged(req: ?*c.Termsurf__ModeChanged) void {
+     var focus_changed: ?FocusChangedSnapshot = null;
+     var gui_active_target: ?GuiActiveTarget = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("ModeChanged: unknown pane_id={s} browsing={}", .{ pane_id, browsing });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+ 
+@@ -2449,7 +2457,7 @@ fn handleModeChanged(req: ?*c.Termsurf__ModeChanged) void {
+         focus_changed = snapshotFocusChanged(&panes[pane_index], false);
+     }
+     log.info("ModeChanged: pane_id={s} browsing={}", .{ pane_id, browsing });
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (focus_changed) |snapshot| {
+         sendFocusChanged(&snapshot) catch |err| {
+@@ -2470,7 +2478,7 @@ pub fn paneFocusChanged(pane_id: []const u8, focused: bool) void {
+     var focus_changed: ?FocusChangedSnapshot = null;
+     var gui_active_target: ?GuiActiveTarget = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findPane(pane_id)) |pane_index| {
+         panes[pane_index].focused = focused;
+         if (focused) {
+@@ -2486,7 +2494,7 @@ pub fn paneFocusChanged(pane_id: []const u8, focused: bool) void {
+         }
+         log.info("Pane focus changed: pane_id={s} focused={}", .{ pane_id, focused });
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (focus_changed) |snapshot| {
+         sendFocusChanged(&snapshot) catch |err| {
+@@ -2506,8 +2514,8 @@ pub fn paneFocusChanged(pane_id: []const u8, focused: bool) void {
+ pub fn copyCurrentUrl(pane_id: []const u8, out: []u8) usize {
+     if (out.len == 0) return 0;
+ 
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const pane_index = findPane(pane_id) orelse return 0;
+     const pane = &panes[pane_index];
+@@ -2526,7 +2534,7 @@ pub fn guiActiveChanged(active: bool) void {
+     var targets: [max_servers]GuiActiveTarget = [_]GuiActiveTarget{.{}} ** max_servers;
+     var target_count: usize = 0;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     gui_active = active;
+     if (active) {
+         for (&panes) |*pane| {
+@@ -2549,7 +2557,7 @@ pub fn guiActiveChanged(active: bool) void {
+             target_count += 1;
+         }
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     const reason: [:0]const u8 = if (active) "gui_activated" else "gui_deactivated";
+     if (target_count == 0) {
+@@ -2735,7 +2743,7 @@ pub fn overlayMissedLeftClick(pane_id: []const u8) void {
+     var mode_changed: ?ModeChangedSnapshot = null;
+     var focus_changed: ?FocusChangedSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findPane(pane_id)) |pane_index| {
+         const pane = &panes[pane_index];
+         if (pane.browsing) {
+@@ -2745,7 +2753,7 @@ pub fn overlayMissedLeftClick(pane_id: []const u8) void {
+             log.info("ClickModeChanged: pane_id={s} browsing=false reason=overlay_miss", .{pane_id});
+         }
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     sendClickModeSnapshots(mode_changed, focus_changed);
+ }
+@@ -2754,7 +2762,7 @@ fn enterBrowseFromOverlayClick(pane_id: []const u8) void {
+     var mode_changed: ?ModeChangedSnapshot = null;
+     var focus_changed: ?FocusChangedSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findPane(pane_id)) |pane_index| {
+         const pane = &panes[pane_index];
+         if (!pane.browsing) {
+@@ -2766,7 +2774,7 @@ fn enterBrowseFromOverlayClick(pane_id: []const u8) void {
+             log.info("ClickModeChanged: pane_id={s} browsing=true reason=overlay_click", .{pane_id});
+         }
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     sendClickModeSnapshots(mode_changed, focus_changed);
+ }
+@@ -2857,8 +2865,8 @@ pub fn forwardScrollEvent(
+ }
+ 
+ fn snapshotBrowserInput(pane_id: []const u8, require_browsing: bool) ?BrowserInputSnapshot {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const pane_index = findPane(pane_id) orelse return null;
+     const pane = &panes[pane_index];
+@@ -2954,8 +2962,8 @@ fn snapshotEnabledNavigationAction(
+     action: []const u8,
+     required_tui_fd: ?std.posix.fd_t,
+ ) ?BrowserInputSnapshot {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+ 
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("NavigationAction: unknown pane_id={s}", .{pane_id});
+@@ -3031,16 +3039,16 @@ fn handleNavigationState(
+     }
+ 
+     var snapshot: ?NavigationStateSnapshot = null;
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     const server_index = findServerByFd(browser_fd) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         log.warn("NavigationState: unknown browser fd={}", .{browser_fd});
+         return false;
+     };
+     const profile = servers[server_index].profileName();
+     const browser = servers[server_index].browserName();
+     const lookup_index = findTabLookup(profile, browser, navigation_state.*.tab_id) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         log.warn(
+             "NavigationState: wrong or unknown tab key={s}/{s} tab_id={}",
+             .{ profile, browser, navigation_state.*.tab_id },
+@@ -3049,12 +3057,12 @@ fn handleNavigationState(
+     };
+     const pane_id = tab_lookups[lookup_index].paneId();
+     const pane_index = findPane(pane_id) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return false;
+     };
+     const pane = &panes[pane_index];
+     if (pane.tab_id != navigation_state.*.tab_id) {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return false;
+     }
+     pane.can_go_back = navigation_state.*.can_go_back != 0;
+@@ -3072,7 +3080,7 @@ fn handleNavigationState(
+             snapshot = value;
+         }
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (snapshot) |value| {
+         sendNavigationStateToTui(&value) catch |err| {
+@@ -3093,9 +3101,9 @@ fn handleLoadingState(
+     const loading_state = req orelse return false;
+     if (loading_state.*.tab_id <= 0) return false;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     const server_index = findServerByFd(browser_fd) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return false;
+     };
+     const server = &servers[server_index];
+@@ -3104,16 +3112,16 @@ fn handleLoadingState(
+         server.browserName(),
+         loading_state.*.tab_id,
+     ) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return false;
+     };
+     const pane_index = findPane(tab_lookups[lookup_index].paneId()) orelse {
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return false;
+     };
+     const tui_fd = panes[pane_index].tui_fd;
+     const exact_identity = panes[pane_index].tab_id == loading_state.*.tab_id;
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+     if (!exact_identity or tui_fd < 0) return false;
+ 
+     var wrapper: c.Termsurf__TermSurfMessage = undefined;
+@@ -3238,11 +3246,11 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+     var browser_ready: ?BrowserReadySnapshot = null;
+     var presentation_visible: ?PresentationVisibleSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("TabReady: unknown pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+ 
+@@ -3281,7 +3289,7 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+         "TabReady: pane_id={s} tab_id={} tab_to_pane_count={}",
+         .{ pane_id, tab_id, lookup_count },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (browser_ready) |snapshot| {
+         sendBrowserReady(&snapshot) catch |err| {
+@@ -3290,12 +3298,12 @@ fn handleTabReady(req: ?*c.Termsurf__TabReady) void {
+     }
+     if (presentation_visible) |snapshot| {
+         sendPresentationVisible(&snapshot) catch |err| {
+-            state_mutex.lock();
++            state_mutex.lockUncancelable(global.io());
+             if (findPane(snapshot.paneId())) |retry_pane_index| {
+                 if (panes[retry_pane_index].last_sent_presentation_visible == snapshot.visible)
+                     panes[retry_pane_index].last_sent_presentation_visible = null;
+             }
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             log.warn(
+                 "SetPresentationVisible pending send failed pane_id={s} tab_id={} visible={} err={}",
+                 .{ snapshot.paneId(), snapshot.tab_id, snapshot.visible, err },
+@@ -3363,11 +3371,11 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
+ 
+     var overlay_snapshot: ?OverlaySnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     const server_index = findServerByFd(fd) orelse {
+         log.warn("CaContext: unknown browser fd={} tab_id={}", .{ fd, ca_context.*.tab_id });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const profile = servers[server_index].profileName();
+@@ -3377,13 +3385,13 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
+             "CaContext: unknown tab key={s}/{s} tab_id={}",
+             .{ profile, browser, ca_context.*.tab_id },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const pane_id = tab_lookups[lookup_index].paneId();
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("CaContext: tab maps to missing pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+ 
+@@ -3412,7 +3420,7 @@ fn handleCaContext(fd: std.posix.fd_t, req: ?*c.Termsurf__CaContext) void {
+             ca_context.*.pixel_height,
+         },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (overlay_snapshot) |snapshot| presentOverlay(&snapshot);
+ }
+@@ -3436,11 +3444,11 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
+ 
+     var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     const server_index = findServerByFd(fd) orelse {
+         log.warn("RenderSurface: unknown browser fd={} tab_id={}", .{ fd, surface.*.tab_id });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const profile = servers[server_index].profileName();
+@@ -3450,13 +3458,13 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
+             "RenderSurface: unknown tab key={s}/{s} tab_id={}",
+             .{ profile, browser, surface.*.tab_id },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const pane_id = tab_lookups[lookup_index].paneId();
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("RenderSurface: tab maps to missing pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     if (surface.*.attachment_id != 0 and !renderSurfaceAttachmentMatches(server_index, surface)) {
+@@ -3466,14 +3474,14 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
+                 "RenderSurface: pending attachment browser={s} profile={s} tab_id={} attachment_id={}",
+                 .{ browser, profile, surface.*.tab_id, surface.*.attachment_id },
+             );
+-            state_mutex.unlock();
++            state_mutex.unlock(global.io());
+             return;
+         }
+         log.warn(
+             "RenderSurface: unmatched attachment browser={s} profile={s} tab_id={} attachment_id={}",
+             .{ browser, profile, surface.*.tab_id, surface.*.attachment_id },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     }
+ 
+@@ -3495,7 +3503,7 @@ fn handleRenderSurface(fd: std.posix.fd_t, req: ?*c.Termsurf__RenderSurface) voi
+             surface.*.attachment_id,
+         },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (iosurface_snapshot) |snapshot| presentIOSurfaceOverlay(&snapshot);
+ }
+@@ -3567,11 +3575,11 @@ fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) voi
+ 
+     var cursor_snapshot: ?CursorSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     const server_index = findServerByFd(fd) orelse {
+         log.warn("CursorChanged: unknown browser fd={} tab_id={}", .{ fd, cursor.*.tab_id });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const profile = servers[server_index].profileName();
+@@ -3581,13 +3589,13 @@ fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) voi
+             "CursorChanged: unknown tab key={s}/{s} tab_id={} cursor_type={}",
+             .{ profile, browser, cursor.*.tab_id, cursor.*.cursor_type },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const pane_id = tab_lookups[lookup_index].paneId();
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("CursorChanged: tab maps to missing pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+ 
+@@ -3606,7 +3614,7 @@ fn handleCursorChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__CursorChanged) voi
+         "CursorChanged: pane_id={s} tab_id={} cursor_type={}",
+         .{ panes[pane_index].paneId(), cursor.*.tab_id, cursor.*.cursor_type },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (cursor_snapshot) |cursor_snapshot_value| setCursor(&cursor_snapshot_value);
+ }
+@@ -3624,11 +3632,11 @@ fn handleTitleChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TitleChanged) void
+ 
+     var title_snapshot: ?TitleSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     const server_index = findServerByFd(fd) orelse {
+         log.warn("TitleChanged: unknown browser fd={} tab_id={}", .{ fd, title_changed.*.tab_id });
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const profile = servers[server_index].profileName();
+@@ -3638,13 +3646,13 @@ fn handleTitleChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TitleChanged) void
+             "TitleChanged: unknown tab key={s}/{s} tab_id={} title={s}",
+             .{ profile, browser, title_changed.*.tab_id, title },
+         );
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+     const pane_id = tab_lookups[lookup_index].paneId();
+     const pane_index = findPane(pane_id) orelse {
+         log.warn("TitleChanged: tab maps to missing pane_id={s}", .{pane_id});
+-        state_mutex.unlock();
++        state_mutex.unlock(global.io());
+         return;
+     };
+ 
+@@ -3666,7 +3674,7 @@ fn handleTitleChanged(fd: std.posix.fd_t, req: ?*c.Termsurf__TitleChanged) void
+         "TitleChanged: pane_id={s} tab_id={} title={s}",
+         .{ panes[pane_index].paneId(), title_changed.*.tab_id, title },
+     );
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (title_snapshot) |title_snapshot_value| setTitle(&title_snapshot_value);
+ }
+@@ -3893,7 +3901,7 @@ fn countTabLookups() usize {
+ }
+ 
+ fn buildListenSocket(server: *ServerState) bool {
+-    const tmpdir = std.posix.getenv("TMPDIR") orelse "/tmp";
++    const tmpdir = processGetenv("TMPDIR") orelse "/tmp";
+     const sep = if (std.mem.endsWith(u8, tmpdir, "/")) "" else "/";
+     const browser_base = std.fs.path.basename(server.browserName());
+     const pid = c.getpid();
+@@ -3913,7 +3921,7 @@ fn isAbsolutePath(path: []const u8) bool {
+ fn recordServerChild(profile: []const u8, browser: []const u8, result: *const BrowserSpawnResult) void {
+     var should_start_render_thread = false;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findServer(profile, browser)) |index| {
+         servers[index].child_pid = result.pid;
+         if (result.render_control_port != 0 and result.render_service_name_len > 0) {
+@@ -3934,7 +3942,7 @@ fn recordServerChild(profile: []const u8, browser: []const u8, result: *const Br
+             servers[index].set_overlay_wall_ms,
+         );
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (result.render_control_port != 0) {
+         if (should_start_render_thread) {
+@@ -3979,8 +3987,8 @@ fn startRenderSideChannelReceiveThread(profile: []const u8, browser: []const u8,
+ }
+ 
+ fn clearRenderSideChannelAfterThreadStartFailure(profile: []const u8, browser: []const u8, result: *const BrowserSpawnResult) void {
+-    state_mutex.lock();
+-    defer state_mutex.unlock();
++    state_mutex.lockUncancelable(global.io());
++    defer state_mutex.unlock(global.io());
+     if (findServer(profile, browser)) |index| {
+         const side_channel = &servers[index].render_side_channel;
+         if (side_channel.in_use and
+@@ -4040,7 +4048,7 @@ fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
+     var stored = false;
+     var stored_received_surface = false;
+     var iosurface_snapshot: ?IOSurfaceOverlaySnapshot = null;
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findServer(ctx.profileName(), ctx.browserName())) |index| {
+         const side_channel = &servers[index].render_side_channel;
+         if (side_channel.in_use and
+@@ -4087,7 +4095,7 @@ fn renderSideChannelReceiveThread(ctx: *RenderSideChannelThreadContext) void {
+             }
+         }
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (received_surface) |surface| {
+         c.tsrc_release_received_surface(surface);
+@@ -4153,7 +4161,7 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+     var navigation_states: [max_panes]NavigationStateSnapshot = undefined;
+     var navigation_state_count: usize = 0;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+     if (findServerByFd(fd)) |server_index| {
+         const server = &servers[server_index];
+         for (&panes) |*pane| {
+@@ -4190,7 +4198,7 @@ fn cleanupBrowserConnection(fd: std.posix.fd_t) void {
+         server.attached_fd = -1;
+         server.child_pid = 0;
+     }
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     for (navigation_states[0..navigation_state_count]) |*state| {
+         sendNavigationStateToTui(state) catch |err| {
+@@ -4227,7 +4235,7 @@ fn cleanupTuiPanes(fd: std.posix.fd_t) void {
+     var server_shutdowns: [max_servers]ServerShutdownSnapshot = undefined;
+     var server_shutdown_count: usize = 0;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     for (&panes) |*pane| {
+         if (!pane.in_use or pane.tui_fd != fd) continue;
+@@ -4283,7 +4291,7 @@ fn cleanupTuiPanes(fd: std.posix.fd_t) void {
+     }
+ 
+     forgetClosedPanesForFd(fd);
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     for (clear_overlays[0..clear_overlay_count]) |*snapshot| {
+         clearOverlay(snapshot);
+@@ -4312,7 +4320,7 @@ pub fn paneClosed(pane_id: []const u8) void {
+     var clear_overlay: ?ClearOverlaySnapshot = null;
+     var server_shutdown: ?ServerShutdownSnapshot = null;
+ 
+-    state_mutex.lock();
++    state_mutex.lockUncancelable(global.io());
+ 
+     if (findPane(pane_id)) |pane_index| {
+         const pane = &panes[pane_index];
+@@ -4364,7 +4372,7 @@ pub fn paneClosed(pane_id: []const u8) void {
+         log.info("Pane close cleanup skipped: unknown pane_id={s}", .{pane_id});
+     }
+ 
+-    state_mutex.unlock();
++    state_mutex.unlock(global.io());
+ 
+     if (clear_overlay) |*snapshot| {
+         clearOverlay(snapshot);
+@@ -4450,21 +4458,6 @@ fn spawnBrowserProcess(
+         }
+     }
+ 
+-    var child = std.process.Child.init(argv, std.heap.c_allocator);
+-    child.stdin_behavior = .Ignore;
+-    child.stdout_behavior = .Inherit;
+-    child.stderr_behavior = .Inherit;
+-    var child_env = std.process.getEnvMap(std.heap.c_allocator) catch |err| blk: {
+-        log.warn("browser spawn env map unavailable browser={s} err={}", .{ browser_name_z, err });
+-        break :blk null;
+-    };
+-    defer if (child_env) |*env| env.deinit();
+-    if (child_env) |*env| {
+-        // Historical WebKit (Surfari) DYLD_FRAMEWORK_PATH injection removed with
+-        // the shipped WebKit product engine. Absolute-path helpers must set their
+-        // own runtime env if needed.
+-        child.env_map = env;
+-    }
+     traceBrowserStartup(
+         "spawn_start",
+         profile_z,
+@@ -4474,7 +4467,22 @@ fn spawnBrowserProcess(
+         0,
+         set_overlay_wall_ms,
+     );
+-    child.spawn() catch |err| {
++    // Zig 0.16: process.spawn(io, SpawnOptions); environ optional.
++    var child_env = global.environMap() catch |err| blk: {
++        log.warn("browser spawn env map unavailable browser={s} err={}", .{ browser_name_z, err });
++        break :blk null;
++    };
++    defer if (child_env) |*env| env.deinit();
++    // Historical WebKit (Surfari) DYLD_FRAMEWORK_PATH injection removed with
++    // the shipped WebKit product engine. Absolute-path helpers must set their
++    // own runtime env if needed.
++    var child = std.process.spawn(global.io(), .{
++        .argv = argv,
++        .stdin = .ignore,
++        .stdout = .inherit,
++        .stderr = .inherit,
++        .environ_map = if (child_env) |*env| env else null,
++    }) catch |err| {
+         if (render_control_port != 0) c.tsrc_destroy_receive_port(render_control_port);
+         log.warn("browser spawn failed path={s} profile={s} browser={s} err={}", .{ browser_executable_z, profile_z, browser_name_z, err });
+         traceBrowserStartup(
+@@ -4488,25 +4496,26 @@ fn spawnBrowserProcess(
+         );
+         return null;
+     };
++    const child_pid = child.id orelse 0;
+     traceBrowserStartup(
+         "spawn_returned",
+         profile_z,
+         browser_name_z,
+         "",
+         listen_socket_z,
+-        child.id,
++        child_pid,
+         set_overlay_wall_ms,
+     );
+ 
+     if (spawn_argv.renderService()) |render_service| {
+         log.info(
+             "spawned browser path={s} pid={} profile={s} browser={s} argv_count={} render_surface_service={s}",
+-            .{ browser_executable_z, child.id, profile_z, browser_name_z, argv.len, render_service },
++            .{ browser_executable_z, child_pid, profile_z, browser_name_z, argv.len, render_service },
+         );
+     } else {
+         log.info(
+             "spawned browser path={s} pid={} profile={s} browser={s} argv_count={}",
+-            .{ browser_executable_z, child.id, profile_z, browser_name_z, argv.len },
++            .{ browser_executable_z, child_pid, profile_z, browser_name_z, argv.len },
+         );
+     }
+     var result: BrowserSpawnResult = .{
+@@ -4620,11 +4629,11 @@ fn sanitizeRenderServiceComponent(buf: []u8, value: []const u8) []const u8 {
+ }
+ 
+ fn buildUserDataDir(buf: []u8, browser: []const u8, profile: []const u8) ?[:0]u8 {
+-    const home = std.posix.getenv("HOME") orelse {
++    const home = processGetenv("HOME") orelse {
+         log.warn("browser spawn skipped: HOME is not set", .{});
+         return null;
+     };
+-    const data_home = std.posix.getenv("XDG_DATA_HOME");
++    const data_home = processGetenv("XDG_DATA_HOME");
+     const profile_dir = browserProfileDirName(browser);
+     var fallback_data_home_buf: [std.fs.max_path_bytes]u8 = undefined;
+     const base = data_home orelse std.fmt.bufPrint(&fallback_data_home_buf, "{s}/.local/share", .{home}) catch {
+@@ -4646,11 +4655,11 @@ fn browserProfileDirName(browser: []const u8) []const u8 {
+ }
+ 
+ fn buildBrowserLogFile(buf: []u8) ?[:0]u8 {
+-    const home = std.posix.getenv("HOME") orelse {
++    const home = processGetenv("HOME") orelse {
+         log.warn("browser spawn skipped: HOME is not set", .{});
+         return null;
+     };
+-    const state_home = std.posix.getenv("XDG_STATE_HOME");
++    const state_home = processGetenv("XDG_STATE_HOME");
+     var dir_buf: [std.fs.max_path_bytes]u8 = undefined;
+     const dir = if (state_home) |base|
+         std.fmt.bufPrintZ(&dir_buf, "{s}/astrohacker/termsurf", .{base}) catch return null
+@@ -4863,7 +4872,7 @@ fn parseHttpStatusLine(line: []const u8) ?u16 {
+ }
+ 
+ fn envValue(name: [:0]const u8) []const u8 {
+-    return std.posix.getenv(name) orelse "<unset>";
++    return processGetenv(name) orelse "<unset>";
+ }
+ 
+ fn cString(ptr: [*c]u8) []const u8 {
+@@ -4904,9 +4913,10 @@ fn sendProtobuf(fd: std.posix.fd_t, wrapper: *c.Termsurf__TermSurfMessage) !void
+ fn writeAll(fd: std.posix.fd_t, bytes: []const u8) !void {
+     var offset: usize = 0;
+     while (offset < bytes.len) {
+-        const n = try std.posix.write(fd, bytes[offset..]);
+-        if (n == 0) return error.WriteZero;
+-        offset += n;
++        const rc = std.posix.system.write(fd, bytes[offset..].ptr, bytes.len - offset);
++        if (rc < 0) return error.WriteFailed;
++        if (rc == 0) return error.WriteZero;
++        offset += @intCast(rc);
+     }
+ }
+ 
+@@ -5696,7 +5706,7 @@ fn expectBaseBrowserArgv(argv: []const []const u8, executable: []const u8, brows
+ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void) !void {
+     var previous_buf: [std.fs.max_path_bytes]u8 = undefined;
+     var previous_len: usize = 0;
+-    const had_previous = if (std.posix.getenv(name)) |value|
++    const had_previous = if (processGetenv(name)) |value|
+         copyText(&previous_buf, &previous_len, value)
+     else
+         false;
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 70da1ecfc..63c9504b6 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -4660,12 +4660,14 @@ pub fn finalize(self: *Config) !void {
+     // often lack XDG_*; ahsh and other tools then prefer platform dirs.
+     // User `env = XDG_CONFIG_HOME=…` and a pre-set process env both win.
+     {
+-        const process_xdg = std.posix.getenv("XDG_CONFIG_HOME");
++        const process_xdg_c = std.posix.system.getenv("XDG_CONFIG_HOME");
++        const process_xdg: ?[:0]const u8 = if (process_xdg_c) |v| std.mem.span(v) else null;
+         const process_empty = process_xdg == null or process_xdg.?.len == 0;
+         const config_has_xdg = self.env.map.get("XDG_CONFIG_HOME") != null;
+         if (process_empty and !config_has_xdg) {
+             const home: ?[]const u8 = home: {
+-                if (std.posix.getenv("HOME")) |h| {
++                if (std.posix.system.getenv("HOME")) |h_c| {
++                    const h = std.mem.span(h_c);
+                     if (h.len > 0) break :home h;
+                 }
+                 if ((comptime !builtin.target.cpu.arch.isWasm()) and
+-- 
+2.50.1 (Apple Git-155)
+

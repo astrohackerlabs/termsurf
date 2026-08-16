@@ -1,0 +1,115 @@
+From 6699508b9c58fe3d26c697dd2612dc3f9aa9d6cf Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Thu, 16 Jul 2026 07:43:53 -0500
+Subject: [PATCH 07/75] Keep the browser layer alive
+
+The split tree sheds its window coat,
+but browser layers stay afloat.
+Only a true goodbye may clear;
+focused tests keep lifetimes clear.
+---
+ .../Ghostty/SurfaceViewAppKitTests.swift      | 49 +++++++++++++++++++
+ macos/build.nu                                |  8 +++
+ 2 files changed, 57 insertions(+)
+
+diff --git a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+index 03ad63539..e276f748a 100644
+--- a/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
++++ b/macos/Tests/Ghostty/SurfaceViewAppKitTests.swift
+@@ -2,6 +2,9 @@
+ import Testing
+ 
+ struct SurfaceViewAppKitTests {
++    typealias MembershipAction = Ghostty.SurfaceView.TermSurfOverlayWindowMembershipAction
++    typealias WindowState = Ghostty.SurfaceView.TermSurfOverlayWindowState
++
+     @Test(arguments: [
+         ("\u{0008}", true),
+         ("\u{001F}", true),
+@@ -41,4 +44,50 @@ struct SurfaceViewAppKitTests {
+             ) == false
+         )
+     }
++
++    @Test func attachedWindowNeverChangesOverlayLifetime() {
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: true,
++                overlayState: WindowState()
++            ) == MembershipAction.attached
++        )
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: true,
++                overlayState: WindowState(hasActiveCAContextRequest: true)
++            ) == MembershipAction.attached
++        )
++    }
++
++    @Test func detachedWindowWithoutOverlayIsNoOp() {
++        #expect(
++            Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                windowAttached: false,
++                overlayState: WindowState()
++            ) == MembershipAction.detachedWithoutOverlay
++        )
++    }
++
++    @Test func detachedWindowPreservesEveryOverlayState() {
++        let states = [
++            WindowState(hasActiveCAContextRequest: true),
++            WindowState(hasNonzeroContextID: true),
++            WindowState(hasRootLayer: true),
++            WindowState(hasHostLayer: true),
++            WindowState(hasDeferredCAContextRequest: true),
++            WindowState(hasActiveIOSurfaceRequest: true),
++            WindowState(hasIOSurfaceLayer: true),
++            WindowState(hasRetainedIOSurface: true),
++        ]
++
++        for state in states {
++            #expect(
++                Ghostty.SurfaceView.termSurfOverlayWindowMembershipAction(
++                    windowAttached: false,
++                    overlayState: state
++                ) == MembershipAction.detachedPreservingOverlay
++            )
++        }
++    }
+ }
+diff --git a/macos/build.nu b/macos/build.nu
+index 91b22f8dd..7dce8f85f 100755
+--- a/macos/build.nu
++++ b/macos/build.nu
+@@ -8,6 +8,7 @@ def main [
+     --configuration: string = "Debug"  # Build configuration (Debug, Release, ReleaseLocal)
+     --action: string = "build"         # xcodebuild action (build, test, clean, etc.)
+     --version: string = ""             # Optional release version for MARKETING_VERSION and CURRENT_PROJECT_VERSION
++    --only-testing: string = ""        # Optional xcodebuild test identifier
+ ] {
+     let project = ($env.FILE_PWD | path join "Ghostty.xcodeproj")
+     let build_dir = ($env.FILE_PWD | path join "build")
+@@ -29,6 +30,12 @@ def main [
+         ]
+     }
+ 
++    let only_testing = if $only_testing == "" {
++        []
++    } else {
++        [$"-only-testing:($only_testing)"]
++    }
++
+     (^env -i
+         $"HOME=($env.HOME)"
+         "PATH=/usr/bin:/bin:/usr/sbin:/sbin"
+@@ -38,6 +45,7 @@ def main [
+         -configuration $configuration
+         $"SYMROOT=($build_dir)"
+         ...$skip_testing
++        ...$only_testing
+         ...$version_settings
+         $action)
+ }
+-- 
+2.50.1 (Apple Git-155)
+

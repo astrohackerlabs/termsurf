@@ -1,6 +1,30 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26081311412273 Exp 4 AppKit 3-way merge)
+## Active Pin (Issue 26081615463315 Exp 1 Ghostty `main` tip)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26081615463315-exp1-ghostty-main`
+- **Product HEAD:** `04e9f61f863fe192efcb15c6ff2e41db4f1a1c63`
+- **Product tree:** `a00966fe0bbddd3484b8b76f79d5d08db897f8df`
+- **Issue archives:** `issue-26081615463315/` (**75** from `base..HEAD`)
+- **Patches:** **75** total (76 historical minus empty Exp 4 0076 replay;
+  AppKit keep-both lives in 0003 + new-main insertText / weak-self
+  notification ports)
+- **Archive SHA-256:**
+  `39684c5fb700ef552fb76154141683af71b0c53f0b7c5e9cd91864f45afa6d4c`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — rebase product series onto `main` `0ba62503…`.
+  AppKit is keep-both (TermSurf overlay + `leadSurrogate` / `CachedValue`
+  + `#13817` insertText-as-key + `#13810` weak-self notifications).
+  Not Homebrew.
+- **TREE_MATCH:** tip matches base + 75 patches
+- **Patch SHA-256 (bookends):**
+  - 0001: `310255cedbd8b144c5c413df087b9a0ab7a44e0fc07f5c311b0a9cc06cfb2b02`
+  - 0075: `84ef4067a113299dfb1517e5c5a6f3132d7c1a8460e48d062efba845c236c98d`
+
+## Prior Active Pin (Issue 26081311412273 Exp 4 AppKit 3-way merge)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `89a26a39eb01a7cf34a64f9329da8304bebd4d8e`
