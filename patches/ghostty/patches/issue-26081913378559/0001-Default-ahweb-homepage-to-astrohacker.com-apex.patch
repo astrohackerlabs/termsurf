@@ -1,0 +1,55 @@
+From 9881c3cf827575dec87add5ce575b6deb2b35df6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 19 Aug 2026 08:38:36 -0500
+Subject: [PATCH] Default ahweb homepage to astrohacker.com apex
+
+Stock homepage, HelloReply fallback, and Swift config
+default open https://astrohacker.com/ instead of /welcome.
+---
+ macos/Sources/Ghostty/Ghostty.Config.swift | 2 +-
+ src/apprt/termsurf.zig                     | 2 +-
+ src/config/Config.zig                      | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Ghostty.Config.swift b/macos/Sources/Ghostty/Ghostty.Config.swift
+index 0023326d9..795fdd19b 100644
+--- a/macos/Sources/Ghostty/Ghostty.Config.swift
++++ b/macos/Sources/Ghostty/Ghostty.Config.swift
+@@ -176,7 +176,7 @@ extension Ghostty {
+         }
+ 
+         var homepage: String {
+-            let defaultValue = "https://astrohacker.com/welcome"
++            let defaultValue = "https://astrohacker.com/"
+             guard let config = self.config else { return defaultValue }
+             var v: UnsafePointer<Int8>?
+             let key = "homepage"
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 3a76c7dc5..973e57c6e 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -159,7 +159,7 @@ const max_health_response_len: usize = 2048;
+ const max_homepage_len: usize = max_url_len;
+ const max_listen_socket_len: usize = std.fs.max_path_bytes;
+ const default_browser = "chromium";
+-const default_homepage = "https://astrohacker.com/welcome";
++const default_homepage = "https://astrohacker.com/";
+ const fallback_cell_width: u64 = 10;
+ const fallback_cell_height: u64 = 20;
+ const geometry_trace_env = "TERMSURF_GEOMETRY_TRACE";
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index b08f1e006..31d8b2d9e 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1377,7 +1377,7 @@ command: ?Command = null,
+ env: RepeatableStringMap = .{},
+ 
+ /// The default homepage URL opened by `web` when no URL is supplied.
+-homepage: [:0]const u8 = "https://astrohacker.com/welcome",
++homepage: [:0]const u8 = "https://astrohacker.com/",
+ 
+ /// The browser names advertised to `web`.
+ ///
+-- 
+2.50.1 (Apple Git-155)
+

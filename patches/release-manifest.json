@@ -6,14 +6,15 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26081616315182-exp2-ghostty-squash",
-      "expected_head": "88cceb210d16b350525d8c4323651ff4e7a6704b",
-      "expected_tree": "a00966fe0bbddd3484b8b76f79d5d08db897f8df",
+      "branch": "issue-26081913378559-exp1-apex-homepage",
+      "expected_head": "9881c3cf827575dec87add5ce575b6deb2b35df6",
+      "expected_tree": "5677e68afc37fb04926a964ed1e9057fd0ba2faf",
       "patch_directories": [
-        "patches/ghostty/patches/issue-26081616315182"
+        "patches/ghostty/patches/issue-26081616315182",
+        "patches/ghostty/patches/issue-26081913378559"
       ],
-      "patch_count": 33,
-      "archive_sha256": "37955a55f97ddd4d7be58e9e3a3c478d77327ac56bddd9aa4b42681a54ffe5cf",
+      "patch_count": 34,
+      "archive_sha256": "e40b326865cc91e78da3805a31c590c3fed29a0a3022919fa9a3d44fe56552bd",
       "allowed_untracked": []
     },
     {

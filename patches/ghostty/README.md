@@ -1,6 +1,28 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26081616315182 Exp 2 merge-helpful squash)
+## Active Pin (Issue 26081913378559 Exp 1 apex homepage)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26081913378559-exp1-apex-homepage`
+- **Product HEAD:** `9881c3cf827575dec87add5ce575b6deb2b35df6`
+- **Product tree:** `5677e68afc37fb04926a964ed1e9057fd0ba2faf`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) from `base..HEAD`
+- **Patches:** **34** total. Default ahweb homepage is
+  `https://astrohacker.com/` (Config, HelloReply fallback, Swift
+  bridge).
+- **Archive SHA-256:**
+  `e40b326865cc91e78da3805a31c590c3fed29a0a3022919fa9a3d44fe56552bd`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — apex homepage on the squash tree. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 34 patches
+- **Patch SHA-256 (bookends):**
+  - 0001 (squash): `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0001 (homepage): `81b5f8507ab37e33df182203537b5b8bbb0608ffc6440ed0bd62341805b020d0`
+
+## Prior Active Pin (Issue 26081616315182 Exp 2 merge-helpful squash)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
