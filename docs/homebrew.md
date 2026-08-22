@@ -21,6 +21,7 @@ ahweb
 ahsh
 ahcalc
 ahkey
+ahplt
 ahnexus
 ah-chromiumd
 ahtch
@@ -32,6 +33,7 @@ paths in the release tarball besides bare CLI binaries):
 <!-- released-payload-roots -->
 ahcalc
 ahkey
+ahplt
 ahnexus
 ah-chromiumd
 ahtch
@@ -44,6 +46,7 @@ ahtch
 | `ahweb` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
 | `ahkey` | KeyPears local TermSurf client (full-pane web UI) |
+| `ahplt` | Plotly viewer TermSurf app (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
 | `ahtch` | Astrohacker Torch (GPU tensors; daemon is `ahtch --daemon`) |
 
@@ -111,7 +114,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahkey`, `ahnexus`,
+- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahkey`, `ahplt`, `ahnexus`,
   `ahtch`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
@@ -121,6 +124,9 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - ahkey package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahkey/` (when installed as artifact)
   or under Caskroom stage `ahkey/` (binary links `ahkey/dist/ahkey`)
+- ahplt package payload →
+  `/opt/homebrew/opt/astrohacker-terminal-ahplt/` (when installed as artifact)
+  or under Caskroom stage `ahplt/` (binary links `ahplt/dist/ahplt`)
 - ahnexus package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
   or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
@@ -144,6 +150,7 @@ Top-level contents:
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahkey/` (payload: `dist/ahkey`, `build/client/` SPA, `public/`)
+- `ahplt/` (payload: `dist/ahplt`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
 - `ahtch/` (payload: `bin/ahtch`, LibTorch dylibs, `ahtch.nu`)
@@ -305,8 +312,8 @@ normal operator interface.
      Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`,
      nested `rust/ahtch` workspace.package). The
      canonical command rewrites and commits those manifests before building so
-     `CARGO_PKG_VERSION` matches the cask. It also rewrites `bun/ahcalc` and
-     `bun/ahkey` `package.json` `"version"` and their
+     `CARGO_PKG_VERSION` matches the cask. It also rewrites `bun/ahcalc`,
+     `bun/ahkey`, and `bun/ahplt` `package.json` `"version"` and their
      `app/cli/embedded-version.ts` stamps to the same X.Y.Z so
      compile-time stamps match the cask and the post-build tree stays clean.
      Do not leave those packages stuck at a placeholder such as `0.1.0` across
@@ -326,6 +333,7 @@ normal operator interface.
      | `ahsh --version` | `Astrohacker Shell <version>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ahkey --version` | `Astrohacker KeyPears <version>` |
+     | `ahplt --version` | `Astrohacker Plot <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
      | `ahtch --version` | `Astrohacker Torch <version>` |
