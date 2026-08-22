@@ -1,0 +1,15 @@
+[package]
+name = "torch-cli"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+license-file.workspace = true
+description = "Astrohacker Torch thin client: talk to ahtchd from any shell"
+
+[[bin]]
+name = "ahtch"
+path = "src/main.rs"
+
+[dependencies]
+nutorch-ops = { path = "../ops" }
+serde_json = { version = "1", features = ["float_roundtrip"] }

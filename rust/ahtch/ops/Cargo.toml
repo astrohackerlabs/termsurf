@@ -1,0 +1,7 @@
+[package]
+name = "nutorch-ops"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+license-file.workspace = true
+description = "Nutorch op specs: the declarative table both binaries read (no tch dependency)"

@@ -24,6 +24,8 @@ ahhelp
 ahkey
 ahnexus
 ah-chromiumd
+ahtch
+ahtchd
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
@@ -35,6 +37,7 @@ ahhelp
 ahkey
 ahnexus
 ah-chromiumd
+ahtch
 <!-- /released-payload-roots -->
 
 | Command | Role |
@@ -46,6 +49,8 @@ ah-chromiumd
 | `ahhelp` | TermSurf product help cheatsheet (full-pane web UI) |
 | `ahkey` | KeyPears local TermSurf client (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
+| `ahtch` | Astrohacker Torch CLI (GPU tensors; talks to `ahtchd`) |
+| `ahtchd` | Astrohacker Torch daemon (implementation; on PATH so `ahtch` can spawn it) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
 
@@ -112,7 +117,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
 - PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, `ahkey`, `ahnexus`,
-  engine helpers
+  `ahtch`, `ahtchd`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
@@ -128,6 +133,10 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
   or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
   `ahnexus/ui/`)
+- ahtch package payload →
+  `/opt/homebrew/opt/astrohacker-terminal-ahtch/` (when installed as artifact)
+  or under Caskroom stage `ahtch/` (`bin/ahtch`, `bin/ahtchd`,
+  `libexec/libtorch/lib/`, `ahtch.nu`)
 
 ## Release tarball contract
 
@@ -139,13 +148,15 @@ Top-level contents:
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/third_party/` (Chromium credits/LICENSE
-  copyrights, Nushell/Reedline LICENSE copies)
+  copyrights, Nushell/Reedline LICENSE copies, LibTorch LICENSE/NOTICE)
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahhelp/` (payload: `dist/ahhelp`, `build/client/` SPA, `public/`)
 - `ahkey/` (payload: `dist/ahkey`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
+- `ahtch/` (payload: `bin/ahtch`, `bin/ahtchd`, LibTorch dylibs,
+  `ahtch.nu`)
 
 Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -301,7 +312,8 @@ normal operator interface.
    Version contract:
 
    - First-party product crate package versions under the monorepo root track the
-     Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`). The
+     Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`,
+     nested `rust/ahtch` workspace.package). The
      canonical command rewrites and commits those manifests before building so
      `CARGO_PKG_VERSION` matches the cask. It also rewrites `bun/ahcalc` and
      `bun/ahhelp` `package.json` `"version"` and their
@@ -327,6 +339,8 @@ normal operator interface.
      | `ahkey --version` | `Astrohacker KeyPears <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
+     | `ahtch --version` | `Astrohacker Torch <version>` |
+     | `ahtchd --version` | `Astrohacker Torch <version>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be
      shown only as secondary detail after the product release line.

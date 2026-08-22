@@ -1,0 +1,21 @@
+[package]
+name = "nutorchd"
+version.workspace = true
+edition = "2021"
+license.workspace = true
+license-file.workspace = true
+description = "Astrohacker Torch daemon: a tensor database for the shell"
+
+[[bin]]
+name = "ahtchd"
+path = "src/main.rs"
+
+[dependencies]
+nutorch-ops = { path = "../ops" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip"] }
+signal-hook = "0.3"
+tch = "0.24.0"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]

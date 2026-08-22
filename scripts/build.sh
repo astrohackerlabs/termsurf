@@ -18,7 +18,7 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahhelp, ahkey, ahnexus, chromium-fork, ah-chromiumd, all"
+  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahhelp, ahkey, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
   echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -137,6 +137,36 @@ build_ahsh() {
     echo "==> Building ahsh (debug)..."
     cargo build
     echo "  ahsh: $AHSH_DIR/target/debug/ahsh"
+  fi
+}
+
+
+build_ahtch() {
+  local AHTCH_DIR="$RUST_DIR/rust/ahtch"
+  if [ ! -d "$AHTCH_DIR" ]; then
+    echo "Missing nested ahtch workspace: $AHTCH_DIR" >&2
+    exit 1
+  fi
+  if [ ! -d "$AHTCH_DIR/.libtorch" ] && [ ! -L "$AHTCH_DIR/.libtorch" ]; then
+    echo "Missing LibTorch pin: $AHTCH_DIR/.libtorch" >&2
+    echo "Run: rust/ahtch/scripts/bootstrap.sh" >&2
+    exit 1
+  fi
+  cd "$AHTCH_DIR"
+  if $CLEAN; then
+    echo "==> Cleaning ahtch..."
+    cargo clean
+  fi
+  if $RELEASE; then
+    echo "==> Building ahtch (release)..."
+    cargo build --release --bin ahtch --bin ahtchd
+    echo "  ahtch: $AHTCH_DIR/target/release/ahtch"
+    echo "  ahtchd: $AHTCH_DIR/target/release/ahtchd"
+  else
+    echo "==> Building ahtch (debug)..."
+    cargo build --bin ahtch --bin ahtchd
+    echo "  ahtch: $AHTCH_DIR/target/debug/ahtch"
+    echo "  ahtchd: $AHTCH_DIR/target/debug/ahtchd"
   fi
 }
 
@@ -353,6 +383,7 @@ case "$COMPONENT" in
   ahkey)      build_ahkey ;;
   ahnexus)    build_ahnexus ;;
   ah-chromiumd|chromium)   build_chromiumd ;;
+  ahtch)      build_ahtch ;;
   ahterm|aht) build_ahterm ;;
   all)
     # Shipped desktop engines: Chromium only (WebKit product targets removed).
@@ -363,6 +394,7 @@ case "$COMPONENT" in
     build_ahhelp
     build_ahkey
     build_ahnexus
+    build_ahtch
     build_chromiumd
     build_ahterm
     echo ""
