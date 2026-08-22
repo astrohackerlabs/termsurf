@@ -176,9 +176,7 @@ accepted by scripts).
 | Script | Role |
 | --- | --- |
 | `scripts/release-homebrew.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
-| `scripts/release-homebrew.py` | Python fallback until Issue 26082214369859 Exp 7 Pass |
-| `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` (Nu) |
-| `scripts/lib/release_forks.py` | Python fork helper fallback |
+| `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` |
 | `scripts/build.sh` | Build components / `all --release` |
 | `scripts/release.sh` | Lower-level package/publish helper used by the canonical command |
 | `scripts/sync-public-source.sh` | Sync allowlisted paths into public checkout |
