@@ -266,9 +266,6 @@ pub(crate) fn run_repl(
                     "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
                 );
                 eprintln!(
-                    "{fg}Type {cmd}ahhelp{reset}{fg} for quick help.{reset}"
-                );
-                eprintln!(
                     "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
                 );
                 eprintln!();
@@ -297,14 +294,11 @@ pub(crate) fn run_repl(
                     "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
                 );
                 eprintln!(
-                    "{fg}Type {cmd}ahhelp{reset}{fg} for quick help.{reset}"
-                );
-                eprintln!(
                     "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
                 );
                 debug_assert_eq!(
                     crate::banner_hints::PRODUCT_HINT_LINES.len(),
-                    3,
+                    2,
                     "keep banner_hints::PRODUCT_HINT_LINES in sync with eprintln lines above"
                 );
                 eprintln!(
