@@ -7,22 +7,37 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26081616315182 Exp 1):** Electron Chromium
-  **`150.0.7871.224`** (Electron **43.4.0**) + merge-helpful **37**-patch
-  squash (`issue-26081616315182/`) — **same tree** as the prior 144-commit
-  pin; see `patches/release-manifest.json`
+- **Active pin (Issue 26082217204646 Exp 6):** Electron Chromium
+  **`150.0.7871.224`** + squash series + `ts_capture_png` overlay snapshot
+  (`issue-26081616315182/` **37** + `issue-26082217204646/` **1**)
 - Product branch:
-  `150.0.7871.224-issue-26081616315182-exp1-chromium-squash`
-- Product HEAD: `04c368282f7503446e12c60d43d842721052f0c5`
-- Product tree: `b9c53610b0902bad341d618e6ef5ec11b83f28b0`
+  `150.0.7871.224-issue-26082217204646-exp6-overlay-screenshot`
+- Product HEAD: `3a81eca94aeed9b087bed4bba161a3b18ef2168e`
+- Product tree: `06eaea2c416aea6c203d5a4a1ca5a1cf9b7c997b`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
+- **Patches:** **38** total. Archive SHA-256
+  `e1ddfafab1de3565b546cc8517349cbc533967240ca3c66b2aa6645a8b006b63`
 
+### Issue 26082217204646 Exp 6 / overlay screenshot (current tip)
 
-### Issue 26081616315182 Exp 1 / merge-helpful squash (current tip)
+| Field | Value |
+| --- | --- |
+| Target base | `150.0.7871.224` / `36bfd07adec25f5027aaecf2023b35821f30ee4e` |
+| Parent tip | `04c368282f7503446e12c60d43d842721052f0c5` (Issue 26081616315182 Exp 1 squash) |
+| Product branch | `150.0.7871.224-issue-26082217204646-exp6-overlay-screenshot` |
+| Product HEAD | `3a81eca94aeed9b087bed4bba161a3b18ef2168e` |
+| Product tree | `06eaea2c416aea6c203d5a4a1ca5a1cf9b7c997b` |
+| Archives | prior + `issue-26082217204646/` (1) |
+| Patch count | **38** |
+| Archive aggregate SHA-256 | `e1ddfafab1de3565b546cc8517349cbc533967240ca3c66b2aa6645a8b006b63` |
+| Scope | `ts_capture_png` / CopyFromSurface PNG for CaptureOverlay |
+| Patch SHA-256 | 0001 `cb30be1321b28a69b7874eaea8e3c996c531ed0e31eff309c5bd58f26cf24049` |
+
+### Issue 26081616315182 Exp 1 / merge-helpful squash (parent tip)
 
 | Field | Value |
 | --- | --- |

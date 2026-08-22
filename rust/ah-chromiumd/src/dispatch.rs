@@ -1,6 +1,7 @@
 use std::ffi::{c_void, CString};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
+use std::os::raw::{c_int, c_ulonglong};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -187,6 +188,12 @@ fn find_by_tab_id(tab_id: i64) -> Option<&'static mut TabEntry> {
     tabs().iter_mut().find(|t| t.tab_id == tab_id)
 }
 
+fn find_by_pane_id(pane_id: &str) -> Option<&'static mut TabEntry> {
+    tabs()
+        .iter_mut()
+        .find(|t| !t.pane_id.is_empty() && t.pane_id == pane_id)
+}
+
 fn navigation_action_contract(m: &proto::termsurf::NavigationAction) -> bool {
     m.tab_id > 0
         && m.pane_id.is_empty()
@@ -231,6 +238,133 @@ fn key_type(s: &str) -> i32 {
         "up" => 1,
         "repeat" => 2,
         _ => 0,
+    }
+}
+
+struct CaptureOverlayCtx {
+    pane_id: String,
+    request_id: u64,
+}
+
+fn send_capture_overlay_reply(
+    pane_id: String,
+    request_id: u64,
+    ok: bool,
+    error: String,
+    png: Vec<u8>,
+    width_px: u64,
+    height_px: u64,
+) {
+    crate::ipc::send(&TermSurfMessage {
+        msg: Some(Msg::CaptureOverlayReply(
+            proto::termsurf::CaptureOverlayReply {
+                pane_id,
+                request_id,
+                ok,
+                error,
+                png,
+                width_px,
+                height_px,
+            },
+        )),
+    });
+}
+
+unsafe extern "C" fn on_capture_png(
+    _wc: TsWebContents,
+    ok: c_int,
+    png: *const u8,
+    png_len: usize,
+    width_px: c_ulonglong,
+    height_px: c_ulonglong,
+    user_data: *mut c_void,
+) {
+    let ctx = unsafe { Box::from_raw(user_data as *mut CaptureOverlayCtx) };
+    let png_bytes = if ok != 0 && !png.is_null() && png_len > 0 {
+        unsafe { std::slice::from_raw_parts(png, png_len) }.to_vec()
+    } else {
+        Vec::new()
+    };
+    let success = ok != 0 && !png_bytes.is_empty();
+    let error = if success {
+        String::new()
+    } else {
+        "capture failed".to_string()
+    };
+    eprintln!(
+        "[termsurf-capture] pane_id={} request_id={} ok={} png_len={} {}x{}",
+        ctx.pane_id,
+        ctx.request_id,
+        success,
+        png_bytes.len(),
+        if success { width_px } else { 0 },
+        if success { height_px } else { 0 }
+    );
+    send_capture_overlay_reply(
+        ctx.pane_id,
+        ctx.request_id,
+        success,
+        error,
+        png_bytes,
+        if success { width_px as u64 } else { 0 },
+        if success { height_px as u64 } else { 0 },
+    );
+}
+
+fn handle_capture_overlay_request(m: &proto::termsurf::CaptureOverlayRequest) {
+    let pane_id = m.pane_id.clone();
+    let request_id = m.request_id;
+    if pane_id.is_empty() {
+        send_capture_overlay_reply(
+            pane_id,
+            request_id,
+            false,
+            "missing pane_id".to_string(),
+            Vec::new(),
+            0,
+            0,
+        );
+        return;
+    }
+    let Some(t) = find_by_pane_id(&pane_id) else {
+        eprintln!(
+            "[termsurf-capture] missing-pane pane_id={} request_id={}",
+            pane_id, request_id
+        );
+        send_capture_overlay_reply(
+            pane_id,
+            request_id,
+            false,
+            "unknown pane".to_string(),
+            Vec::new(),
+            0,
+            0,
+        );
+        return;
+    };
+    if t.handle.is_null() {
+        send_capture_overlay_reply(
+            pane_id,
+            request_id,
+            false,
+            "tab not ready".to_string(),
+            Vec::new(),
+            0,
+            0,
+        );
+        return;
+    }
+    let handle = t.handle;
+    let ctx = Box::new(CaptureOverlayCtx {
+        pane_id,
+        request_id,
+    });
+    unsafe {
+        ffi::ts_capture_png(
+            handle,
+            Some(on_capture_png),
+            Box::into_raw(ctx) as *mut c_void,
+        );
     }
 }
 
@@ -770,6 +904,9 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 ));
             }
         }
+        Msg::CaptureOverlayRequest(m) => {
+            handle_capture_overlay_request(m);
+        }
         Msg::QueryTabsRequest(_) => {
             let mut browser_count: i64 = 0;
             let mut devtools_count: i64 = 0;
@@ -1092,6 +1229,55 @@ mod navigation_contract_tests {
         };
         assert_eq!(decoded_loading.tab_id, 19);
         assert_eq!(decoded_loading.navigation_request_id, 9);
+    }
+
+    #[test]
+    fn capture_overlay_request_reply_round_trip_png_and_tags() {
+        let request = TermSurfMessage {
+            msg: Some(Msg::CaptureOverlayRequest(
+                proto::termsurf::CaptureOverlayRequest {
+                    pane_id: "pane-1".into(),
+                    request_id: 7,
+                },
+            )),
+        };
+        let encoded = request.encode_to_vec();
+        // TermSurfMessage oneof tag 52, wire type 2: (52 << 3) | 2 = 418 → 0xa2 0x03
+        assert_eq!(encoded[0], 0xa2);
+        assert_eq!(encoded[1], 0x03);
+        let decoded = TermSurfMessage::decode(encoded.as_slice()).unwrap();
+        let Some(Msg::CaptureOverlayRequest(req)) = decoded.msg else {
+            panic!("expected CaptureOverlayRequest");
+        };
+        assert_eq!(req.pane_id, "pane-1");
+        assert_eq!(req.request_id, 7);
+
+        let png = b"\x89PNG\r\n\x1a\n".to_vec();
+        let reply = TermSurfMessage {
+            msg: Some(Msg::CaptureOverlayReply(
+                proto::termsurf::CaptureOverlayReply {
+                    pane_id: "pane-1".into(),
+                    request_id: 7,
+                    ok: true,
+                    error: String::new(),
+                    png: png.clone(),
+                    width_px: 32,
+                    height_px: 16,
+                },
+            )),
+        };
+        let encoded = reply.encode_to_vec();
+        // oneof tag 53, wire type 2: (53 << 3) | 2 = 426 → 0xaa 0x03
+        assert_eq!(encoded[0], 0xaa);
+        assert_eq!(encoded[1], 0x03);
+        let decoded = TermSurfMessage::decode(encoded.as_slice()).unwrap();
+        let Some(Msg::CaptureOverlayReply(got)) = decoded.msg else {
+            panic!("expected CaptureOverlayReply");
+        };
+        assert!(got.ok);
+        assert_eq!(got.png, png);
+        assert_eq!(got.width_px, 32);
+        assert_eq!(got.height_px, 16);
     }
 
     #[test]

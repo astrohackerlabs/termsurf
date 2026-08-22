@@ -49,6 +49,22 @@ extern "C" {
     pub fn ts_load_url(wc: TsWebContents, url: *const c_char);
     pub fn ts_navigation_action(wc: TsWebContents, action: *const c_char) -> bool;
 
+    pub fn ts_capture_png(
+        wc: TsWebContents,
+        cb: Option<
+            unsafe extern "C" fn(
+                TsWebContents,
+                c_int,
+                *const u8,
+                usize,
+                c_ulonglong,
+                c_ulonglong,
+                *mut c_void,
+            ),
+        >,
+        user_data: *mut c_void,
+    );
+
     // --- Input ---
 
     pub fn ts_forward_mouse_event(

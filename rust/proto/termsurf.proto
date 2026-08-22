@@ -93,6 +93,10 @@ message TermSurfMessage {
 
     // GUI → engine: whether this tab's compositor output is actually hosted.
     SetPresentationVisible set_presentation_visible = 47;
+
+    // TUI ↔ GUI ↔ engine: PNG snapshot of the live overlay tab.
+    CaptureOverlayRequest capture_overlay_request = 52;
+    CaptureOverlayReply capture_overlay_reply = 53;
   }
 }
 
@@ -471,4 +475,19 @@ message QueryTabsReply {
   int64 chromium_devtools = 4;
   repeated TabInfo tabs = 5;
   string error = 6;
+}
+
+message CaptureOverlayRequest {
+  string pane_id = 1;
+  uint64 request_id = 2;
+}
+
+message CaptureOverlayReply {
+  string pane_id = 1;
+  uint64 request_id = 2;
+  bool ok = 3;
+  string error = 4;
+  bytes png = 5;
+  uint64 width_px = 6;
+  uint64 height_px = 7;
 }

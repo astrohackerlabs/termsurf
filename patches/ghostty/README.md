@@ -1,6 +1,28 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26082214188331 Exp 1 AGENTS overlay)
+## Active Pin (Issue 26082217204646 Exp 6 overlay screenshot)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26082217204646-exp6-overlay-screenshot`
+- **Product HEAD:** `7f5e822c2a64e2017fe6aad55e5e205f4e1c2f23`
+- **Product tree:** `f30f77d0eaeb9ec033b3ad6e347e6de569c85b1e`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**) +
+  `issue-26082217204646/` (**1**) from `base..HEAD`
+- **Patches:** **36** total. CaptureOverlay request/reply forwarding
+  and 16 MiB max frame size.
+- **Archive SHA-256:**
+  `1a42ad5c610e5cc23e747aafa86ee71a24a01a457fae00e85bda3ec4adf22553`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 6 — overlay PNG capture routing. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 36 patches
+- **Patch SHA-256 (bookends):**
+  - 0001 (squash): `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0001 (capture): `4836b121b1066e60922ac4815c2983efe08f5d5f7d6b27891eafa79c9829fa07`
+
+## Prior Active Pin (Issue 26082214188331 Exp 1 AGENTS overlay)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`

@@ -6,16 +6,17 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26082214188331-exp1-agents-overlay",
-      "expected_head": "ab8435c99ce2837c3dacb2da058bdf4bbe5e843e",
-      "expected_tree": "1eab103c3af2afdccd0b3c55a38a888a9ec1536d",
+      "branch": "issue-26082217204646-exp6-overlay-screenshot",
+      "expected_head": "7f5e822c2a64e2017fe6aad55e5e205f4e1c2f23",
+      "expected_tree": "f30f77d0eaeb9ec033b3ad6e347e6de569c85b1e",
       "patch_directories": [
         "patches/ghostty/patches/issue-26081616315182",
         "patches/ghostty/patches/issue-26081913378559",
-        "patches/ghostty/patches/issue-26082214188331"
+        "patches/ghostty/patches/issue-26082214188331",
+        "patches/ghostty/patches/issue-26082217204646"
       ],
-      "patch_count": 35,
-      "archive_sha256": "1dd5faf7e114ebbb141fa6d5b8aab288e7065ad56e482893a45174f64de32530",
+      "patch_count": 36,
+      "archive_sha256": "1a42ad5c610e5cc23e747aafa86ee71a24a01a457fae00e85bda3ec4adf22553",
       "allowed_untracked": []
     },
     {
@@ -65,14 +66,15 @@
       "name": "chromium",
       "checkout": "forks/chromium/src",
       "base": "36bfd07adec25f5027aaecf2023b35821f30ee4e",
-      "branch": "150.0.7871.224-issue-26081616315182-exp1-chromium-squash",
-      "expected_head": "04c368282f7503446e12c60d43d842721052f0c5",
-      "expected_tree": "b9c53610b0902bad341d618e6ef5ec11b83f28b0",
+      "branch": "150.0.7871.224-issue-26082217204646-exp6-overlay-screenshot",
+      "expected_head": "3a81eca94aeed9b087bed4bba161a3b18ef2168e",
+      "expected_tree": "06eaea2c416aea6c203d5a4a1ca5a1cf9b7c997b",
       "patch_directories": [
-        "patches/chromium/patches/issue-26081616315182"
+        "patches/chromium/patches/issue-26081616315182",
+        "patches/chromium/patches/issue-26082217204646"
       ],
-      "patch_count": 37,
-      "archive_sha256": "e0a424d0fff79c368ab768bc09c76d1a9e5841e3472f4170ea6dfc38362c4215",
+      "patch_count": 38,
+      "archive_sha256": "e1ddfafab1de3565b546cc8517349cbc533967240ca3c66b2aa6645a8b006b63",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",

@@ -1,0 +1,230 @@
+From 3a81eca94aeed9b087bed4bba161a3b18ef2168e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 22 Aug 2026 14:09:21 -0500
+Subject: [PATCH] Issue 26082217204646 Exp 6: ts_capture_png via
+ CopyFromSurface
+
+Snapshot a tab compositor to PNG for CaptureOverlay. The C ABI callback
+receives bytes that are valid only for the duration of the call.
+---
+ content/libtermsurf_chromium/BUILD.gn         |  2 +
+ .../libtermsurf_chromium.cc                   | 19 +++++
+ .../libtermsurf_chromium.h                    | 14 ++++
+ .../ts_browser_main_parts.cc                  | 77 +++++++++++++++++++
+ .../ts_browser_main_parts.h                   | 11 +++
+ 5 files changed, 123 insertions(+)
+
+diff --git a/content/libtermsurf_chromium/BUILD.gn b/content/libtermsurf_chromium/BUILD.gn
+index 783cb66367..238413f95c 100644
+--- a/content/libtermsurf_chromium/BUILD.gn
++++ b/content/libtermsurf_chromium/BUILD.gn
+@@ -144,6 +144,8 @@ shared_library("libtermsurf_chromium") {
+     "//extensions/common:core_api_provider",
+     "//extensions/renderer",
+     "//printing",
++    "//ui/gfx",
++    "//ui/gfx/codec",
+     "//ui/shell_dialogs",
+     "//ui/webui/resources/cr_components/help_bubble:mojo_bindings",
+   ]
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.cc b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+index a806ae193f..24895c00ec 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.cc
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.cc
+@@ -357,6 +357,25 @@ bool ts_navigation_action(ts_web_contents_t wc, const char* action) {
+   return g_main_parts->NavigationAction(wc, action);
+ }
+ 
++void ts_capture_png(ts_web_contents_t wc,
++                    void (*cb)(ts_web_contents_t wc,
++                               int ok,
++                               const uint8_t* png,
++                               size_t png_len,
++                               uint64_t width_px,
++                               uint64_t height_px,
++                               void* user_data),
++                    void* user_data) {
++  if (!cb) {
++    return;
++  }
++  if (!g_main_parts) {
++    cb(wc, 0, nullptr, 0, 0, 0, user_data);
++    return;
++  }
++  g_main_parts->CapturePng(wc, cb, user_data);
++}
++
+ bool ts_test_crash_current_page(ts_web_contents_t wc) {
+   if (!g_main_parts) {
+     return false;
+diff --git a/content/libtermsurf_chromium/libtermsurf_chromium.h b/content/libtermsurf_chromium/libtermsurf_chromium.h
+index fb127009fc..8d510092fb 100644
+--- a/content/libtermsurf_chromium/libtermsurf_chromium.h
++++ b/content/libtermsurf_chromium/libtermsurf_chromium.h
+@@ -6,6 +6,7 @@
+ #define CONTENT_LIBTERMSURF_CONTENT_LIBTERMSURF_CHROMIUM_H_
+ 
+ #include <stdbool.h>
++#include <stddef.h>
+ #include <stdint.h>
+ 
+ /* Export macro for shared library builds. */
+@@ -93,6 +94,19 @@ TS_EXPORT void ts_destroy_web_contents(ts_web_contents_t wc);
+ /* Synchronous — safe. */
+ TS_EXPORT void ts_load_url(ts_web_contents_t wc, const char* url);
+ TS_EXPORT bool ts_navigation_action(ts_web_contents_t wc, const char* action);
++
++/* Snapshot the tab compositor to PNG. Callback may run on a compositor
++   thread; |png| is valid only for the duration of the callback. */
++TS_EXPORT void ts_capture_png(ts_web_contents_t wc,
++                              void (*cb)(ts_web_contents_t wc,
++                                         int ok,
++                                         const uint8_t* png,
++                                         size_t png_len,
++                                         uint64_t width_px,
++                                         uint64_t height_px,
++                                         void* user_data),
++                              void* user_data);
++
+ TS_EXPORT bool ts_test_crash_current_page(ts_web_contents_t wc);
+ TS_EXPORT bool ts_test_execute_javascript(ts_web_contents_t wc,
+                                           const char* script);
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index 0ee279630d..e20c60ad9d 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -5,11 +5,13 @@
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+ 
+ #include <cmath>
++#include <cstdint>
+ #include <cstdlib>
+ #include <optional>
+ 
+ #include "base/functional/bind.h"
+ #include "base/logging.h"
++#include "base/time/time.h"
+ #include "base/process/process_handle.h"
+ #include "base/strings/stringprintf.h"
+ #include "base/strings/utf_string_conversions.h"
+@@ -43,6 +45,10 @@
+ #include "content/public/browser/render_widget_host.h"
+ #include "content/public/browser/render_widget_host_view.h"
+ #include "content/public/browser/web_contents.h"
++#include "components/viz/common/frame_sinks/copy_output_result.h"
++#include "ui/gfx/codec/png_codec.h"
++#include "ui/gfx/geometry/rect.h"
++#include "ui/gfx/geometry/size.h"
+ #include "content/public/common/isolated_world_ids.h"
+ #include "content/public/common/page_zoom.h"
+ #include "content/public/common/stop_find_action.h"
+@@ -1544,6 +1550,77 @@ TsBrowserMainParts::GetColorSchemeForWebContents(
+   return std::nullopt;
+ }
+ 
++void TsBrowserMainParts::CapturePng(
++    void* wc_handle,
++    void (*cb)(void* wc,
++               int ok,
++               const uint8_t* png,
++               size_t png_len,
++               uint64_t width_px,
++               uint64_t height_px,
++               void* user_data),
++    void* user_data) {
++  DCHECK_CURRENTLY_ON(BrowserThread::UI);
++  if (!cb) {
++    return;
++  }
++
++  TabState* tab = FindTab(wc_handle);
++  if (!tab || !tab->shell || !tab->shell->web_contents()) {
++    cb(wc_handle, 0, nullptr, 0, 0, 0, user_data);
++    return;
++  }
++
++  RenderWidgetHostView* view =
++      tab->shell->web_contents()->GetRenderWidgetHostView();
++  if (!view) {
++    cb(wc_handle, 0, nullptr, 0, 0, 0, user_data);
++    return;
++  }
++
++  struct CaptureState {
++    uintptr_t wc_handle;
++    void (*cb)(void* wc,
++               int ok,
++               const uint8_t* png,
++               size_t png_len,
++               uint64_t width_px,
++               uint64_t height_px,
++               void* user_data);
++    uintptr_t user_data;
++  };
++  CaptureState state{reinterpret_cast<uintptr_t>(wc_handle), cb,
++                     reinterpret_cast<uintptr_t>(user_data)};
++
++  view->CopyFromSurface(
++      gfx::Rect(), gfx::Size(), base::Seconds(4),
++      base::BindOnce(
++          [](CaptureState state, const CopyFromSurfaceResult& result) {
++            void* wc = reinterpret_cast<void*>(state.wc_handle);
++            void* user_data = reinterpret_cast<void*>(state.user_data);
++            if (!result.has_value()) {
++              state.cb(wc, 0, nullptr, 0, 0, 0, user_data);
++              return;
++            }
++            const SkBitmap& bitmap = result->bitmap;
++            if (bitmap.drawsNothing()) {
++              state.cb(wc, 0, nullptr, 0, 0, 0, user_data);
++              return;
++            }
++            std::optional<std::vector<uint8_t>> png =
++                gfx::PNGCodec::EncodeBGRASkBitmap(
++                    bitmap, /*discard_transparency=*/false);
++            if (!png || png->empty()) {
++              state.cb(wc, 0, nullptr, 0, 0, 0, user_data);
++              return;
++            }
++            state.cb(wc, 1, png->data(), png->size(),
++                     static_cast<uint64_t>(bitmap.width()),
++                     static_cast<uint64_t>(bitmap.height()), user_data);
++          },
++          state));
++}
++
+ TsBrowserMainParts::TabState* TsBrowserMainParts::FindTab(void* wc_handle) {
+   for (auto& t : tabs_) {
+     if (t->shell && static_cast<void*>(t->shell->web_contents()) == wc_handle) {
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.h b/content/libtermsurf_chromium/ts_browser_main_parts.h
+index fa2a861662..e45e7c15c8 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.h
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.h
+@@ -5,6 +5,8 @@
+ #ifndef CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
+ #define CONTENT_LIBTERMSURF_CONTENT_TS_BROWSER_MAIN_PARTS_H_
+ 
++#include <cstddef>
++#include <cstdint>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -118,6 +120,15 @@ class TsBrowserMainParts : public ShellBrowserMainParts {
+                        const std::string& utf8,
+                        int modifiers);
+   bool NavigationAction(void* wc_handle, const std::string& action);
++  void CapturePng(void* wc_handle,
++                  void (*cb)(void* wc,
++                             int ok,
++                             const uint8_t* png,
++                             size_t png_len,
++                             uint64_t width_px,
++                             uint64_t height_px,
++                             void* user_data),
++                  void* user_data);
+   bool TestCrashCurrentPage(void* wc_handle);
+   bool TestExecuteJavaScript(void* wc_handle, const std::string& script);
+   void SetFocus(void* wc_handle, bool focused);
+-- 
+2.50.1 (Apple Git-155)
+
