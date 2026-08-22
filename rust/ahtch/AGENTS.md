@@ -4,9 +4,9 @@ Nested Cargo workspace. **Not** a member of the monorepo root workspace.
 LibTorch is pinned in **this** tree’s `.cargo/config.toml` so those rpaths
 and `LIBTORCH` env values cannot leak onto `ahweb`.
 
-PATH CLI: **`ahtch`**. Daemon: **`ahtchd`**. Product name: **Astrohacker Torch**.
-Shipped on the Homebrew cask `astrohacker` (`ahtch` / `ahtchd` + vendored
-LibTorch). Contributors still bootstrap LibTorch in this tree.
+PATH CLI: **`ahtch`**. Daemon: **`ahtch --daemon`** (same binary).
+Product name: **Astrohacker Torch**. Shipped on the Homebrew cask
+`astrohacker`. Contributors still bootstrap LibTorch in this tree.
 
 New product work uses root **`docs/issues/`** and the
 `issues-and-experiments` skill. Public command docs: `/docs/ahtch`.
@@ -41,7 +41,7 @@ cargo run --bin ahtch -- --help
 cargo fmt
 ```
 
-Nushell dual-input (PATH must include the sibling `ahtch` / `ahtchd`):
+Nushell dual-input (PATH must include `ahtch`):
 
 ```nu
 $env.PATH = ($env.PWD | path join "rust/ahtch/target/debug" | prepend $env.PATH)
@@ -64,16 +64,17 @@ handles**; tensor data never crosses the process boundary.
 
 ```
 bash / zsh / fish / nushell / python / anything
-    ↓ thin `ahtch` CLI
+    ↓ `ahtch` CLI (one op per invocation)
     ↓ Unix socket (request/response)
-ahtchd              ← registry, LibTorch, GPU, autograd
+`ahtch --daemon`    ← same binary; registry, LibTorch, GPU, autograd
     ↓ tch-rs
 LibTorch (C++)
     ↓ Metal (MPS)
 Apple-silicon GPU
 ```
 
-- **`ahtchd`** owns the tensor database. Handles are string identifiers.
+- The **daemon process** (`ahtch --daemon`) owns the tensor database.
+  Handles are string identifiers.
 - **GPU-only, Apple silicon for now:** every tensor is on MPS. There is
   no device option. The daemon refuses to start without MPS. A future
   CUDA/Linux port is a daemon-level “the GPU” decision, never a
@@ -81,10 +82,10 @@ Apple-silicon GPU
 - **`ahtch`** sends one operation per invocation and prints handles to
   stdout so POSIX pipelines compose.
 - Any shell works. Nushell is the structured client (`ahtch.nu`).
-- Daemon lifecycle is plumbing: `ahtch` auto-starts `ahtchd`; idle TTL
-  defaults to 1 hour (ops renew the lease); `ahtch daemon
-  status|ttl|stop|restart|start` inspects it. Tensors live as long as
-  the daemon.
+- Daemon lifecycle is plumbing: `ahtch` auto-starts itself as
+  `ahtch --daemon`; idle TTL defaults to 1 hour (ops renew the lease);
+  `ahtch daemon status|ttl|stop|restart|start` inspects it. Tensors
+  live as long as the daemon.
 
 ## Principles
 
@@ -109,8 +110,8 @@ rust/ahtch/
 ├── Cargo.toml             # nested workspace
 ├── .cargo/config.toml     # LIBTORCH pin + rpaths
 ├── ahtch.nu               # generated Nushell module
-├── nutorchd/              # daemon crate; binary ahtchd
-├── torch-cli/             # client crate; binary ahtch
+├── nutorchd/              # daemon library (serve loop)
+├── torch-cli/             # PATH binary ahtch (CLI + --daemon)
 ├── ops/                   # shared op table (nutorch-ops)
 └── scripts/               # bootstrap, goldens, dual-input, train
 ```

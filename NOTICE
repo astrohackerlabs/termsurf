@@ -24,7 +24,6 @@ wrapper|ahkey|first-party|MIT
 wrapper|ahnexus|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
 wrapper|ahtch|first-party|MIT
-wrapper|ahtchd|first-party|MIT
 payload|ahcalc|first-party|MIT
 payload|ahhelp|first-party|MIT
 payload|ahkey|first-party|MIT
@@ -85,13 +84,13 @@ runtime components under their respective licenses as used by Bun at build
 time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
-## first-party — ahtch / ahtchd
+## first-party — ahtch
 
-Astrohacker-owned product code for ahtch (Astrohacker Torch CLI) and ahtchd
-(daemon) is licensed under the MIT License in LICENSE (Copyright (c) 2026
-Astrohacker Inc.). The shipped payload also vendors LibTorch (PyTorch) dylibs;
-those files remain under their upstream licenses reproduced at
-legal/third_party/libtorch/.
+Astrohacker-owned product code for ahtch (Astrohacker Torch CLI and daemon
+in one binary; serve with `ahtch --daemon`) is licensed under the MIT License
+in LICENSE (Copyright (c) 2026 Astrohacker Inc.). The shipped payload also
+vendors LibTorch (PyTorch) dylibs; those files remain under their upstream
+licenses reproduced at legal/third_party/libtorch/.
 
 ================================================================================
 ## ghostty — ahterm

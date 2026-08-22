@@ -1,11 +1,4 @@
-//! nutorchd: the Nutorch v2 daemon.
-//!
-//! Owns the tensor registry and the LibTorch context; serves newline-delimited
-//! JSON requests over a Unix socket. One connection at a time (PoC).
-//!
-//! Socket handling (issue 0004): probe-before-bind — a live daemon is never
-//! displaced; a newcomer finding a live daemon exits 0 quietly (see
-//! issues/0004-daemon-lifecycle/01-daemon-side-lifecycle.md).
+//! Daemon listen loop. Invoked as `ahtch --daemon`.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -13,9 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nutorchd::dispatch::{handle_request, parse_request, require_mps};
-use nutorchd::lifecycle::{self, Lifecycle};
-use nutorchd::registry::Registry;
+use crate::dispatch::{handle_request, parse_request, require_mps};
+use crate::lifecycle::{self, Lifecycle};
+use crate::registry::Registry;
 
 const DEFAULT_TTL: Duration = Duration::from_secs(3600);
 
@@ -38,6 +31,7 @@ fn parse_daemon_args() -> Result<DaemonArgs, String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--daemon" => {}
             "--socket" => socket = Some(args.next().ok_or("--socket needs a value")?),
             "--ttl" => ttl_text = Some(args.next().ok_or("--ttl needs a value")?),
             other => return Err(format!("unknown argument: {other}")),
@@ -115,7 +109,7 @@ fn serve_connection(
 
 fn write_response(
     writer: &mut UnixStream,
-    response: &nutorchd::protocol::Response,
+    response: &crate::protocol::Response,
 ) -> std::io::Result<()> {
     let mut payload = serde_json::to_string(response).expect("response serializes");
     payload.push('\n');
@@ -123,7 +117,7 @@ fn write_response(
     writer.flush()
 }
 
-fn main() -> std::io::Result<()> {
+pub fn run() -> std::io::Result<()> {
     // Pure diagnostics: must work on GPU-less machines (brew test, CI),
     // so it runs BEFORE the MPS gate.
     let arg1 = std::env::args().nth(1);
@@ -139,7 +133,7 @@ fn main() -> std::io::Result<()> {
     let args = match parse_daemon_args() {
         Ok(args) => args,
         Err(message) => {
-            eprintln!("ahtchd: {message}");
+            eprintln!("ahtch: {message}");
             std::process::exit(2);
         }
     };
@@ -148,17 +142,14 @@ fn main() -> std::io::Result<()> {
         Some(listener) => listener,
         None => {
             println!(
-                "ahtchd already running on {}; exiting",
+                "ahtch daemon already running on {}; exiting",
                 args.socket.display()
             );
             return Ok(());
         }
     };
 
-    println!(
-        "Astrohacker Torch {}",
-        env!("ASTROHACKER_CLI_VERSION")
-    );
+    println!("Astrohacker Torch {}", env!("ASTROHACKER_CLI_VERSION"));
     println!("pid: {}", std::process::id());
     println!("socket: {}", args.socket.display());
     println!("device: mps");

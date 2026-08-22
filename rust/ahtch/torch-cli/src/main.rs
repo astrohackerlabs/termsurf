@@ -1,9 +1,9 @@
-//! torch: the Nutorch v2 thin client.
+//! ahtch: Astrohacker Torch CLI.
 //!
 //! One operation per invocation: build a one-line JSON request, send it to
-//! nutorchd over the Unix socket, print the result. Handles print one per
+//! the daemon over the Unix socket, print the result. Handles print one per
 //! line, so they compose in POSIX pipelines (multi-return ops emit several
-//! lines). Deliberately has no tch dependency — the client stays thin.
+//! lines). The same binary serves: `ahtch --daemon` runs the listen loop.
 //!
 //! Argument grammar (issue 0005): an op's tensor slots fill
 //! stdin-prefix/positional-suffix — with k positionals for arity n, the
@@ -43,25 +43,21 @@ fn log_path_for(socket: &Path) -> PathBuf {
     socket.with_extension("log")
 }
 
-/// Locate the daemon binary: `ASTROHACKER_TORCH_BIN` override, else sibling `ahtchd`.
-fn ahtchd_binary() -> PathBuf {
+/// Locate the ahtch binary to spawn as daemon: `ASTROHACKER_TORCH_BIN`, else
+/// this executable.
+fn ahtch_binary() -> PathBuf {
     if let Some(bin) = std::env::var_os("ASTROHACKER_TORCH_BIN") {
         return PathBuf::from(bin);
     }
-    std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join("ahtchd")))
-        .unwrap_or_else(|| PathBuf::from("ahtchd"))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ahtch"))
 }
 
-/// Auto-start (issue 0004): spawn nutorchd detached — stdin null,
-/// stdout/stderr appended to the conventional log file — then poll the
-/// socket until it answers.
+/// Auto-start: spawn this same binary as `ahtch --daemon --socket …`.
 fn ensure_daemon(socket: &Path) -> Result<(), String> {
     if daemon_alive(socket) {
         return Ok(());
     }
-    let binary = ahtchd_binary();
+    let binary = ahtch_binary();
     let log = log_path_for(socket);
     let open_log = || {
         std::fs::OpenOptions::new()
@@ -71,13 +67,14 @@ fn ensure_daemon(socket: &Path) -> Result<(), String> {
             .map_err(|e| format!("cannot open daemon log {}: {e}", log.display()))
     };
     std::process::Command::new(&binary)
+        .arg("--daemon")
         .arg("--socket")
         .arg(socket)
         .stdin(Stdio::null())
         .stdout(open_log()?)
         .stderr(open_log()?)
         .spawn()
-        .map_err(|e| format!("failed to start ahtchd ({}): {e}", binary.display()))?;
+        .map_err(|e| format!("failed to start ahtch daemon ({}): {e}", binary.display()))?;
     for _ in 0..100 {
         if daemon_alive(socket) {
             return Ok(());
@@ -85,14 +82,18 @@ fn ensure_daemon(socket: &Path) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(50));
     }
     Err(format!(
-        "ahtchd did not come up within 5s; see {}",
+        "ahtch daemon did not come up within 5s; see {}",
         log.display()
     ))
 }
 
 fn round_trip(socket: &PathBuf, request: &serde_json::Value) -> Result<String, String> {
-    let stream = UnixStream::connect(socket)
-        .map_err(|e| format!("cannot connect to ahtchd at {}: {e}", socket.display()))?;
+    let stream = UnixStream::connect(socket).map_err(|e| {
+        format!(
+            "cannot connect to ahtch daemon at {}: {e}",
+            socket.display()
+        )
+    })?;
     let mut writer = stream
         .try_clone()
         .map_err(|e| format!("socket error: {e}"))?;
@@ -925,6 +926,11 @@ fn print_op_help(op: &str) {
 // ---------- main ----------
 
 fn run() -> Result<(), String> {
+    if std::env::args().skip(1).any(|a| a == "--daemon") {
+        nutorchd::serve::run().map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     let op_name = std::env::args().nth(1).ok_or(GENERAL_USAGE)?;
 
     if op_name == "ops" {

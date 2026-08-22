@@ -159,14 +159,12 @@ build_ahtch() {
   fi
   if $RELEASE; then
     echo "==> Building ahtch (release)..."
-    cargo build --release --bin ahtch --bin ahtchd
+    cargo build --release --bin ahtch
     echo "  ahtch: $AHTCH_DIR/target/release/ahtch"
-    echo "  ahtchd: $AHTCH_DIR/target/release/ahtchd"
   else
     echo "==> Building ahtch (debug)..."
-    cargo build --bin ahtch --bin ahtchd
+    cargo build --bin ahtch
     echo "  ahtch: $AHTCH_DIR/target/debug/ahtch"
-    echo "  ahtchd: $AHTCH_DIR/target/debug/ahtchd"
   fi
 }
 

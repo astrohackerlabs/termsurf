@@ -25,7 +25,6 @@ ahkey
 ahnexus
 ah-chromiumd
 ahtch
-ahtchd
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
@@ -49,8 +48,7 @@ ahtch
 | `ahhelp` | TermSurf product help cheatsheet (full-pane web UI) |
 | `ahkey` | KeyPears local TermSurf client (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
-| `ahtch` | Astrohacker Torch CLI (GPU tensors; talks to `ahtchd`) |
-| `ahtchd` | Astrohacker Torch daemon (implementation; on PATH so `ahtch` can spawn it) |
+| `ahtch` | Astrohacker Torch (GPU tensors; daemon is `ahtch --daemon`) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
 
@@ -117,7 +115,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
 - PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, `ahkey`, `ahnexus`,
-  `ahtch`, `ahtchd`, engine helpers
+  `ahtch`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
@@ -135,7 +133,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `ahnexus/ui/`)
 - ahtch package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahtch/` (when installed as artifact)
-  or under Caskroom stage `ahtch/` (`bin/ahtch`, `bin/ahtchd`,
+  or under Caskroom stage `ahtch/` (`bin/ahtch`,
   `libexec/libtorch/lib/`, `ahtch.nu`)
 
 ## Release tarball contract
@@ -155,8 +153,7 @@ Top-level contents:
 - `ahkey/` (payload: `dist/ahkey`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
-- `ahtch/` (payload: `bin/ahtch`, `bin/ahtchd`, LibTorch dylibs,
-  `ahtch.nu`)
+- `ahtch/` (payload: `bin/ahtch`, LibTorch dylibs, `ahtch.nu`)
 
 Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -340,7 +337,6 @@ normal operator interface.
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
      | `ahtch --version` | `Astrohacker Torch <version>` |
-     | `ahtchd --version` | `Astrohacker Torch <version>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be
      shown only as secondary detail after the product release line.

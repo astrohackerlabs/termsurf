@@ -1,4 +1,4 @@
-# Astrohacker Torch nested workspace (PATH ahtch / daemon ahtchd).
+# Astrohacker Torch nested workspace (PATH ahtch; daemon is `ahtch --daemon`).
 # Not a member of the monorepo root workspace — LibTorch pin lives in
 # .cargo/config.toml and must not leak onto ahweb.
 #
@@ -11,6 +11,6 @@ members = ["nutorchd", "ops", "torch-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 license = "MIT"
 license-file = "LICENSE"

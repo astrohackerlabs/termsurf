@@ -4,12 +4,13 @@ version.workspace = true
 edition = "2021"
 license.workspace = true
 license-file.workspace = true
-description = "Astrohacker Torch thin client: talk to ahtchd from any shell"
+description = "Astrohacker Torch: GPU tensors from any shell (CLI + daemon)"
 
 [[bin]]
 name = "ahtch"
 path = "src/main.rs"
 
 [dependencies]
+nutorchd = { path = "../nutorchd" }
 nutorch-ops = { path = "../ops" }
 serde_json = { version = "1", features = ["float_roundtrip"] }

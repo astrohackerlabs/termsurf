@@ -8,3 +8,4 @@ pub mod lifecycle;
 pub mod nn;
 pub mod protocol;
 pub mod registry;
+pub mod serve;
