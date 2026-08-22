@@ -1,6 +1,28 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26081913378559 Exp 1 apex homepage)
+## Active Pin (Issue 26082214188331 Exp 1 AGENTS overlay)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26082214188331-exp1-agents-overlay`
+- **Product HEAD:** `ab8435c99ce2837c3dacb2da058bdf4bbe5e843e`
+- **Product tree:** `1eab103c3af2afdccd0b3c55a38a888a9ec1536d`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**)
+  from `base..HEAD`
+- **Patches:** **35** total. Last commit is the Astrohacker
+  `AGENTS.md` overlay (nested checkout clean for release).
+- **Archive SHA-256:**
+  `1dd5faf7e114ebbb141fa6d5b8aab288e7065ad56e482893a45174f64de32530`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — pin overlay `AGENTS.md`. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 35 patches
+- **Patch SHA-256 (bookends):**
+  - 0001 (squash): `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0001 (overlay): `d5ad9e7949a8a9677c69430895b3f7ef37dc00e8448fd482f030b89901a3914e`
+
+## Prior Active Pin (Issue 26081913378559 Exp 1 apex homepage)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`

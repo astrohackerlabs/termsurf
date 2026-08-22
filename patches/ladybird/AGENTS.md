@@ -1,7 +1,7 @@
 # Ladybird Patch Workspace (tombstone)
 
-Ladybird is **not** a shipped Astrohacker Terminal engine (Issue
-26072117006454). Chromium and WebKit are the supported product engines.
+Ladybird is **not** a shipped Astrohacker TermSurf engine (Issue
+26072117006454). Chromium is the only supported product browser engine.
 
 Do **not** re-open a product pin, rebuild a live fork for shipping, or revive
 `ah-ladybirdd` packaging without a **new** issue.

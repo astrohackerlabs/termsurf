@@ -1,10 +1,28 @@
 # Reedline Patches
 
-Astrohacker Shell uses a **path pin** of upstream Reedline under
-`forks/reedline`. There is **no product source patch** — only an exact tip pin
-that Nushell and `rust/ahsh` share via path dependency.
+Astrohacker Shell uses a Reedline checkout under `forks/reedline` that
+Nushell and `rust/ahsh` share via path dependency. Issue 26082214188331
+adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26081615463315 Exp 2)
+## Current State (Issue 26082214188331 Exp 1)
+
+- Upstream repository: `https://github.com/nushell/reedline`
+- Upstream base policy: **latest commit on upstream `main`**
+- Upstream base: `9230319ae57f88bac5a2a17dc3f9a313cff3330d`
+- Product branch: `issue-26082214188331-exp1-agents-overlay`
+- Product HEAD: `d2e82678e0a63f09e7b94fed54851e02eb612154`
+- Product tree: `c2a64ea66361595079357ae3222a3cb0a97c5c29`
+- Version: `0.50.0` (`rust-version` 1.95.0; helix is default-on in reedline
+  — Nu/ahsh keep `default-features = false` so helix stays off)
+- Local fork working tree: `forks/reedline`
+- Issue archive: `patches/reedline/patches/issue-26082214188331/` (**1**
+  Astrohacker `AGENTS.md` overlay)
+- Product commits / patch files: `1` / `1`
+- Archive aggregate SHA-256:
+  `1c9e91f7595e12fa0efac9d54d970a7d466a52f9f71521cf1c0cfb17aed08561`
+- Verification: **TREE_MATCH**; paired with Nushell overlay + ahsh
+
+## Prior State (Issue 26081615463315 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/reedline`
 - Upstream base policy: **latest commit on upstream `main`**
@@ -52,5 +70,7 @@ that Nushell and `rust/ahsh` share via path dependency.
 1. `git ls-remote https://github.com/nushell/reedline.git refs/heads/main`
 2. Checkout tip on `issue-NNNN-reedline` (or detached tip).
 3. Confirm `Cargo.toml` version; rebuild `ahsh` with Nushell path pin.
-4. If product edits appear, start an issue-scoped patch archive; until then
-   keep zero-patch release-manifest pin (base == expected_head).
+4. Re-apply `patches/reedline/patches/issue-26082214188331/` while the
+   overlay remains product source; update this README and
+   `patches/release-manifest.json`. Do not return to a zero-patch pin
+   while `AGENTS.md` is an Astrohacker edit.

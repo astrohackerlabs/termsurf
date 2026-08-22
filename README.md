@@ -25,12 +25,6 @@ Open the scientific calculator:
 ahcalc
 ```
 
-Open the product help cheatsheet:
-
-```bash
-ahhelp
-```
-
 Open the KeyPears client:
 
 ```bash
@@ -75,13 +69,13 @@ first, then composition, then solo surfaces).
 
 ![TermSurf split window with the Astrohacker calculator on the left and the product website on the right](assets/screenshots/story/ahweb-ahcalc.webp)
 
-### Help open while you browse
+### Docs beside the web
 
-![TermSurf split window with product help on the left and a browser pane on the right](assets/screenshots/story/ahweb-ahhelp.webp)
+![Historical TermSurf split: a help cheatsheet pane on the left and a browser pane on the right](assets/screenshots/story/ahweb-ahhelp.webp)
 
 ### Apps compose with apps
 
-![TermSurf split window with product help and the Astrohacker calculator in two panes](assets/screenshots/story/ahhelp-ahcalc.webp)
+![Historical TermSurf split: a help cheatsheet pane and the Astrohacker calculator](assets/screenshots/story/ahhelp-ahcalc.webp)
 
 ### Browse the web inside your terminal
 

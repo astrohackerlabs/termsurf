@@ -1,6 +1,6 @@
 # Gecko Patch Workspace (tombstone)
 
-Gecko is **not** a shipped or active Astrohacker Terminal engine (Issue
+Gecko is **not** a shipped or active Astrohacker TermSurf engine (Issue
 26072121272459). Chromium is the supported product browser engine.
 
 Do **not** re-open a product pin, rebuild a live fork for shipping, or revive

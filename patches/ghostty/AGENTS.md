@@ -1,7 +1,7 @@
 # Ghostty Patch Workspace
 
 Read this **and** [`../AGENTS.md`](../AGENTS.md) before modifying Ghostty for
-Astrohacker Terminal.
+Astrohacker TermSurf.
 
 ## Contract (MUST)
 

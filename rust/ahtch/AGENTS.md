@@ -48,6 +48,13 @@ $env.PATH = ($env.PWD | path join "rust/ahtch/target/debug" | prepend $env.PATH)
 nu rust/ahtch/scripts/test-dual-input.nu
 ```
 
+Nushell **cannot pass a list** into the external (`cannot_pass_list_to_external`).
+Shapes go through **`to json`**, not spread:
+
+```nu
+ahtch randn ([6 6] | to json)
+```
+
 Regenerate the module after generator changes:
 
 ```nu

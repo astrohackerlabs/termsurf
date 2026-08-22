@@ -6,53 +6,59 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26081913378559-exp1-apex-homepage",
-      "expected_head": "9881c3cf827575dec87add5ce575b6deb2b35df6",
-      "expected_tree": "5677e68afc37fb04926a964ed1e9057fd0ba2faf",
+      "branch": "issue-26082214188331-exp1-agents-overlay",
+      "expected_head": "ab8435c99ce2837c3dacb2da058bdf4bbe5e843e",
+      "expected_tree": "1eab103c3af2afdccd0b3c55a38a888a9ec1536d",
       "patch_directories": [
         "patches/ghostty/patches/issue-26081616315182",
-        "patches/ghostty/patches/issue-26081913378559"
+        "patches/ghostty/patches/issue-26081913378559",
+        "patches/ghostty/patches/issue-26082214188331"
       ],
-      "patch_count": 34,
-      "archive_sha256": "e40b326865cc91e78da3805a31c590c3fed29a0a3022919fa9a3d44fe56552bd",
+      "patch_count": 35,
+      "archive_sha256": "1dd5faf7e114ebbb141fa6d5b8aab288e7065ad56e482893a45174f64de32530",
       "allowed_untracked": []
     },
     {
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "8e03210652f3c48c4521cec982d96e4cb6c67181",
-      "branch": "issue-26081615463315-exp2-nushell-main",
-      "expected_head": "789490788161dd8d5ab5770e27b13b160d04a496",
-      "expected_tree": "b88140e054dc825c0e3b61797bd482ff7e27ebcc",
+      "branch": "issue-26082214188331-exp1-agents-overlay",
+      "expected_head": "aa82105a4b55670ade99617043cd1b74a436aac8",
+      "expected_tree": "f2273e1cf5842a4256da9486233f22c93d80e0f2",
       "patch_directories": [
-        "patches/nushell/patches/issue-26081615463315"
+        "patches/nushell/patches/issue-26081615463315",
+        "patches/nushell/patches/issue-26082214188331"
       ],
-      "patch_count": 8,
-      "archive_sha256": "a2e90a980fafb55c6b041f1d1d191e92af1e97d81fb16228a038828595ddb5cf",
+      "patch_count": 9,
+      "archive_sha256": "12ab3a767f83d60d27ae5ab89de470cf9857403680b2758e3216393bbed1a682",
       "allowed_untracked": []
     },
     {
       "name": "reedline",
       "checkout": "forks/reedline",
       "base": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
-      "branch": "issue-26081615463315-exp2-reedline-main",
-      "expected_head": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
-      "expected_tree": "c0f4a5ff6ff58b9f4756f567d5576da7daeb8177",
-      "patch_directories": [],
-      "patch_count": 0,
-      "archive_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "branch": "issue-26082214188331-exp1-agents-overlay",
+      "expected_head": "d2e82678e0a63f09e7b94fed54851e02eb612154",
+      "expected_tree": "c2a64ea66361595079357ae3222a3cb0a97c5c29",
+      "patch_directories": [
+        "patches/reedline/patches/issue-26082214188331"
+      ],
+      "patch_count": 1,
+      "archive_sha256": "1c9e91f7595e12fa0efac9d54d970a7d466a52f9f71521cf1c0cfb17aed08561",
       "allowed_untracked": []
     },
     {
       "name": "nexus",
       "checkout": "forks/nexus",
       "base": "85c9edab73733f412f6855800fecdd8da3e76d14",
-      "branch": "issue-26081311412273-exp6-nexus-main",
-      "expected_head": "85c9edab73733f412f6855800fecdd8da3e76d14",
-      "expected_tree": "b92461717cc9eae13989579f471910e58c4cb7c1",
-      "patch_directories": [],
-      "patch_count": 0,
-      "archive_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "branch": "issue-26082214188331-exp1-agents-overlay",
+      "expected_head": "57243d2337ea4a0fc351b3ad632d330a3659a484",
+      "expected_tree": "4699720ef4b6480430a936df06cf3da076b6bbed",
+      "patch_directories": [
+        "patches/nexus/patches/issue-26082214188331"
+      ],
+      "patch_count": 1,
+      "archive_sha256": "fab23ef20e14cf3d51c91789613f72d7a74d10451a60eaaf48afc4526308f9f3",
       "allowed_untracked": []
     },
     {

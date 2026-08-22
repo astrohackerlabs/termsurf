@@ -20,7 +20,6 @@ ahterm
 ahweb
 ahsh
 ahcalc
-ahhelp
 ahkey
 ahnexus
 ah-chromiumd
@@ -32,7 +31,6 @@ paths in the release tarball besides bare CLI binaries):
 
 <!-- released-payload-roots -->
 ahcalc
-ahhelp
 ahkey
 ahnexus
 ah-chromiumd
@@ -45,7 +43,6 @@ ahtch
 | `ahsh` | Astrohacker Shell |
 | `ahweb` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
-| `ahhelp` | TermSurf product help cheatsheet (full-pane web UI) |
 | `ahkey` | KeyPears local TermSurf client (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
 | `ahtch` | Astrohacker Torch (GPU tensors; daemon is `ahtch --daemon`) |
@@ -114,16 +111,13 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahhelp`, `ahkey`, `ahnexus`,
+- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahkey`, `ahnexus`,
   `ahtch`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
   or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
-- ahhelp package payload →
-  `/opt/homebrew/opt/astrohacker-terminal-ahhelp/` (when installed as artifact)
-  or under Caskroom stage `ahhelp/` (binary links `ahhelp/dist/ahhelp`)
 - ahkey package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahkey/` (when installed as artifact)
   or under Caskroom stage `ahkey/` (binary links `ahkey/dist/ahkey`)
@@ -149,7 +143,6 @@ Top-level contents:
   copyrights, Nushell/Reedline LICENSE copies, LibTorch LICENSE/NOTICE)
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
-- `ahhelp/` (payload: `dist/ahhelp`, `build/client/` SPA, `public/`)
 - `ahkey/` (payload: `dist/ahkey`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
@@ -182,8 +175,10 @@ accepted by scripts).
 
 | Script | Role |
 | --- | --- |
-| `scripts/release-homebrew.py` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
-| `scripts/lib/release_forks.py` | Enforce `patches/release-manifest.json` and apply a missing exact cumulative series only from its recorded base |
+| `scripts/release-homebrew.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
+| `scripts/release-homebrew.py` | Python fallback until Issue 26082214369859 Exp 7 Pass |
+| `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` (Nu) |
+| `scripts/lib/release_forks.py` | Python fork helper fallback |
 | `scripts/build.sh` | Build components / `all --release` |
 | `scripts/release.sh` | Lower-level package/publish helper used by the canonical command |
 | `scripts/sync-public-source.sh` | Sync allowlisted paths into public checkout |
@@ -192,16 +187,16 @@ accepted by scripts).
 
 The human release operator runs one command from the clean private monorepo:
 
-```sh
-scripts/release-homebrew.py
+```nu
+scripts/release-homebrew.nu
 ```
 
 With no option it selects the next patch version after the greatest strict
 version found across public releases, public tags, and the remote cask. To
 select a higher unused version:
 
-```sh
-scripts/release-homebrew.py --version 0.2.0
+```nu
+scripts/release-homebrew.nu --version 0.2.0
 ```
 
 #### Build cache preservation
@@ -280,7 +275,7 @@ Publish mode requires **clean** public and tap worktrees. It only rewrites cask
 ### Lower-level manual flow
 
 The following describes the components orchestrated by
-`scripts/release-homebrew.py`. It is recovery/reference material, not the
+`scripts/release-homebrew.nu`. It is recovery/reference material, not the
 normal operator interface.
 
 1. **Preflight version** (remote-facing):
@@ -313,7 +308,7 @@ normal operator interface.
      nested `rust/ahtch` workspace.package). The
      canonical command rewrites and commits those manifests before building so
      `CARGO_PKG_VERSION` matches the cask. It also rewrites `bun/ahcalc` and
-     `bun/ahhelp` `package.json` `"version"` and their
+     `bun/ahkey` `package.json` `"version"` and their
      `app/cli/embedded-version.ts` stamps to the same X.Y.Z so
      compile-time stamps match the cask and the post-build tree stays clean.
      Do not leave those packages stuck at a placeholder such as `0.1.0` across
@@ -332,7 +327,6 @@ normal operator interface.
      | `ahweb --version` | `Astrohacker Web <version>` |
      | `ahsh --version` | `Astrohacker Shell <version>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
-     | `ahhelp --version` | `Astrohacker Help <version>` |
      | `ahkey --version` | `Astrohacker KeyPears <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
@@ -382,7 +376,7 @@ normal operator interface.
 
 The following historical/active harnesses may be useful in an issue whose goal
 is product qualification. They are not publication gates and are never invoked
-by `scripts/release-homebrew.py`:
+by `scripts/release-homebrew.nu`:
 
 | Script | Role |
 | --- | --- |

@@ -1,0 +1,36 @@
+From 57243d2337ea4a0fc351b3ad632d330a3659a484 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 22 Aug 2026 09:19:36 -0500
+Subject: [PATCH] Astrohacker overlay AGENTS.md for ahnexus / nexus-common
+
+---
+ AGENTS.md | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+ create mode 100644 AGENTS.md
+
+diff --git a/AGENTS.md b/AGENTS.md
+new file mode 100644
+index 00000000..fbebd636
+--- /dev/null
++++ b/AGENTS.md
+@@ -0,0 +1,17 @@
++# Nexus working tree (Astrohacker overlay)
++
++You are under the **local Nexus checkout** for **Astrohacker
++TermSurf** (`ahnexus` / `nexus-common`). This file is the tracked
++monorepo overlay. Do **not** follow upstream agent instructions that
++conflict with Astrohacker InE.
++
++Pin-only default until the first product source edit. Then the full
++hub contract applies.
++
++1. [`patches/AGENTS.md`](../../patches/AGENTS.md) and
++   [`patches/nexus/AGENTS.md`](../../patches/nexus/AGENTS.md).
++2. Branch must include **issue id** and **`exp{N}`**.
++3. Pin notes: [`patches/nexus/README.md`](../../patches/nexus/README.md).
++
++Do not commit Nexus source or build outputs to the Astrohacker repo.
++Do not depend on iced `nexus-client` as a library for TermSurf UI.
+-- 
+2.50.1 (Apple Git-155)
+

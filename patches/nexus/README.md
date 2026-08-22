@@ -5,7 +5,24 @@ Nexus under `forks/nexus`. The primary consumer is the `nexus-common` crate
 (protocol framing, types, TLS helpers). The iced `nexus-client` GUI is **not**
 an Astrohacker product dependency.
 
-## Current State (Issue 26081311412273 Exp 6)
+## Current State (Issue 26082214188331 Exp 1)
+
+- Upstream repository: `https://github.com/zquestz/nexus`
+- SSH: `git@github.com:zquestz/nexus.git`
+- Upstream base: `85c9edab73733f412f6855800fecdd8da3e76d14`
+- Product branch: `issue-26082214188331-exp1-agents-overlay`
+- Product HEAD: `57243d2337ea4a0fc351b3ad632d330a3659a484`
+- Product tree: `4699720ef4b6480430a936df06cf3da076b6bbed`
+- `nexus-common` version / `PROTOCOL_VERSION`: `0.9.10`
+- Local fork working tree: `forks/nexus`
+- Issue archive: `patches/nexus/patches/issue-26082214188331/` (**1**
+  Astrohacker `AGENTS.md` overlay)
+- Product commits / patch files: `1` / `1`
+- Archive aggregate SHA-256:
+  `fab23ef20e14cf3d51c91789613f72d7a74d10451a60eaaf48afc4526308f9f3`
+- Verification: **TREE_MATCH**; `scripts/build.sh ahnexus --release`
+
+## Prior State (Issue 26081311412273 Exp 6)
 
 - Upstream repository: `https://github.com/zquestz/nexus`
 - SSH: `git@github.com:zquestz/nexus.git`
@@ -33,9 +50,9 @@ an Astrohacker product dependency.
 
 ## Patch contents
 
-None yet. First intentional Astrohacker source edit starts an issue-scoped
-`format-patch` archive under `patches/nexus/patches/issue-{ID}/` and updates
-this README + `patches/release-manifest.json`.
+Issue 26082214188331 Exp 1: Astrohacker `AGENTS.md` overlay (one patch
+on upstream base `85c9edab73733f412f6855800fecdd8da3e76d14`). See Current
+State.
 
 ## Archive style
 
@@ -49,9 +66,8 @@ experiment documents ordered multi-dir apply. Pin-only state uses
 ```sh
 BASE=85c9edab73733f412f6855800fecdd8da3e76d14
 git clone https://github.com/zquestz/nexus.git forks/nexus
-git -C forks/nexus checkout -B issue-26081311412273-exp6-nexus-main "$BASE"
-# When patches exist:
-# git -C forks/nexus am "$PWD/patches/nexus/patches/issue-NNNN/"*.patch
+git -C forks/nexus checkout -B issue-26082214188331-exp1-agents-overlay "$BASE"
+git -C forks/nexus am "$PWD/patches/nexus/patches/issue-26082214188331/"*.patch
 ```
 
 ## Generate (after product commits on the issue branch)
@@ -74,7 +90,9 @@ issue-{ISSUE_ID}-exp{N}-{short-slug}
 2. Fetch; rebase or re-pin product branch; re-apply patches if any.
 3. `git rev-parse HEAD` / `HEAD^{tree}`; update README + release-manifest.
 4. Rebuild consumers (`cargo check -p ahnexus` when path-dep is wired).
-5. If still pin-only, keep base == expected_head and zero patches.
+5. Overlay is product source: keep the issue-scoped archive and update
+   expected_head / expected_tree. Do not drop to a zero-patch pin while
+   `AGENTS.md` remains an Astrohacker edit.
 
 ## Scope notes
 

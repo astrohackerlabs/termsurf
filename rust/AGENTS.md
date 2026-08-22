@@ -3,10 +3,17 @@
 Guidance for coding agents working in the Astrohacker **Rust** tree (`rust/`)
 under the monorepo-root Cargo workspace.
 
-Root `Cargo.toml` is the workspace; members are paths like `rust/ahweb`.
-Package and binary names stay unprefixed (`ahweb`, `ahsh`, …).
+Root `Cargo.toml` is the workspace; members are `rust/ahweb`,
+`rust/ah-chromiumd`, `rust/ahnexus`. Package and binary names stay
+unprefixed (`ahweb`, `ahnexus`, …).
 
-`rust/ahsh` is **excluded** from workspace members (own lockfile). Build with:
+`rust/ahnexus` is a workspace member. Nexus protocol lives in **Rust**
+(`forks/nexus/nexus-common`), not TypeScript. See
+`rust/ahnexus/AGENTS.md`.
+
+`rust/ahsh` is **excluded** from workspace members (own lockfile).
+Default interactive mode is **nu**; alt is **zsh** (not bash). See
+`rust/ahsh/AGENTS.md`. Build with:
 
 ```sh
 cargo build --manifest-path rust/ahsh/Cargo.toml

@@ -5,7 +5,24 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26081615463315 Exp 2)
+## Current State (Issue 26082214188331 Exp 1)
+
+- Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26082214188331-exp1-agents-overlay`
+- Product HEAD: `aa82105a4b55670ade99617043cd1b74a436aac8`
+- Product tree: `f2273e1cf5842a4256da9486233f22c93d80e0f2`
+- Local fork working tree: `forks/nushell`
+- Issue archives (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8**) +
+  `patches/nushell/patches/issue-26082214188331/` (**1** overlay
+  `AGENTS.md`) from `base..HEAD`
+- Total patch count: **9**
+- Archive aggregate SHA-256:
+  `12ab3a767f83d60d27ae5ab89de470cf9857403680b2758e3216393bbed1a682`
+
+## Prior State (Issue 26081615463315 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/nushell`
 - Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`

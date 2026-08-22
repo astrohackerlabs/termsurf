@@ -18,7 +18,7 @@ COMPONENT=""
 
 usage() {
   echo "Usage: $0 <component> [--release] [--clean] [--open]"
-  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahhelp, ahkey, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
+  echo "Components: ahterm, ahsh, ahweb, ahcalc, ahkey, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
   echo "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -261,38 +261,6 @@ build_ahcalc() {
   echo "  ahcalc: $AHCALC_DIR/dist/ahcalc"
 }
 
-build_ahhelp() {
-  local AHHELP_DIR="$REPO_DIR/bun/ahhelp"
-  if [ ! -d "$AHHELP_DIR" ]; then
-    echo "Error: ahhelp package missing: $AHHELP_DIR" >&2
-    exit 1
-  fi
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "Error: bun is required to build ahhelp (not found on PATH)" >&2
-    exit 1
-  fi
-  if $CLEAN; then
-    echo "==> Cleaning ahhelp dist..."
-    rm -rf "$AHHELP_DIR/dist"
-  fi
-  if [ -z "${ASTROHACKER_VERSION:-}" ] && [ -n "${TERMSURF_VERSION:-}" ]; then
-    export ASTROHACKER_VERSION="$TERMSURF_VERSION"
-  fi
-  if $RELEASE; then
-    echo "==> Building ahhelp (release${ASTROHACKER_VERSION:+, version $ASTROHACKER_VERSION})..."
-  else
-    echo "==> Building ahhelp (debug${ASTROHACKER_VERSION:+, version $ASTROHACKER_VERSION})..."
-  fi
-  (
-    cd "$AHHELP_DIR"
-    if [ ! -d "$AHHELP_DIR/node_modules" ] && [ ! -d "$REPO_DIR/node_modules" ]; then
-      bun install
-    fi
-    bun run build:ahhelp
-  )
-  echo "  ahhelp: $AHHELP_DIR/dist/ahhelp"
-}
-
 build_ahkey() {
   local AHKEY_DIR="$REPO_DIR/bun/ahkey"
   if [ ! -d "$AHKEY_DIR" ]; then
@@ -377,7 +345,6 @@ case "$COMPONENT" in
   ahweb|webtui) build_ahweb ;;
   ahsh)       build_ahsh ;;
   ahcalc)     build_ahcalc ;;
-  ahhelp)     build_ahhelp ;;
   ahkey)      build_ahkey ;;
   ahnexus)    build_ahnexus ;;
   ah-chromiumd|chromium)   build_chromiumd ;;
@@ -389,7 +356,6 @@ case "$COMPONENT" in
     build_ahweb
     build_ahsh
     build_ahcalc
-    build_ahhelp
     build_ahkey
     build_ahnexus
     build_ahtch

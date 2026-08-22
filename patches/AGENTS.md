@@ -72,12 +72,13 @@ add local paths and branch prefixes only.
 
 | Fork | Notes |
 | --- | --- |
-| `chromium/` | Engine; large cumulative archives |
-| `webkit/` | Engine |
-| `ghostty/` | Host terminal (`ahterm`) |
-| `gecko/` | Historical archive only (never shipped; Issue 26072121272459) |
-| `nushell/` | Shell product fork |
-| `reedline/` | Tip pin only (no product patch unless source is edited) |
-| `nexus/` | Nexus BBS protocol (`nexus-common`); pin-only until first product edit |
+| `chromium/` | Shipped product browser engine; large cumulative archives |
+| `ghostty/` | Host (`ahterm` / Astrohacker TermSurf) |
+| `nushell/` | Shell product fork (`ahsh`) |
+| `reedline/` | Reedline path pin; product `AGENTS.md` overlay (Issue 26082214188331) |
+| `nexus/` | Nexus BBS protocol (`nexus-common`); product `AGENTS.md` overlay (Issue 26082214188331) |
+| `webkit/` | **Tombstone** — not a shipped engine (Issue 26072120115614) |
+| `gecko/` | **Tombstone** — never shipped (Issue 26072121272459) |
+| `ladybird/` | **Tombstone** — not a shipped engine (Issue 26072117006454) |
 
 Working trees stay under ignored `forks/`; only archives and docs live here.

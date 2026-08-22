@@ -1,6 +1,6 @@
 # WebKit Patch Workspace (tombstone)
 
-WebKit is **not** a shipped Astrohacker Terminal engine (Issue
+WebKit is **not** a shipped Astrohacker TermSurf engine (Issue
 26072120115614). Chromium is the supported product browser engine.
 
 Do **not** re-open a product pin, rebuild a live fork for shipping, or revive
