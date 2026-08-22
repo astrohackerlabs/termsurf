@@ -12,6 +12,14 @@ Package and binary names stay unprefixed (`ahweb`, `ahsh`, …).
 cargo build --manifest-path rust/ahsh/Cargo.toml
 ```
 
+`rust/ahtch` is **excluded** (own workspace + LibTorch pin in
+`rust/ahtch/.cargo/config.toml`). `cd rust/ahtch` before cargo so that
+config applies (a root `--manifest-path` invocation misses it):
+
+```sh
+cd rust/ahtch && cargo test
+```
+
 Workspace `target/` is at the **monorepo root**. Fork trees live under top-level
 `forks/`; root workspace **excludes** `forks` so nested fork Cargo workspaces
 resolve.
@@ -25,6 +33,7 @@ cargo metadata --no-deps
 cargo check --workspace
 cargo build -p ahweb
 cargo build --manifest-path rust/ahsh/Cargo.toml
+cd rust/ahtch; cargo test
 ```
 
 ### Operator product smoke (`ahweb`)

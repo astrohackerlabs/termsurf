@@ -19,5 +19,6 @@ exclude = [
     "logs",
     "assets",
     "skills",
+    "rust/ahtch",
 ]
 resolver = "2"
