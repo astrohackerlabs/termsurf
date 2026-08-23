@@ -4,7 +4,27 @@ Astrohacker Shell uses a Reedline checkout under `forks/reedline` that
 Nushell and `rust/ahsh` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26082214188331 Exp 1)
+## Current State (Issue 26082310413946 Exp 2)
+
+- Upstream repository: `https://github.com/nushell/reedline`
+- Upstream base policy: **latest commit on upstream `main`**
+- Upstream base: `9230319ae57f88bac5a2a17dc3f9a313cff3330d`
+- Product branch: `issue-26082310413946-exp2-live-ai-prompt`
+- Product HEAD: `3a5079b3627445327881da20d9aa03b9fa8e5a3a`
+- Product tree: `6cf0fc1141427db8a5db2cc3f4f439a0f515f847`
+- Version: `0.50.0` (`rust-version` 1.95.0; helix is default-on in reedline
+  — Nu/ahsh keep `default-features = false` so helix stays off)
+- Local fork working tree: `forks/reedline`
+- Issue archives: `patches/reedline/patches/issue-26082214188331/` (**1**
+  Astrohacker `AGENTS.md` overlay) +
+  `patches/reedline/patches/issue-26082310413946/` (**1** live-buffer
+  left prompt)
+- Product commits / patch files: `2` / `2`
+- Archive aggregate SHA-256:
+  `c6b6701f23f3287f897c86921e4a4f911803606608071dea42419ae1161681bc`
+- Verification: **TREE_MATCH**; paired with Nushell Exp 2 + ahsh
+
+## Prior State (Issue 26082214188331 Exp 1)
 
 - Upstream repository: `https://github.com/nushell/reedline`
 - Upstream base policy: **latest commit on upstream `main`**

@@ -7,6 +7,9 @@ use std::time::Duration;
 
 use nu_cli::{ModeDispatcher, ModeResult};
 
+/// Exact stdout line for column-0 `#` (Issue 26082310413946 Exp 1).
+pub const AI_STUB_LINE: &str = "ai mode is coming soon";
+
 use crate::shell::ShellState;
 use crate::shell_engine::ShellEngine;
 use crate::zsh_process::ZshProcess;
@@ -181,6 +184,14 @@ impl ModeDispatcher for ShannonDispatcher {
             last_exit_code: 0,
         };
         match mode {
+            "ai" => {
+                println!("{AI_STUB_LINE}");
+                ModeResult {
+                    env: state.env,
+                    cwd: state.cwd,
+                    exit_code: 0,
+                }
+            }
             "zsh" => {
                 self.ensure_ready();
                 if let Some(err) = &self.error {
@@ -274,6 +285,43 @@ mod tests {
         assert!(env.unwrap().contains_key("PATH"));
         assert!(d.nu_env_applied_for_test());
         assert!(d.take_pending_env_merge_blocking().is_none());
+    }
+
+    #[test]
+    fn column0_hash_gate_matches_issue_table() {
+        use nu_cli::is_shannon_ai_line;
+        let cases: &[(&str, bool)] = &[
+            ("#", true),
+            ("#hello", true),
+            ("# my query", true),
+            ("## foo", true),
+            ("echo hi # note", false),
+            ("  # note", true),
+            ("\t# note", true),
+            ("", false),
+            ("__shannon_switch", false),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(is_shannon_ai_line(input), *expected, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn ai_stub_exits_zero_without_waiting_on_zsh() {
+        let t0 = std::time::Instant::now();
+        let mut d = ShannonDispatcher::new();
+        let result = d.execute("ai", "# hello", HashMap::new(), PathBuf::from("/"));
+        let elapsed_ms = t0.elapsed().as_millis();
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.cwd, PathBuf::from("/"));
+        assert!(
+            elapsed_ms < 200,
+            "ai execute must not join zsh bootstrap, took {elapsed_ms}ms"
+        );
+        assert!(
+            d.zsh.is_none(),
+            "ai stub must not take ownership of the zsh worker"
+        );
     }
 
     #[test]

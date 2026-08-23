@@ -1,0 +1,178 @@
+From b24c66040efd035fa80ab41ff571df772441d7ec Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 23 Aug 2026 06:02:11 -0500
+Subject: [PATCH] Add column-0 hash AI dispatch in the REPL
+
+Issue 26082310413946 Exp 1: when a ModeDispatcher is present,
+submitted lines starting with # execute as mode "ai" instead of
+Nu or zsh. No Reedline key bind.
+---
+ crates/nu-cli/src/lib.rs             | 12 +++++-----
+ crates/nu-cli/src/mode_dispatcher.rs | 33 ++++++++++++++++++++++++++++
+ crates/nu-cli/src/repl.rs            | 28 ++++++++++++++++++++---
+ 3 files changed, 64 insertions(+), 9 deletions(-)
+
+diff --git a/crates/nu-cli/src/lib.rs b/crates/nu-cli/src/lib.rs
+index 0292f74ba..b1e4bc246 100644
+--- a/crates/nu-cli/src/lib.rs
++++ b/crates/nu-cli/src/lib.rs
+@@ -1,6 +1,7 @@
+ #![doc = include_str!("../README.md")]
+ #![cfg_attr(test, allow(clippy::unwrap_used))]
+ 
++mod alt_shell_env;
+ mod bash_highlight;
+ mod commands;
+ mod completions;
+@@ -9,7 +10,6 @@ mod eval_cmds;
+ mod eval_file;
+ mod hints;
+ mod menus;
+-mod alt_shell_env;
+ mod mode_dispatcher;
+ mod prompt;
+ mod prompt_update;
+@@ -20,8 +20,12 @@ mod syntax_highlight;
+ mod util;
+ mod validation;
+ 
++pub use alt_shell_env::{
++    apply_mode_dispatcher_env_merge, merge_alt_shell_bootstrap_env, union_path_nu_first,
++};
+ pub use bash_highlight::BashHighlighter;
+ pub use commands::add_cli_context;
++pub use commands::{NuHighlight, Print};
+ pub use completions::{
+     CompletionEngine, FileCompletion, NuCompleter, SemanticSuggestion, SuggestionKind,
+ };
+@@ -29,11 +33,7 @@ pub use config_files::{eval_config_contents, eval_config_contents_with_kind};
+ pub use eval_cmds::{EvaluateCommandsOpts, evaluate_commands};
+ pub use eval_file::evaluate_file;
+ pub use menus::NuHelpCompleter;
+-pub use alt_shell_env::{
+-    apply_mode_dispatcher_env_merge, merge_alt_shell_bootstrap_env, union_path_nu_first,
+-};
+-pub use mode_dispatcher::{ModeDispatcher, ModeResult};
+-pub use commands::{NuHighlight, Print};
++pub use mode_dispatcher::{ModeDispatcher, ModeResult, is_shannon_ai_line};
+ pub use prompt::NushellPrompt;
+ pub use prompt_update::update_prompt;
+ pub use repl::evaluate_repl;
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+index e4a5bedfb..0e740c3ed 100644
+--- a/crates/nu-cli/src/mode_dispatcher.rs
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -56,3 +56,36 @@ pub struct ModeResult {
+     /// Exit code of the command.
+     pub exit_code: i32,
+ }
++
++/// Column-0 `#` lines are product AI input (Issue 26082310413946).
++///
++/// No trim: a leading space is a language comment, not AI.
++pub fn is_shannon_ai_line(command: &str) -> bool {
++    command.starts_with('#')
++}
++
++#[cfg(test)]
++mod tests {
++    use super::is_shannon_ai_line;
++
++    #[test]
++    fn column0_hash_is_ai() {
++        let cases: &[(&str, bool)] = &[
++            ("#", true),
++            ("#hello", true),
++            ("# my query", true),
++            ("## foo", true),
++            ("echo hi # note", false),
++            ("  # note", false),
++            ("", false),
++            ("__shannon_switch", false),
++        ];
++        for (input, expected) in cases {
++            assert_eq!(
++                is_shannon_ai_line(input),
++                *expected,
++                "is_shannon_ai_line({input:?})"
++            );
++        }
++    }
++}
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 32e91298c..56ae6444a 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -477,7 +477,16 @@ fn run_command(ctx: RunContext) -> Reedline {
+             .get_env_var(engine_state, "SHANNON_MODE")
+             .and_then(|v| v.as_str().ok().map(str::to_string))
+             .unwrap_or_else(|| "nu".to_string());
+-        if mode != "nu" {
++        // Column-0 `#` is AI even in zsh (Issue 26082310413946). Stock `nu`
++        // without a dispatcher still treats `#` as a comment.
++        let dispatch_mode: Option<&str> = if crate::is_shannon_ai_line(&command) {
++            Some("ai")
++        } else if mode != "nu" {
++            Some(mode.as_str())
++        } else {
++            None
++        };
++        if let Some(dispatch_mode) = dispatch_mode {
+             let env_strings = env_to_strings(engine_state, stack).unwrap_or_else(|e| {
+                 warn!("Couldn't convert environment variable values to strings: {e}");
+                 HashMap::default()
+@@ -488,7 +497,7 @@ fn run_command(ctx: RunContext) -> Reedline {
+                 .map(PathBuf::from)
+                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+             let result = dispatcher.lock().expect("mode dispatcher mutex").execute(
+-                &mode,
++                dispatch_mode,
+                 &command,
+                 env_strings,
+                 cwd,
+@@ -2107,7 +2116,7 @@ mod test_auto_cd {
+ /// Issue 26080510416061 Exp 1: product path must unbind Ctrl+L ClearScreen.
+ #[cfg(test)]
+ mod product_keybinding_tests {
+-    use super::{build_product_keybindings, KeybindingsMode};
++    use super::{KeybindingsMode, build_product_keybindings};
+     use crate::reedline_config::create_keybindings;
+     use crossterm::event::{KeyCode, KeyModifiers};
+     use nu_protocol::{Config, config::EditBindings};
+@@ -2130,6 +2139,16 @@ mod product_keybinding_tests {
+         }
+     }
+ 
++    fn assert_hash_not_host_command(kb: &reedline::Keybindings, label: &str) {
++        for mods in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
++            if let Some(ReedlineEvent::ExecuteHostCommand(_)) =
++                kb.find_binding(mods, KeyCode::Char('#'))
++            {
++                panic!("{label}: # bound to ExecuteHostCommand with {mods:?}");
++            }
++        }
++    }
++
+     #[test]
+     fn product_emacs_unbinds_ctrl_l_clear_screen() {
+         let config = Config::default();
+@@ -2155,6 +2174,7 @@ mod product_keybinding_tests {
+                     ),
+                     "Shift+BackTab product bind missing"
+                 );
++                assert_hash_not_host_command(&kb, "emacs product");
+             }
+             _other => panic!("expected emacs product maps, got non-emacs"),
+         }
+@@ -2183,6 +2203,8 @@ mod product_keybinding_tests {
+             } => {
+                 assert_ctrl_l_unbound(&insert_keybindings, "vi insert product");
+                 assert_ctrl_l_unbound(&normal_keybindings, "vi normal product");
++                assert_hash_not_host_command(&insert_keybindings, "vi insert product");
++                assert_hash_not_host_command(&normal_keybindings, "vi normal product");
+             }
+             _other => panic!("expected vi product maps"),
+         }
+-- 
+2.50.1 (Apple Git-155)
+

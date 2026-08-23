@@ -1,0 +1,153 @@
+From effe0d79d9940f7c7fed41b5d7d0172c20577860 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 23 Aug 2026 06:30:07 -0500
+Subject: [PATCH] Paint full-line hash input as default foreground
+
+ShannonHighlighter wraps Nu/bash highlighting so AI lines are
+ordinary text, not bash comment gray. Issue 26082310413946 Exp 3.
+---
+ crates/nu-cli/src/lib.rs               |  1 +
+ crates/nu-cli/src/repl.rs              | 13 +++--
+ crates/nu-cli/src/shannon_highlight.rs | 79 ++++++++++++++++++++++++++
+ 3 files changed, 88 insertions(+), 5 deletions(-)
+ create mode 100644 crates/nu-cli/src/shannon_highlight.rs
+
+diff --git a/crates/nu-cli/src/lib.rs b/crates/nu-cli/src/lib.rs
+index b1e4bc246..dea3bf7bd 100644
+--- a/crates/nu-cli/src/lib.rs
++++ b/crates/nu-cli/src/lib.rs
+@@ -15,6 +15,7 @@ mod prompt;
+ mod prompt_update;
+ mod reedline_config;
+ mod repl;
++mod shannon_highlight;
+ mod startup_context;
+ mod syntax_highlight;
+ mod util;
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index f3915c760..98190d066 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -11,6 +11,7 @@ use crate::{
+     hints::ExternalHinter,
+     prompt_update,
+     reedline_config::{KeybindingsMode, add_menus, create_keybindings},
++    shannon_highlight::ShannonHighlighter,
+     syntax_highlight::NoOpHighlighter,
+     util::{eval_source, evaluate_source},
+ };
+@@ -705,19 +706,21 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 .get_env_var(engine_state, "SHANNON_MODE")
+                 .and_then(|v| v.as_str().ok().map(str::to_string))
+                 .unwrap_or_else(|| "nu".to_string());
+-            if shannon_mode == "zsh" {
++            let inner: Box<dyn reedline::Highlighter> = if shannon_mode == "zsh" {
+                 // Reuse tree-sitter-bash highlighter for traditional mode (cosmetic).
+                 Box::new(crate::bash_highlight::BashHighlighter::new(&config))
+-                    as Box<dyn reedline::Highlighter>
+             } else if shannon_mode != "nu" {
+-                Box::<NoOpHighlighter>::default() as Box<dyn reedline::Highlighter>
++                Box::<NoOpHighlighter>::default()
+             } else {
+                 Box::new(NuHighlighter::new(
+                     engine_reference.clone(),
+                     // STACK-REFERENCE 1
+                     stack_arc.clone(),
+-                )) as Box<dyn reedline::Highlighter>
+-            }
++                ))
++            };
++            // Full-line `#` is AI input, not a bash/nu comment (Issue
++            // 26082310413946 Exp 3).
++            Box::new(ShannonHighlighter::wrap(inner)) as Box<dyn reedline::Highlighter>
+         })
+         .with_validator(Box::new(NuValidator {
+             engine_state: engine_reference.clone(),
+diff --git a/crates/nu-cli/src/shannon_highlight.rs b/crates/nu-cli/src/shannon_highlight.rs
+new file mode 100644
+index 000000000..1284d96b9
+--- /dev/null
++++ b/crates/nu-cli/src/shannon_highlight.rs
+@@ -0,0 +1,79 @@
++//! Product highlighter wrapper: full-line `#` is AI input, not a comment.
++//!
++//! Issue 26082310413946 Exp 3. Inner highlighter (Nu / bash / NoOp) is
++//! unchanged for non-AI lines.
++
++use nu_ansi_term::Style;
++use reedline::{Highlighter, StyledText};
++
++use crate::is_shannon_ai_line;
++
++/// Wraps a dialect highlighter and paints AI lines as default foreground.
++pub struct ShannonHighlighter {
++    inner: Box<dyn Highlighter>,
++}
++
++impl ShannonHighlighter {
++    pub fn wrap(inner: Box<dyn Highlighter>) -> Self {
++        Self { inner }
++    }
++}
++
++impl Highlighter for ShannonHighlighter {
++    fn highlight(&self, line: &str, cursor: usize) -> StyledText {
++        if is_shannon_ai_line(line) {
++            let mut styled = StyledText::new();
++            styled.push((Style::new(), line.to_string()));
++            return styled;
++        }
++        self.inner.highlight(line, cursor)
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use nu_ansi_term::Color;
++
++    struct PaintAll {
++        style: Style,
++    }
++
++    impl Highlighter for PaintAll {
++        fn highlight(&self, line: &str, _cursor: usize) -> StyledText {
++            let mut styled = StyledText::new();
++            styled.push((self.style, line.to_string()));
++            styled
++        }
++    }
++
++    fn wrap_red() -> ShannonHighlighter {
++        ShannonHighlighter::wrap(Box::new(PaintAll {
++            style: Style::new().fg(Color::Red),
++        }))
++    }
++
++    #[test]
++    fn ai_line_uses_default_style() {
++        let h = wrap_red();
++        for line in ["# hello", "  # hello", "## foo"] {
++            let styled = h.highlight(line, 0);
++            assert_eq!(styled.buffer.len(), 1, "{line:?}");
++            assert_eq!(styled.buffer[0].1, line);
++            assert_eq!(
++                styled.buffer[0].0,
++                Style::new(),
++                "AI line must not keep inner color: {line:?}"
++            );
++        }
++    }
++
++    #[test]
++    fn non_ai_line_delegates_to_inner() {
++        let h = wrap_red();
++        let styled = h.highlight("echo hi # note", 0);
++        assert_eq!(styled.buffer.len(), 1);
++        assert_eq!(styled.buffer[0].0, Style::new().fg(Color::Red));
++        assert_eq!(styled.buffer[0].1, "echo hi # note");
++    }
++}
+-- 
+2.50.1 (Apple Git-155)
+

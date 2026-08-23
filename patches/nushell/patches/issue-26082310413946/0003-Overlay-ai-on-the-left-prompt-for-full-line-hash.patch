@@ -1,0 +1,143 @@
+From d23eebba278fa56636fd45572040ac6ae62d8aa6 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 23 Aug 2026 06:17:00 -0500
+Subject: [PATCH] Overlay [ai] on the left prompt for full-line hash
+
+When the live buffer is a full-line # comment, rewrite [nu]/[zsh]
+to magenta [ai]. Does not set SHANNON_MODE. Issue 26082310413946
+Exp 2.
+---
+ crates/nu-cli/src/prompt.rs | 105 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 105 insertions(+)
+
+diff --git a/crates/nu-cli/src/prompt.rs b/crates/nu-cli/src/prompt.rs
+index 086f1fc7b..f2d19940b 100644
+--- a/crates/nu-cli/src/prompt.rs
++++ b/crates/nu-cli/src/prompt.rs
+@@ -66,6 +66,54 @@ fn render_or<'a>(content: Option<&str>, default: impl FnOnce() -> Cow<'a, str>)
+     }
+ }
+ 
++/// Magenta SGR for live `[ai]` overlay (not Nu green / zsh cyan).
++pub const AI_MODE_SGR: &str = "\x1b[35m";
++const RESET_SGR: &str = "\x1b[0m";
++
++/// Rewrite an ahsh left prompt so `[nu]` / `[zsh]` becomes magenta `[ai]`.
++pub fn overlay_ai_mode_label(left: &str) -> String {
++    overlay_mode_tag(left, "[nu]")
++        .or_else(|| overlay_mode_tag(left, "[zsh]"))
++        .unwrap_or_else(|| left.to_string())
++}
++
++fn overlay_mode_tag(left: &str, tag: &str) -> Option<String> {
++    let idx = left.find(tag)?;
++    let mut start = idx;
++    let end_tag = idx + tag.len();
++    if let Some(csi) = preceding_sgr(left, idx) {
++        start = csi;
++    }
++    let mut end = end_tag;
++    if left[end..].starts_with(RESET_SGR) {
++        end += RESET_SGR.len();
++    }
++    let mut out = String::with_capacity(left.len() + 8);
++    out.push_str(&left[..start]);
++    out.push_str(AI_MODE_SGR);
++    out.push_str("[ai]");
++    out.push_str(RESET_SGR);
++    out.push_str(&left[end..]);
++    Some(out)
++}
++
++/// If `idx` is immediately preceded by a CSI SGR (`ESC [ … m`), return the ESC index.
++fn preceding_sgr(s: &str, idx: usize) -> Option<usize> {
++    let bytes = s.as_bytes();
++    if idx == 0 || bytes[idx - 1] != b'm' {
++        return None;
++    }
++    let min = idx.saturating_sub(24);
++    let mut i = idx - 1;
++    while i > min {
++        if bytes[i] == b'[' && bytes[i - 1] == 0x1b {
++            return Some(i - 1);
++        }
++        i -= 1;
++    }
++    None
++}
++
+ impl Prompt for NushellPrompt {
+     fn render_prompt_left(&self) -> Cow<'_, str> {
+         #[cfg(windows)]
+@@ -83,6 +131,19 @@ impl Prompt for NushellPrompt {
+         })
+     }
+ 
++    fn render_prompt_left_with_buffer(&self, buffer: &str) -> Cow<'_, str> {
++        let left = self.render_prompt_left();
++        if !crate::is_shannon_ai_line(buffer) {
++            return left;
++        }
++        let overlaid = overlay_ai_mode_label(left.as_ref());
++        if overlaid == left.as_ref() {
++            left
++        } else {
++            Cow::Owned(overlaid)
++        }
++    }
++
+     fn render_prompt_right(&self) -> Cow<'_, str> {
+         self.with_contents(|c| {
+             render_or(c.right.as_deref(), || {
+@@ -164,4 +225,48 @@ mod tests {
+         assert!(!rendered.contains("\x1b]133;"));
+         assert!(!rendered.contains("\x1b]633;"));
+     }
++
++    #[test]
++    fn overlay_rewrites_nu_and_zsh_tags() {
++        let nu = "\x1b[32m[nu]\x1b[0m ~/dev";
++        let zsh = "\x1b[36m[zsh]\x1b[0m ~";
++        let ai_nu = overlay_ai_mode_label(nu);
++        let ai_zsh = overlay_ai_mode_label(zsh);
++        assert!(ai_nu.contains("[ai]"), "{ai_nu:?}");
++        assert!(ai_nu.contains(AI_MODE_SGR), "{ai_nu:?}");
++        assert!(!ai_nu.contains("[nu]"), "{ai_nu:?}");
++        assert!(ai_nu.ends_with(" ~/dev"), "{ai_nu:?}");
++        assert!(ai_zsh.contains("[ai]"), "{ai_zsh:?}");
++        assert!(!ai_zsh.contains("[zsh]"), "{ai_zsh:?}");
++        assert_eq!(overlay_ai_mode_label("hello"), "hello");
++        let plain = overlay_ai_mode_label("[nu] ~");
++        assert!(plain.contains("[ai]"));
++        assert!(!plain.contains("[nu]"));
++    }
++
++    #[test]
++    fn live_prompt_overlays_ai_only_for_full_line_hash() {
++        use nu_protocol::engine::PromptContents;
++
++        let state = PromptState::new();
++        state.set_contents(PromptContents {
++            left: Some("\x1b[32m[nu]\x1b[0m ~".into()),
++            ..Default::default()
++        });
++        let prompt = NushellPrompt::shared(Arc::new(state));
++
++        let echo = prompt.render_prompt_left_with_buffer("echo hi # x");
++        assert!(echo.contains("[nu]"), "{echo}");
++        assert!(!echo.contains("[ai]"), "{echo}");
++
++        let hash = prompt.render_prompt_left_with_buffer("# hello");
++        assert!(hash.contains("[ai]"), "{hash}");
++        assert!(!hash.contains("[nu]"), "{hash}");
++
++        let indented = prompt.render_prompt_left_with_buffer("  # hello");
++        assert!(indented.contains("[ai]"), "{indented}");
++
++        let empty = prompt.render_prompt_left_with_buffer("");
++        assert!(empty.contains("[nu]"), "{empty}");
++    }
+ }
+-- 
+2.50.1 (Apple Git-155)
+

@@ -23,29 +23,31 @@
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "8e03210652f3c48c4521cec982d96e4cb6c67181",
-      "branch": "issue-26082214188331-exp1-agents-overlay",
-      "expected_head": "aa82105a4b55670ade99617043cd1b74a436aac8",
-      "expected_tree": "f2273e1cf5842a4256da9486233f22c93d80e0f2",
+      "branch": "issue-26082310413946-exp3-ai-line-foreground",
+      "expected_head": "effe0d79d9940f7c7fed41b5d7d0172c20577860",
+      "expected_tree": "3cbc84522f3c4734019a9ca455d606391dbb24a7",
       "patch_directories": [
         "patches/nushell/patches/issue-26081615463315",
-        "patches/nushell/patches/issue-26082214188331"
+        "patches/nushell/patches/issue-26082214188331",
+        "patches/nushell/patches/issue-26082310413946"
       ],
-      "patch_count": 9,
-      "archive_sha256": "12ab3a767f83d60d27ae5ab89de470cf9857403680b2758e3216393bbed1a682",
+      "patch_count": 13,
+      "archive_sha256": "cf2d74d5de860f247600e551434bb587215c1fbc5ec2834cb33d9d82b309f589",
       "allowed_untracked": []
     },
     {
       "name": "reedline",
       "checkout": "forks/reedline",
       "base": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
-      "branch": "issue-26082214188331-exp1-agents-overlay",
-      "expected_head": "d2e82678e0a63f09e7b94fed54851e02eb612154",
-      "expected_tree": "c2a64ea66361595079357ae3222a3cb0a97c5c29",
+      "branch": "issue-26082310413946-exp2-live-ai-prompt",
+      "expected_head": "3a5079b3627445327881da20d9aa03b9fa8e5a3a",
+      "expected_tree": "6cf0fc1141427db8a5db2cc3f4f439a0f515f847",
       "patch_directories": [
-        "patches/reedline/patches/issue-26082214188331"
+        "patches/reedline/patches/issue-26082214188331",
+        "patches/reedline/patches/issue-26082310413946"
       ],
-      "patch_count": 1,
-      "archive_sha256": "1c9e91f7595e12fa0efac9d54d970a7d466a52f9f71521cf1c0cfb17aed08561",
+      "patch_count": 2,
+      "archive_sha256": "c6b6701f23f3287f897c86921e4a4f911803606608071dea42419ae1161681bc",
       "allowed_untracked": []
     },
     {

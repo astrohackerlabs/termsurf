@@ -5,7 +5,64 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26082214188331 Exp 1)
+## Current State (Issue 26082310413946 Exp 3)
+
+- Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26082310413946-exp3-ai-line-foreground`
+- Product HEAD: `effe0d79d9940f7c7fed41b5d7d0172c20577860`
+- Product tree: `3cbc84522f3c4734019a9ca455d606391dbb24a7`
+- Local fork working tree: `forks/nushell`
+- Issue archives (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8**) +
+  `patches/nushell/patches/issue-26082214188331/` (**1** overlay
+  `AGENTS.md`) +
+  `patches/nushell/patches/issue-26082310413946/` (**4** AI dispatch,
+  live `[ai]` overlay, default-fg AI lines) from `base..HEAD`
+- Total patch count: **13**
+- Archive aggregate SHA-256:
+  `cf2d74d5de860f247600e551434bb587215c1fbc5ec2834cb33d9d82b309f589`
+
+## Prior State (Issue 26082310413946 Exp 2)
+
+- Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26082310413946-exp2-live-ai-prompt`
+- Product HEAD: `d23eebba278fa56636fd45572040ac6ae62d8aa6`
+- Product tree: `6ba4075689db8119db578f7e5285976d61064e64`
+- Local fork working tree: `forks/nushell`
+- Issue archives (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8**) +
+  `patches/nushell/patches/issue-26082214188331/` (**1** overlay
+  `AGENTS.md`) +
+  `patches/nushell/patches/issue-26082310413946/` (**3** full-line
+  `#` AI dispatch + live `[ai]` prompt overlay) from `base..HEAD`
+- Total patch count: **12**
+- Archive aggregate SHA-256:
+  `8d9217798d372fdadada3b82557af79f4e6abbb5a617f7fae41af3007a9e3d3a`
+
+## Prior State (Issue 26082310413946 Exp 1)
+
+- Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26082310413946-exp1-column0-hash-stub`
+- Product HEAD: `c880a7aab5db00a7cc4340b05370508c10a94b1f`
+- Product tree: `24606b6a7d96a04e68a49f7abf97bf64b0f25a5c`
+- Local fork working tree: `forks/nushell`
+- Issue archives (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8**) +
+  `patches/nushell/patches/issue-26082214188331/` (**1** overlay
+  `AGENTS.md`) +
+  `patches/nushell/patches/issue-26082310413946/` (**2** full-line
+  `#` AI dispatch, left-trim) from `base..HEAD`
+- Total patch count: **11**
+- Archive aggregate SHA-256:
+  `7163f29c24c6db54c67a3fe4bd433705bfe18bb979ed714c9355a04e9d221725`
+
+## Prior State (Issue 26082214188331 Exp 1)
 
 - Upstream repository: `https://github.com/nushell/nushell`
 - Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
@@ -92,6 +149,12 @@ importing Nushell history into the company repo.
 - Port `nu-cli` to reedline tip (`CompletionOrigin` / `CutSelection` granularity
   / new edit-command discriminants)
 - Product unbind Ctrl+L ClearScreen (ahsh / host pane pass-through)
+- Column-0 `#` submitted lines dispatch to mode `"ai"` when a
+  `ModeDispatcher` is present (Issue 26082310413946)
+- Live left-prompt `[ai]` overlay while the buffer is a full-line `#`
+  comment (Issue 26082310413946 Exp 2)
+- Full-line `#` input painted as default foreground, not bash comment
+  gray (Issue 26082310413946 Exp 3)
 
 ## Apply (clean base)
 

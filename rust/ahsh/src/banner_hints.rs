@@ -10,6 +10,18 @@ pub const PRODUCT_HINT_LINES: &[&str] = &[
     "Type ah then Tab to see more commands.",
 ];
 
+/// Column-0 `#` AI stub (Issue 26082310413946). Not a working agent.
+pub const AI_COLUMN0_HINT: &str = "A line starting with # is AI (coming soon).";
+
+/// Same SGR as the live `[ai]` prompt label (`nu_cli` `AI_MODE_SGR`).
+pub const AI_LABEL_SGR: &str = "\x1b[35m";
+
+/// Banner line with `AI` painted like `[ai]`; `fg` restored after the word.
+pub fn ai_column0_hint_line(fg: &str, reset: &str) -> String {
+    let painted = AI_COLUMN0_HINT.replace(" AI ", &format!(" {AI_LABEL_SGR}AI{fg} "));
+    format!("{fg}{painted}{reset}")
+}
+
 /// ANSI SGR for Nu default `shape_external: cyan` (`Color::Cyan.normal()`).
 pub const SHAPE_EXTERNAL_ANSI: &str = "\x1b[36m";
 
@@ -26,6 +38,24 @@ mod tests {
         assert!(joined.contains("ah then Tab") || joined.contains("Tab"));
         assert!(joined.contains("more commands"));
         assert_eq!(PRODUCT_HINT_LINES.len(), 2);
+    }
+
+    #[test]
+    fn ai_column0_hint_does_not_claim_an_agent() {
+        assert!(AI_COLUMN0_HINT.contains('#'));
+        assert!(AI_COLUMN0_HINT.to_ascii_lowercase().contains("coming soon"));
+        assert!(!AI_COLUMN0_HINT.to_ascii_lowercase().contains("agent"));
+    }
+
+    #[test]
+    fn ai_word_in_banner_uses_ai_label_magenta() {
+        let line = ai_column0_hint_line("\x1b[37m", "\x1b[0m");
+        assert!(
+            line.contains(&format!("{AI_LABEL_SGR}AI\x1b[37m")),
+            "{line:?}"
+        );
+        assert_eq!(AI_LABEL_SGR, "\x1b[35m");
+        assert!(line.contains("coming soon"));
     }
 
     #[test]

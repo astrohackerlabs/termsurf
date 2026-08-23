@@ -5,11 +5,12 @@ use crate::{
 use log::trace;
 #[cfg(feature = "plugin")]
 use nu_cli::read_plugin_file;
-use nu_cli::{evaluate_commands, evaluate_file, evaluate_repl, EvaluateCommandsOpts};
+use nu_cli::{EvaluateCommandsOpts, evaluate_commands, evaluate_file, evaluate_repl};
 use nu_config::ConfigFileKind;
 use nu_protocol::{
+    PipelineData, ShellError, Spanned,
     engine::{EngineState, Stack},
-    report_shell_error, PipelineData, ShellError, Spanned,
+    report_shell_error,
 };
 use nu_utils::perf;
 use nu_utils::time::Instant;
@@ -262,9 +263,8 @@ pub(crate) fn run_repl(
                     entire_start_time.elapsed()
                 );
                 eprintln!("{green}{bold}Shift+Tab:{reset}{fg} Nushell ↔ zsh{reset}");
-                eprintln!(
-                    "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
-                );
+                eprintln!("{}", crate::banner_hints::ai_column0_hint_line(fg, reset));
+                eprintln!("{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}");
                 eprintln!(
                     "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
                 );
@@ -288,11 +288,10 @@ pub(crate) fn run_repl(
                 eprintln!(
                     "{fg}Press {green}{bold}Shift+Tab{reset}{fg} to toggle between nu and zsh.{reset}"
                 );
+                eprintln!("{}", crate::banner_hints::ai_column0_hint_line(fg, reset));
                 // Product suite discovery (Issue 26072710436325).
                 // Command names match Nu syntax: shape_external → cyan (not green).
-                eprintln!(
-                    "{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}"
-                );
+                eprintln!("{fg}Type {cmd}ahweb{reset}{fg} to browse the web.{reset}");
                 eprintln!(
                     "{fg}Type {cmd}ah{reset}{fg} then {green}{bold}Tab{reset}{fg} to see more commands.{reset}"
                 );
