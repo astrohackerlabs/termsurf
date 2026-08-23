@@ -11,7 +11,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahsh, ahweb, ahcalc, ahkey, ahplt, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
+  print "Components: ahterm, ahsh, ahweb, ahcalc, ahkey, ahplt, ahebx, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
   print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -261,6 +261,27 @@ def build-ahplt [opts: record] {
   print $"  ahplt: ($ahplt_dir)/dist/ahplt"
 }
 
+def build-ahebx [opts: record] {
+  let ahebx_dir = ($opts.repo_dir | path join "bun/ahebx")
+  if not (is-d $ahebx_dir) {
+    print --stderr $"Error: ahebx package missing: ($ahebx_dir)"
+    exit 1
+  }
+  if not (has-cmd "bun") {
+    print --stderr "Error: bun is required to build ahebx (not found on PATH)"
+    exit 1
+  }
+  if $opts.clean {
+    print "==> Cleaning ahebx dist..."
+    ^rm -rf ($ahebx_dir | path join "dist")
+  }
+  maybe-termsurf-version
+  let kind = (if $opts.release { "release" } else { "debug" })
+  print $"==> Building ahebx \(($kind)(version-extra)\)..."
+  bun-build $opts.repo_dir $ahebx_dir "build:ahebx"
+  print $"  ahebx: ($ahebx_dir)/dist/ahebx"
+}
+
 def build-ahnexus [opts: record] {
   let ahnexus_spa = ($opts.repo_dir | path join "bun/ahnexus")
   if not (is-d $ahnexus_spa) {
@@ -383,6 +404,7 @@ def --wrapped main [...args: string] {
     "ahcalc" => { build-ahcalc $opts }
     "ahkey" => { build-ahkey $opts }
     "ahplt" => { build-ahplt $opts }
+    "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
     "ah-chromiumd" | "chromium" => { build-chromiumd $opts }
     "ahtch" => { build-ahtch $opts }
@@ -394,6 +416,7 @@ def --wrapped main [...args: string] {
       build-ahcalc $opts
       build-ahkey $opts
       build-ahplt $opts
+      build-ahebx $opts
       build-ahnexus $opts
       build-ahtch $opts
       build-chromiumd $opts
