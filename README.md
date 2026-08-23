@@ -120,7 +120,7 @@ is for developers who want a patched engine and host from source.
 | **`patches/`** — full `.patch` archives + reconstruction notes | Checked-in `forks/` trees (Chromium, Ghostty, …) |
 | `patches/release-manifest.json` — exact bases, heads, ordered patch dirs | Automatic one-command clone of Chromium (you reconstruct manually) |
 
-`scripts/build.sh` only **compiles** workspaces that already exist under
+`scripts/build.nu` only **compiles** workspaces that already exist under
 `forks/`. If `forks/chromium/src` (or Ghostty, etc.) is missing, the script
 skips that component — it does **not** download upstream or apply patches for
 you.
@@ -188,16 +188,16 @@ Expect a **large** Chromium build (many GB, often hours on first compile).
 
 After forks are reconstructed and (for Chromium) built as needed:
 
-```bash
-./scripts/build.sh chromium      # Chromium fork / ah-chromiumd path
-./scripts/build.sh ahweb
-./scripts/build.sh ahterm
+```nu
+scripts/build.nu chromium      # Chromium fork / ah-chromiumd path
+scripts/build.nu ahweb
+scripts/build.nu ahterm
 ```
 
 Release-style local build (still requires reconstructed forks):
 
-```bash
-./scripts/build.sh all --release
+```nu
+scripts/build.nu all --release
 ```
 
 The host app bundle (when Ghostty/`ahterm` succeeds) is written to:

@@ -24,7 +24,7 @@ environment naming, legal package sources, and public-source templates.
 | [`marketing/`](./marketing/) | Brand, voice, blog, docs-writing canon |
 
 Agent workflows: `skills/issues-and-experiments`, `skills/epics`. Create issues with
-`scripts/create-issue.sh` (defaults to `docs/issues/`).
+`scripts/create-issue.nu` (defaults to `docs/issues/`).
 
 Recover deleted monorepo notes (e.g. historical XDG/keybindings/Ghostty essays)
 from git history if needed.

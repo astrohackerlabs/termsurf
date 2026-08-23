@@ -16,11 +16,11 @@ When editing Markdown, preserve the existing prose wrapping style.
 
 Common build commands:
 
-```bash
-./scripts/build.sh chromium
-./scripts/build.sh ahweb
-./scripts/build.sh ahterm
-./scripts/build.sh all --release
+```nu
+scripts/build.nu chromium
+scripts/build.nu ahweb
+scripts/build.nu ahterm
+scripts/build.nu all --release
 ```
 
 Shipped product engine is **Chromium** only. Optional historical WebKit/Gecko

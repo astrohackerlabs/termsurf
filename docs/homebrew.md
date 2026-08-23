@@ -99,7 +99,7 @@ Distribution uses ad-hoc codesign in the cask postflight (quarantine clear +
 `brew trust` trusts the tap source; it does not notarize the app with Apple.
 
 Legal files are injected into the app under `Contents/Resources/legal/` during
-`scripts/release.sh` packaging (after the app is copied into the stage tree).
+`scripts/release.nu` packaging (after the app is copied into the stage tree).
 That changes sealed app contents relative to any earlier signature; the
 **cask postflight ad-hoc re-sign is the intentional installed contract** for
 those Resources until Developer ID notarization lands.
@@ -155,7 +155,7 @@ Top-level contents:
 - `ah-chromiumd/`
 - `ahtch/` (payload: `bin/ahtch`, LibTorch dylibs, `ahtch.nu`)
 
-Gate before publish: `scripts/check-release-legal-notices.sh` (NOTICE
+Gate before publish: `scripts/check-release-legal-notices.nu` (NOTICE
 legal-manifest vs released wrappers + payload roots).
 
 ## Release / publish (agents and humans)
@@ -184,9 +184,9 @@ accepted by scripts).
 | --- | --- |
 | `scripts/release-homebrew.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
 | `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` |
-| `scripts/build.sh` | Build components / `all --release` |
-| `scripts/release.sh` | Lower-level package/publish helper used by the canonical command |
-| `scripts/sync-public-source.sh` | Sync allowlisted paths into public checkout |
+| `scripts/build.nu` | Build components / `all --release` |
+| `scripts/release.nu` | Lower-level package/publish helper used by the canonical command |
+| `scripts/sync-public-source.nu` | Sync allowlisted paths into public checkout |
 
 ### Canonical release command
 
@@ -257,7 +257,7 @@ confirmation and the resulting app acceptance.
 
 ### Lower-level helpers
 
-Flags for `scripts/release.sh <version>`:
+Flags for `scripts/release.nu <version>`:
 
 - Package only (default if publish unset):
   `ASTROHACKER_TERMINAL_RELEASE_PACKAGE_ONLY=1`
@@ -297,13 +297,13 @@ normal operator interface.
 2. **Land product changes** in private monorepo; push tap **content** changes
    (not version/sha) if needed so the tap is clean for publish.
 
-3. **Full release build** (`scripts/build.sh all` ships Terminal components
+3. **Full release build** (`scripts/build.nu all` ships Terminal components
    only — no editor; preserve all valid incremental build outputs):
 
    ```sh
    TERMSURF_VERSION=<version> \
    ASTROHACKER_VERSION=<version> \
-     scripts/build.sh all --release
+     scripts/build.nu all --release
    ```
 
    Version contract:
@@ -346,7 +346,7 @@ normal operator interface.
    ```sh
    ASTROHACKER_TERMINAL_RELEASE_PACKAGE_ONLY=1 \
    ASTROHACKER_TERMINAL_RELEASE_PUBLISH=0 \
-     scripts/release.sh <version>
+     scripts/release.nu <version>
    ```
 
    Inspect `dist/release` and
@@ -356,7 +356,7 @@ normal operator interface.
    public `main` so the tree is clean:
 
    ```sh
-   scripts/sync-public-source.sh
+   scripts/sync-public-source.nu
    # commit in ~/dev/termsurf
    ```
 
@@ -372,7 +372,7 @@ normal operator interface.
    instead uses the exact existing-package mode documented above):
 
    ```sh
-   ASTROHACKER_TERMINAL_RELEASE_PUBLISH=1 scripts/release.sh <version>
+   ASTROHACKER_TERMINAL_RELEASE_PUBLISH=1 scripts/release.nu <version>
    ```
 
    Creates/pushes `v<version>`, GitHub release asset, tap commit `v<version>`

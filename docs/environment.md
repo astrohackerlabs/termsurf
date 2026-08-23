@@ -40,7 +40,7 @@ API, not user env.
 
 | Variable | Role |
 | --- | --- |
-| `ASTROHACKER_TERMINAL_RELEASE_PUBLISH` | Publish mode for `scripts/release.sh` |
+| `ASTROHACKER_TERMINAL_RELEASE_PUBLISH` | Publish mode for `scripts/release.nu` |
 | `ASTROHACKER_TERMINAL_RELEASE_PACKAGE_ONLY` | Package-only mode |
 | `ASTROHACKER_TERMINAL_PUBLIC_REPO` | Public source checkout path |
 | `ASTROHACKER_TERMINAL_PUBLIC_GITHUB_REPO` | GitHub repo `org/name` |
@@ -107,6 +107,6 @@ Issue 26072121272459).
 
 ## Structural check
 
-```sh
-scripts/check-env-var-names.sh
+```nu
+scripts/check-env-var-names.nu
 ```
