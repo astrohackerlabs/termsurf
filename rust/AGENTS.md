@@ -27,6 +27,16 @@ config applies (a root `--manifest-path` invocation misses it):
 cd rust/ahtch && cargo test
 ```
 
+`rust/ebx` is **excluded** (own lockfile: EarthBucks 2.0
+`earthbucks_lib`, `earthbucks_mine`, `earthbucks_pow5`,
+`earthbucks_float`). See [`rust/ebx/AGENTS.md`](ebx/AGENTS.md).
+Build from that tree:
+
+```nu
+cd rust/ebx
+cargo test
+```
+
 Workspace `target/` is at the **monorepo root**. Fork trees live under top-level
 `forks/`; root workspace **excludes** `forks` so nested fork Cargo workspaces
 resolve.
@@ -41,6 +51,7 @@ cargo check --workspace
 cargo build -p ahweb
 cargo build --manifest-path rust/ahsh/Cargo.toml
 cd rust/ahtch; cargo test
+cd rust/ebx; cargo test
 ```
 
 ### Operator product smoke (`ahweb`)

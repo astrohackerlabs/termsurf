@@ -20,5 +20,6 @@ exclude = [
     "assets",
     "skills",
     "rust/ahtch",
+    "rust/ebx",
 ]
 resolver = "2"
