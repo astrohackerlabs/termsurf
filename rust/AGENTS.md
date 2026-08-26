@@ -4,8 +4,9 @@ Guidance for coding agents working in the Astrohacker **Rust** tree (`rust/`)
 under the monorepo-root Cargo workspace.
 
 Root `Cargo.toml` is the workspace; members are `rust/ahweb`,
-`rust/ah-chromiumd`, `rust/ahnexus`. Package and binary names stay
-unprefixed (`ahweb`, `ahnexus`, …).
+`rust/ah-chromiumd`, `rust/ahnexus`, `rust/ebxlib`,
+`rust/ebxfloat`, `rust/ebxpow5`, `rust/ebxmine`. Package and
+binary names stay unprefixed (`ahweb`, `ahnexus`, `ebxlib`, …).
 
 `rust/ahnexus` is a workspace member. Nexus protocol lives in **Rust**
 (`forks/nexus/nexus-common`), not TypeScript. See
@@ -27,14 +28,14 @@ config applies (a root `--manifest-path` invocation misses it):
 cd rust/ahtch && cargo test
 ```
 
-`rust/ebx` is **excluded** (own lockfile: EarthBucks 2.0
-`earthbucks_lib`, `earthbucks_mine`, `earthbucks_pow5`,
-`earthbucks_float`). See [`rust/ebx/AGENTS.md`](ebx/AGENTS.md).
-Build from that tree:
+EarthBucks 2.0 crates are **root members**: `ebxlib`,
+`ebxfloat`, `ebxpow5`, `ebxmine`. Mine traps:
+[`rust/ebxmine/AGENTS.md`](ebxmine/AGENTS.md). PATH **`ahebx`**
+is `bun/ahebx`, not `ebxmine`.
 
 ```nu
-cd rust/ebx
-cargo test
+cargo test -p ebxlib -p ebxfloat -p ebxpow5
+cargo check -p ebxmine
 ```
 
 Workspace `target/` is at the **monorepo root**. Fork trees live under top-level
@@ -51,7 +52,7 @@ cargo check --workspace
 cargo build -p ahweb
 cargo build --manifest-path rust/ahsh/Cargo.toml
 cd rust/ahtch; cargo test
-cd rust/ebx; cargo test
+cargo test -p ebxlib -p ebxfloat -p ebxpow5
 ```
 
 ### Operator product smoke (`ahweb`)
