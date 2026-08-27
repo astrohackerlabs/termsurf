@@ -199,7 +199,7 @@ def build-ahterm [opts: record] {
 }
 
 def build-ahcalc [opts: record] {
-  let ahcalc_dir = ($opts.repo_dir | path join "bun/ahcalc")
+  let ahcalc_dir = ($opts.repo_dir | path join "bun/bin/ahcalc")
   if not (is-d $ahcalc_dir) {
     print --stderr $"Error: ahcalc package missing: ($ahcalc_dir)"
     exit 1
@@ -220,7 +220,7 @@ def build-ahcalc [opts: record] {
 }
 
 def build-ahkey [opts: record] {
-  let ahkey_dir = ($opts.repo_dir | path join "bun/ahkey")
+  let ahkey_dir = ($opts.repo_dir | path join "bun/bin/ahkey")
   if not (is-d $ahkey_dir) {
     print --stderr $"Error: ahkey package missing: ($ahkey_dir)"
     exit 1
@@ -241,7 +241,7 @@ def build-ahkey [opts: record] {
 }
 
 def build-ahplt [opts: record] {
-  let ahplt_dir = ($opts.repo_dir | path join "bun/ahplt")
+  let ahplt_dir = ($opts.repo_dir | path join "bun/bin/ahplt")
   if not (is-d $ahplt_dir) {
     print --stderr $"Error: ahplt package missing: ($ahplt_dir)"
     exit 1
@@ -262,7 +262,7 @@ def build-ahplt [opts: record] {
 }
 
 def build-ahebx [opts: record] {
-  let ahebx_dir = ($opts.repo_dir | path join "bun/ahebx")
+  let ahebx_dir = ($opts.repo_dir | path join "bun/bin/ahebx")
   if not (is-d $ahebx_dir) {
     print --stderr $"Error: ahebx package missing: ($ahebx_dir)"
     exit 1
@@ -283,7 +283,7 @@ def build-ahebx [opts: record] {
 }
 
 def build-ahnexus [opts: record] {
-  let ahnexus_spa = ($opts.repo_dir | path join "bun/ahnexus")
+  let ahnexus_spa = ($opts.repo_dir | path join "bun/bin/ahnexus")
   if not (is-d $ahnexus_spa) {
     print --stderr $"Error: ahnexus SPA package missing: ($ahnexus_spa)"
     exit 1

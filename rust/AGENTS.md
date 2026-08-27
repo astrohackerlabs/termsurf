@@ -31,7 +31,7 @@ cd rust/ahtch && cargo test
 EarthBucks 2.0 crates are **root members**: `ebxlib`,
 `ebxfloat`, `ebxpow5`, `ebxmine`. Mine traps:
 [`rust/ebxmine/AGENTS.md`](ebxmine/AGENTS.md). PATH **`ahebx`**
-is `bun/ahebx`, not `ebxmine`.
+is `bun/bin/ahebx`, not `ebxmine`.
 
 ```nu
 cargo test -p ebxlib -p ebxfloat -p ebxpow5
