@@ -29,9 +29,13 @@ cd rust/ahtch && cargo test
 ```
 
 EarthBucks 2.0 crates are **root members**: `ebxlib`,
-`ebxfloat`, `ebxpow5`, `ebxmine`. Mine traps:
-[`rust/ebxmine/AGENTS.md`](ebxmine/AGENTS.md). PATH **`ahebx`**
-is `bun/bin/ahebx`, not `ebxmine`.
+`ebxfloat`, `ebxpow5`, `ebxmine`. Protocol:
+[`ebxlib/AGENTS.md`](ebxlib/AGENTS.md). PoW:
+[`ebxpow5/AGENTS.md`](ebxpow5/AGENTS.md). DAA:
+[`ebxfloat/AGENTS.md`](ebxfloat/AGENTS.md). Mine traps:
+[`ebxmine/AGENTS.md`](ebxmine/AGENTS.md). PATH **`ahebx`** is
+`bun/bin/ahebx` (pool client of ebxwebapp), not `ebxmine`.
+Production pool is `bun/web/ebxwebapp`.
 
 ```nu
 cargo test -p ebxlib -p ebxfloat -p ebxpow5
