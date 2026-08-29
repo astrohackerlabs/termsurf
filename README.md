@@ -94,17 +94,17 @@ alt-tab to.
 The Astrohacker Homebrew cask targets Apple silicon macOS and installs into
 `/Applications` as **Astrohacker TermSurf.app**:
 
-```bash
-brew tap astrohackerlabs/astrohacker
-brew trust astrohackerlabs/astrohacker
-brew install --cask astrohacker
+```nu
+brew tap astrohackerlabs/termsurf
+brew trust astrohackerlabs/termsurf
+brew install --cask termsurf
 ```
 
 To upgrade:
 
-```bash
+```nu
 brew update
-brew upgrade --cask astrohacker
+brew upgrade --cask termsurf
 ```
 
 ## Build

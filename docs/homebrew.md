@@ -6,8 +6,8 @@ a product channel; do not revive public bootstrap install as the primary path.
 
 Full environment variable taxonomy: [`docs/environment.md`](./environment.md).
 
-Astrohacker ships to macOS through the `astrohackerlabs/astrohacker` Homebrew
-tap. There is **one desktop download**: the cask `astrohacker`. It installs
+Astrohacker ships to macOS through the `astrohackerlabs/termsurf` Homebrew tap.
+There is **one desktop download**: the cask `termsurf`. It installs
 Astrohacker TermSurf, Shell, Web, and related helpers as one Astrohacker
 bundle. The app lands in **`/Applications/Astrohacker TermSurf.app`**.
 
@@ -71,28 +71,29 @@ Homebrew cask.
 `TermSurf` remains the **protocol** name (`termsurf.proto`, `libtermsurf_*`,
 `TERMSURF_*` env). It is not the product brand and is not the PATH CLI name
 
-Historical cask token `astrohacker-terminal` is retired. Users install
-`astrohacker` only. The public GitHub source and release asset host is
-`astrohackerlabs/termsurf` (local default `~/dev/termsurf`). Leave the
-legacy `astrohackerlabs/astrohacker-terminal` repo alone unless a separate
-experiment migrates historical assets.
+Historical cask tokens `astrohacker` and `astrohacker-terminal` are retired.
+Users install `termsurf` only. The public GitHub source and release asset host
+is `astrohackerlabs/termsurf` (local default `~/dev/termsurf`), and its Homebrew
+tap is `astrohackerlabs/termsurf` (local default `~/dev/homebrew-termsurf`).
+Leave the legacy repositories alone unless a separate experiment migrates
+historical assets.
 
 Astrohacker Wallet is planned for a future update of this **same** cask—not a
 second formula.
 
 ## Install
 
-```bash
-brew tap astrohackerlabs/astrohacker
-brew trust astrohackerlabs/astrohacker
-brew install --cask astrohacker
+```nu
+brew tap astrohackerlabs/termsurf
+brew trust astrohackerlabs/termsurf
+brew install --cask termsurf
 ```
 
 Upgrade:
 
-```bash
+```nu
 brew update
-brew upgrade --cask astrohacker
+brew upgrade --cask termsurf
 ```
 
 ## Signing model
@@ -176,9 +177,9 @@ Canonical three-repository Homebrew release flow. Packaging scripts live in the
 | --- | --- | --- |
 | Private monorepo | this repo | private business monorepo |
 | Public TermSurf source | `~/dev/termsurf` | `astrohackerlabs/termsurf` |
-| Homebrew tap | `~/dev/homebrew-astrohacker` | `astrohackerlabs/homebrew-astrohacker` |
+| Homebrew tap | `~/dev/homebrew-termsurf` | `astrohackerlabs/homebrew-termsurf` |
 
-Cask file: `~/dev/homebrew-astrohacker/Casks/astrohacker.rb`
+Cask file: `~/dev/homebrew-termsurf/Casks/termsurf.rb`
 
 Env overrides: `ASTROHACKER_TERMINAL_PUBLIC_REPO`,
 `ASTROHACKER_TERMINAL_PUBLIC_GITHUB_REPO`,
@@ -189,7 +190,8 @@ accepted by scripts).
 
 | Script | Role |
 | --- | --- |
-| `scripts/release-homebrew.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
+| `scripts/release-termsurf.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
+| `scripts/release-homebrew.nu` | Historical Astrohacker-tap release entry point retained for compatibility; not the current operator command |
 | `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` |
 | `scripts/build.nu` | Build components / `all --release` |
 | `scripts/release.nu` | Lower-level package/publish helper used by the canonical command |
@@ -200,7 +202,7 @@ accepted by scripts).
 The human release operator runs one command from the clean private monorepo:
 
 ```nu
-scripts/release-homebrew.nu
+scripts/release-termsurf.nu
 ```
 
 With no option it selects the next patch version after the greatest strict
@@ -208,7 +210,7 @@ version found across public releases, public tags, and the remote cask. To
 select a higher unused version:
 
 ```nu
-scripts/release-homebrew.nu --version 0.2.0
+scripts/release-termsurf.nu --version 0.4.0
 ```
 
 #### Build cache preservation
@@ -287,16 +289,16 @@ Publish mode requires **clean** public and tap worktrees. It only rewrites cask
 ### Lower-level manual flow
 
 The following describes the components orchestrated by
-`scripts/release-homebrew.nu`. It is recovery/reference material, not the
+`scripts/release-termsurf.nu`. It is recovery/reference material, not the
 normal operator interface.
 
 1. **Preflight version** (remote-facing):
 
-   ```sh
+   ```nu
    gh release list --repo astrohackerlabs/termsurf --limit 5
    git -C ~/dev/termsurf ls-remote origin 'refs/heads/main' 'refs/tags/v*'
-   git -C ~/dev/homebrew-astrohacker fetch origin
-   git -C ~/dev/homebrew-astrohacker show origin/main:Casks/astrohacker.rb | grep -E 'version |sha256 '
+   git -C ~/dev/homebrew-termsurf fetch origin
+   git -C ~/dev/homebrew-termsurf show origin/main:Casks/termsurf.rb | rg 'version |sha256 '
    ```
 
    Choose next version from max(public release, tag, remote cask).
@@ -390,7 +392,7 @@ normal operator interface.
 
 The following historical/active harnesses may be useful in an issue whose goal
 is product qualification. They are not publication gates and are never invoked
-by `scripts/release-homebrew.nu`:
+by `scripts/release-termsurf.nu`:
 
 | Script | Role |
 | --- | --- |
@@ -414,7 +416,7 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 - Partial publish: inspect tag/asset/tap; rerun same version; do not invent a
   new version just to recover.
   incremental dependency graph. Do not use `--clean` for a routine release.
-- Do not revive cask token `astrohacker-terminal`.
+- Do not revive cask tokens `astrohacker` or `astrohacker-terminal`.
 
 ### Agent checklist
 
