@@ -11,6 +11,6 @@ members = ["nutorchd", "ops", "torch-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "0.3.17"
+version = "0.3.18"
 license = "MIT"
 license-file = "LICENSE"

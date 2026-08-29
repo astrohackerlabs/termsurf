@@ -1,6 +1,30 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26082910011832 Exp 4 code parent)
+## Active Pin (Issue 26082916261801 Exp 1 TermSurf Dock mark)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26082916261801-exp1-dock-termsurf-mark`
+- **Product HEAD:** `d694ad810f315c2307036a38cc40c8c66de0ce63`
+- **Product tree:** `1cb225f6b00ff295dec9bbb7e7df5defea51b9e5`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**) +
+  `issue-26082217204646/` (**1**) + `issue-26082910011832/` (**2**) +
+  `issue-26082916261801/` (**1**) from `base..HEAD`
+- **Patches:** **39** total. Host `TermSurf.appiconset` and
+  `AppIconImage` use the TermSurf mark on the existing `#111219` plate
+  with `#1BFEFF` cyan.
+- **Archive SHA-256:**
+  `1dbe2e75234f71e3bf029e0893881eee66cc859ba1e8074a880c59fd3eba8cd2`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — Dock / AppIcon mark only. No tap, cask, release
+  script, version, or install-copy changes.
+- **TREE_MATCH:** tip matches base + 39 patches
+- **Patch SHA-256 (new add-on):**
+  `0e246321aec33928e45313e032f84fadc0049dbf198e2e7c46c47b3b54eb2d4b`
+
+## Prior Active Pin (Issue 26082910011832 Exp 4 code parent)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`

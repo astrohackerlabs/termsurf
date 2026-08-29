@@ -1,7 +1,6 @@
 # Local upstream fork working trees are reconstructed from patches and stay out
 # of public source history.
 /forks/*
-!/forks/README.md
 
 node_modules
 .astro

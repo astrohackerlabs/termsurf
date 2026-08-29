@@ -4,8 +4,8 @@ Guidance for coding agents working in the Astrohacker **product
 source** tree (`code/`). Rust crates live in **`rs/`**; Bun/TS
 packages live in **`ts/`**. Product folders: `termsurf`,
 `earthbucks`, `astrohacker`, `keypears`, `compubutton`.
-`AGENTS.md`, `README.md`, and `oxlint.config.ts` stay at
-`code/`. Package, crate, PATH, and npm names stay unprefixed.
+`AGENTS.md` and `oxlint.config.ts` stay at `code/`. Package, crate,
+PATH, and npm names stay unprefixed.
 Root `Cargo.toml` and `package.json` stay at the **monorepo
 root**. Workspace `target/` is at the monorepo root. Fork trees
 live under top-level `forks/` (root Cargo **excludes** `forks`).
@@ -14,7 +14,8 @@ Five **projects** with a **`ts/`** language folder:
 `code/astrohacker/ts`, `code/termsurf/ts`, `code/earthbucks/ts`,
 `code/keypears/ts`, `code/compubutton/ts`. Fixtures
 `test-html` and `slow-load` live under `code/termsurf/ts` and
-are not workspace members. No extra `lib` / `bin` / `web` /
+are not workspace members. Static `termsurf.com` homepage is
+`code/termsurf/ts/tswebapp`. No extra `lib` / `bin` / `web` /
 `node` folders.
 
 Two **Rust** product buckets with **`rs/`**:
@@ -51,6 +52,10 @@ code/termsurf/rs/ahtch` before cargo so that config applies:
 cd code/termsurf/rs/ahtch; cargo test
 ```
 
+`ah-chromiumd` consumes optional host `--render-surface-service=<NAME>`
+before entering Chromium (including launches by absolute executable
+path). Chromium presentation still uses CAContext.
+
 EarthBucks 2.0 crates are **root members** under
 `code/earthbucks/rs`. PATH **`ahebx`** is
 `code/earthbucks/ts/ahebx` (pool client of ebxwebapp), not
@@ -70,7 +75,7 @@ cargo build --manifest-path code/termsurf/rs/ahsh/Cargo.toml
 | --- | --- |
 | oRPC `/api` | `ahwebapp` (product), `kpnode` (KeyPears contract from `kplib`), `ahkey` (local `/api` only) |
 | tRPC `/trpc` | `ebxwebapp` + `ebxwebclient` |
-| No RPC | `kpwebapp` (`code/keypears/ts/kpwebapp`; static well-known + landing) |
+| No RPC | `kpwebapp` (`code/keypears/ts/kpwebapp`; static well-known + landing), `tswebapp` (`code/termsurf/ts/tswebapp`; static homepage) |
 | Local `/api/*` | `ahnexus` SPA → `code/termsurf/rs/ahnexus` (no Nexus wire in TS) |
 
 **KeyPears crypto details** (salt strings, PBKDF2 rounds,
@@ -326,6 +331,7 @@ bun run dev:ahebx           # http://127.0.0.1:3463
 bun run dev:ui              # kit catalog http://127.0.0.1:3464
 bun run dev:ahnexus         # http://127.0.0.1:3471
 bun run dev:kpweb           # http://127.0.0.1:3500
+bun run dev:tsweb           # http://127.0.0.1:3510
 bun run dev:kpnode          # http://127.0.0.1:3750
 bun run build:webapp
 ./infra/deploy-astrohacker.nu   # ahwebapp → ECS

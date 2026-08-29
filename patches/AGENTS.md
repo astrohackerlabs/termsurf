@@ -82,3 +82,21 @@ add local paths and branch prefixes only.
 | `ladybird/` | **Tombstone** — not a shipped engine (Issue 26072117006454) |
 
 Working trees stay under ignored `forks/`; only archives and docs live here.
+
+## Upstream origins
+
+Canonical clone URLs. Pin, apply, and generate commands stay in each
+fork’s `README.md`. When adding a fork: add a row here, create
+`patches/<name>/` with a reconstruction `README.md`, ignore the large
+checkout in root `.gitignore`, and keep a tracked
+`forks/<name>/AGENTS.md`.
+
+| Local path | Upstream origin |
+| --- | --- |
+| `chromium/` (`src/`, `depot_tools/`) | Electron stable Chromium + Chromium `depot_tools` (not a single GitHub product repo) |
+| `webkit/src/` | `https://github.com/WebKit/WebKit.git` |
+| `gecko/` | `https://github.com/mozilla-firefox/firefox.git` |
+| `ghostty/` | `https://github.com/ghostty-org/ghostty` |
+| `nushell/` | `https://github.com/nushell/nushell` |
+| `reedline/` | `https://github.com/nushell/reedline` |
+| `nexus/` | `https://github.com/zquestz/nexus` |
