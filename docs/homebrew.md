@@ -71,12 +71,10 @@ Homebrew cask.
 `TermSurf` remains the **protocol** name (`termsurf.proto`, `libtermsurf_*`,
 `TERMSURF_*` env). It is not the product brand and is not the PATH CLI name
 
-Historical cask tokens `astrohacker` and `astrohacker-terminal` are retired.
-Users install `termsurf` only. The public GitHub source and release asset host
+Retired cask aliases are unsupported. Users install `termsurf` only. The public
+GitHub source and release asset host
 is `astrohackerlabs/termsurf` (local default `~/dev/termsurf`), and its Homebrew
 tap is `astrohackerlabs/termsurf` (local default `~/dev/homebrew-termsurf`).
-Leave the legacy repositories alone unless a separate experiment migrates
-historical assets.
 
 Astrohacker Wallet is planned for a future update of this **same** cask—not a
 second formula.
@@ -191,7 +189,6 @@ accepted by scripts).
 | Script | Role |
 | --- | --- |
 | `scripts/release-termsurf.nu` | Canonical fork verification, incremental release build, package, publish, and local cask installation transaction |
-| `scripts/release-homebrew.nu` | Historical Astrohacker-tap release entry point retained for compatibility; not the current operator command |
 | `scripts/lib/release_forks.nu` | Enforce `patches/release-manifest.json` |
 | `scripts/build.nu` | Build components / `all --release` |
 | `scripts/release.nu` | Lower-level package/publish helper used by the canonical command |
@@ -416,7 +413,7 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 - Partial publish: inspect tag/asset/tap; rerun same version; do not invent a
   new version just to recover.
   incremental dependency graph. Do not use `--clean` for a routine release.
-- Do not revive cask tokens `astrohacker` or `astrohacker-terminal`.
+- Do not add alternate or compatibility cask tokens.
 
 ### Agent checklist
 
