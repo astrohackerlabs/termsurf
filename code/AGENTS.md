@@ -328,10 +328,10 @@ bun run dev:ahnexus         # http://127.0.0.1:3471
 bun run dev:kpweb           # http://127.0.0.1:3500
 bun run dev:kpnode          # http://127.0.0.1:3750
 bun run build:webapp
-bun run deploy:webapp       # ahwebapp → ECS
-bun run deploy:earthbucks   # ebxwebapp → ECS (not package.json "fly deploy")
-bun run deploy:kpweb        # kpwebapp → S3 + CloudFront
-bun run deploy:kpnode       # kpnode → ECS
+./infra/deploy-astrohacker.nu   # ahwebapp → ECS
+./infra/deploy-earthbucks.nu    # ebxwebapp → ECS (not package.json "fly deploy")
+./infra/deploy-kpweb.nu         # kpwebapp → S3 + CloudFront
+./infra/deploy-kpnode.nu        # kpnode → ECS
 bun run format              # prettier via workspaces
 ```
 
