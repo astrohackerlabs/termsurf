@@ -12,8 +12,8 @@ This crate is **excluded** from the monorepo root Cargo workspace (own lockfile
 and fork path deps). Build from the monorepo root:
 
 ```sh
-cargo build --manifest-path rust/ahsh/Cargo.toml
-cargo run --manifest-path rust/ahsh/Cargo.toml --
+cargo build --manifest-path code/termsurf/rs/ahsh/Cargo.toml
+cargo run --manifest-path code/termsurf/rs/ahsh/Cargo.toml --
 ```
 
 Prepare `forks/nushell` and `forks/reedline` first (see release-manifest /

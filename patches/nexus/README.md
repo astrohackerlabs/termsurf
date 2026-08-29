@@ -38,7 +38,7 @@ an Astrohacker product dependency.
 - Issue pin note: `patches/nexus/patches/issue-26081311412273/`
 - Verification: **pin at upstream main tip**; `scripts/build.sh ahnexus --release`
 - Consumers:
-  - `rust/ahnexus`: `nexus-common = { path = "../../forks/nexus/nexus-common" }`
+  - `code/termsurf/rs/ahnexus`: `nexus-common = { path = "../../../../forks/nexus/nexus-common" }`
 
 ## Prior State (Issue 26080119514255 Exp 3)
 

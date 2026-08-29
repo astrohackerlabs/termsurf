@@ -1,9 +1,9 @@
 fn main() {
     emit_astrohacker_cli_version();
-    println!("cargo:rerun-if-changed=../proto/termsurf.proto");
+    println!("cargo:rerun-if-changed=../../proto/termsurf.proto");
 
     prost_build::Config::new()
-        .compile_protos(&["../proto/termsurf.proto"], &["../proto/"])
+        .compile_protos(&["../../proto/termsurf.proto"], &["../../proto/"])
         .unwrap();
 }
 

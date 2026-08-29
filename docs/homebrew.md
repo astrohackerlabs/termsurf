@@ -317,10 +317,10 @@ normal operator interface.
 
    - First-party product crate package versions under the monorepo root track the
      Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`,
-     nested `rust/ahtch` workspace.package). The
+     nested `code/termsurf/rs/ahtch` workspace.package). The
      canonical command rewrites and commits those manifests before building so
-     `CARGO_PKG_VERSION` matches the cask. It also rewrites `bun/bin/ahcalc`,
-     `bun/bin/ahkey`, `bun/bin/ahplt`, and `bun/bin/ahebx` `package.json` `"version"` and
+     `CARGO_PKG_VERSION` matches the cask. It also rewrites `code/termsurf/ts/ahcalc`,
+     `code/keypears/ts/ahkey`, `code/termsurf/ts/ahplt`, and `code/earthbucks/ts/ahebx` `package.json` `"version"` and
      their `app/cli/embedded-version.ts` stamps to the same X.Y.Z so
      compile-time stamps match the cask and the post-build tree stays clean.
      Do not leave those packages stuck at a placeholder such as `0.1.0` across

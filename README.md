@@ -116,7 +116,7 @@ is for developers who want a patched engine and host from source.
 
 | Included | Not included |
 | --- | --- |
-| Client source under `rust/`, scripts, docs, assets | Pre-built engines or app bundles |
+| Client source under `code/`, scripts, docs, assets | Pre-built engines or app bundles |
 | **`patches/`** — full `.patch` archives + reconstruction notes | Checked-in `forks/` trees (Chromium, Ghostty, …) |
 | `patches/release-manifest.json` — exact bases, heads, ordered patch dirs | Automatic one-command clone of Chromium (you reconstruct manually) |
 

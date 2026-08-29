@@ -1,0 +1,32 @@
+From aef88b003370c3997e05df154c1bf4c372fbe25d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 29 Aug 2026 05:08:40 -0500
+Subject: [PATCH] Issue 26082910011832 Exp 1: retarget render-channel path
+
+---
+ src/build/SharedDeps.zig | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/build/SharedDeps.zig b/src/build/SharedDeps.zig
+index 1643e0385..6dba1bdc8 100644
+--- a/src/build/SharedDeps.zig
++++ b/src/build/SharedDeps.zig
+@@ -481,13 +481,13 @@ pub fn add(
+     });
+     // Zig 0.16: C includes/sources hang off root_module (not Compile step).
+     step.root_module.addIncludePath(b.path("src/protobuf"));
+-    step.root_module.addIncludePath(b.path("../../rust/render-channel"));
++    step.root_module.addIncludePath(b.path("../../rust/termsurf/render-channel"));
+     step.root_module.addCSourceFiles(.{ .files = &.{
+         "src/protobuf/protobuf-c.c",
+         "src/protobuf/termsurf.pb-c.c",
+     } });
+     step.root_module.addCSourceFile(.{
+-        .file = b.path("../../rust/render-channel/termsurf_render_channel.c"),
++        .file = b.path("../../rust/termsurf/render-channel/termsurf_render_channel.c"),
+         .flags = &.{"-std=c99"},
+     });
+     if (step.rootModuleTarget().os.tag == .linux) {
+-- 
+2.50.1 (Apple Git-155)
+

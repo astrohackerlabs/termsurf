@@ -1,4 +1,4 @@
-# AGENTS.md — rust/ahsh
+# AGENTS.md — code/termsurf/rs/ahsh
 
 Astrohacker Shell (`ahsh`). **Excluded** from the root Cargo
 workspace (own lockfile; path deps on `forks/nushell` and
@@ -10,6 +10,6 @@ workspace (own lockfile; path deps on `forks/nushell` and
 into Nushell. Toggle is `nu` ↔ `zsh`.
 
 ```nu
-cargo build --manifest-path rust/ahsh/Cargo.toml
-cargo run --manifest-path rust/ahsh/Cargo.toml --
+cargo build --manifest-path code/termsurf/rs/ahsh/Cargo.toml
+cargo run --manifest-path code/termsurf/rs/ahsh/Cargo.toml --
 ```

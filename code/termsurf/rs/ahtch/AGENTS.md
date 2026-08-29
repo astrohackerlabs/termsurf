@@ -19,10 +19,10 @@ From the monorepo root (Nu):
 cd ~/dev/astrohacker
 # Optional: reuse the old NuTorch checkout venv (symlink; do not copy):
 let venv = ($env.HOME | path join "dev/nutorch/.venv-torch")
-if ($venv | path exists) and not ("rust/ahtch/.venv-torch" | path exists) {
-  ^ln -s $venv rust/ahtch/.venv-torch
+if ($venv | path exists) and not ("code/termsurf/rs/ahtch/.venv-torch" | path exists) {
+  ^ln -s $venv code/termsurf/rs/ahtch/.venv-torch
 }
-rust/ahtch/scripts/bootstrap.sh
+code/termsurf/rs/ahtch/scripts/bootstrap.sh
 ```
 
 `.venv-torch`, `.libtorch`, and `target/` stay gitignored.
@@ -31,11 +31,11 @@ rust/ahtch/scripts/bootstrap.sh
 
 `cd` into this directory before `cargo test` / `cargo build`. Cargo loads
 `.cargo/config.toml` from the current directory (and parents); invoking
-`cargo test --manifest-path rust/ahtch/Cargo.toml` from the **monorepo
+`cargo test --manifest-path code/termsurf/rs/ahtch/Cargo.toml` from the **monorepo
 root** does **not** apply the LibTorch pin, and `torch-sys` fails.
 
 ```nu
-cd rust/ahtch
+cd code/termsurf/rs/ahtch
 cargo test
 cargo run --bin ahtch -- --help
 cargo fmt
@@ -44,8 +44,8 @@ cargo fmt
 Nushell dual-input (PATH must include `ahtch`):
 
 ```nu
-$env.PATH = ($env.PWD | path join "rust/ahtch/target/debug" | prepend $env.PATH)
-nu rust/ahtch/scripts/test-dual-input.nu
+$env.PATH = ($env.PWD | path join "code/termsurf/rs/ahtch/target/debug" | prepend $env.PATH)
+nu code/termsurf/rs/ahtch/scripts/test-dual-input.nu
 ```
 
 Nushell **cannot pass a list** into the external (`cannot_pass_list_to_external`).
@@ -61,7 +61,7 @@ Regenerate the module after generator changes:
 cargo run --bin ahtch -- nu-module | save -f ahtch.nu
 ```
 
-(from `rust/ahtch/`, after `cd`). When editing Rust, run `cargo fmt` and
+(from `code/termsurf/rs/ahtch/`, after `cd`). When editing Rust, run `cargo fmt` and
 accept its output.
 
 ## Architecture
@@ -112,7 +112,7 @@ Apple-silicon GPU
 ## Layout
 
 ```
-rust/ahtch/
+code/termsurf/rs/ahtch/
 ├── AGENTS.md              # this file
 ├── Cargo.toml             # nested workspace
 ├── .cargo/config.toml     # LIBTORCH pin + rpaths

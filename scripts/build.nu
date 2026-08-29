@@ -80,7 +80,7 @@ def build-ahweb [opts: record] {
 }
 
 def build-ahsh [opts: record] {
-  let ahsh_dir = ($opts.rust_dir | path join "rust/ahsh")
+  let ahsh_dir = ($opts.rust_dir | path join "code/termsurf/rs/ahsh")
   if not (is-d ($opts.company_dir | path join "forks/nushell")) {
     print --stderr $"Missing Nushell fork checkout: ($opts.company_dir)/forks/nushell"
     print --stderr "Reconstruct it from patches/nushell before building ahsh."
@@ -108,7 +108,7 @@ def build-ahsh [opts: record] {
 }
 
 def build-ahtch [opts: record] {
-  let ahtch_dir = ($opts.rust_dir | path join "rust/ahtch")
+  let ahtch_dir = ($opts.rust_dir | path join "code/termsurf/rs/ahtch")
   if not (is-d $ahtch_dir) {
     print --stderr $"Missing nested ahtch workspace: ($ahtch_dir)"
     exit 1
@@ -118,7 +118,7 @@ def build-ahtch [opts: record] {
   let has_link = (^test -L $libtorch | complete).exit_code == 0
   if (not $has_dir) and (not $has_link) {
     print --stderr $"Missing LibTorch pin: ($libtorch)"
-    print --stderr "Run: rust/ahtch/scripts/bootstrap.sh"
+    print --stderr "Run: code/termsurf/rs/ahtch/scripts/bootstrap.sh"
     exit 1
   }
   cd $ahtch_dir
@@ -199,7 +199,7 @@ def build-ahterm [opts: record] {
 }
 
 def build-ahcalc [opts: record] {
-  let ahcalc_dir = ($opts.repo_dir | path join "bun/bin/ahcalc")
+  let ahcalc_dir = ($opts.repo_dir | path join "code/termsurf/ts/ahcalc")
   if not (is-d $ahcalc_dir) {
     print --stderr $"Error: ahcalc package missing: ($ahcalc_dir)"
     exit 1
@@ -220,7 +220,7 @@ def build-ahcalc [opts: record] {
 }
 
 def build-ahkey [opts: record] {
-  let ahkey_dir = ($opts.repo_dir | path join "bun/bin/ahkey")
+  let ahkey_dir = ($opts.repo_dir | path join "code/keypears/ts/ahkey")
   if not (is-d $ahkey_dir) {
     print --stderr $"Error: ahkey package missing: ($ahkey_dir)"
     exit 1
@@ -241,7 +241,7 @@ def build-ahkey [opts: record] {
 }
 
 def build-ahplt [opts: record] {
-  let ahplt_dir = ($opts.repo_dir | path join "bun/bin/ahplt")
+  let ahplt_dir = ($opts.repo_dir | path join "code/termsurf/ts/ahplt")
   if not (is-d $ahplt_dir) {
     print --stderr $"Error: ahplt package missing: ($ahplt_dir)"
     exit 1
@@ -262,7 +262,7 @@ def build-ahplt [opts: record] {
 }
 
 def build-ahebx [opts: record] {
-  let ahebx_dir = ($opts.repo_dir | path join "bun/bin/ahebx")
+  let ahebx_dir = ($opts.repo_dir | path join "code/earthbucks/ts/ahebx")
   if not (is-d $ahebx_dir) {
     print --stderr $"Error: ahebx package missing: ($ahebx_dir)"
     exit 1
@@ -283,7 +283,7 @@ def build-ahebx [opts: record] {
 }
 
 def build-ahnexus [opts: record] {
-  let ahnexus_spa = ($opts.repo_dir | path join "bun/bin/ahnexus")
+  let ahnexus_spa = ($opts.repo_dir | path join "code/termsurf/ts/ahnexus")
   if not (is-d $ahnexus_spa) {
     print --stderr $"Error: ahnexus SPA package missing: ($ahnexus_spa)"
     exit 1

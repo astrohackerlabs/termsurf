@@ -10,4 +10,4 @@ target
 .wrangler
 .DS_Store
 
-/rust/ah-webkitd/libtermsurf_webkit/build/
+/code/termsurf/ah-webkitd/libtermsurf_webkit/build/

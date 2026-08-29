@@ -133,7 +133,7 @@ def install-ahweb [rust_dir: string] {
 def --wrapped main [...args: string] {
   let script_dir = ($env.FILE_PWD? | default $env.PWD | path expand)
   let repo_dir = ($script_dir | path dirname)
-  let rust_dir = ($repo_dir | path join "rust")
+  let rust_dir = $repo_dir
   let chromium_out = ($repo_dir | path join "forks/chromium/src/out/Default")
   let lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
   let ahterm_release_app = ($repo_dir | path join "forks/ghostty/macos/build/Release/Astrohacker Terminal.app")

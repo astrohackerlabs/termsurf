@@ -1,7 +1,7 @@
 # Reedline Patches
 
 Astrohacker Shell uses a Reedline checkout under `forks/reedline` that
-Nushell and `rust/ahsh` share via path dependency. Issue 26082214188331
+Nushell and `code/termsurf/rs/ahsh` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
 ## Current State (Issue 26082310413946 Exp 2)
@@ -58,7 +58,7 @@ adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 - Verification: **pin at main tip**; paired with Nushell Exp 2 + ahsh Release
 - Consumers:
   - `forks/nushell` workspace `reedline = { path = "../reedline", version = "0.50.0", default-features = false }`
-  - `rust/ahsh` `reedline = { version = "0.50.0", path = "../../forks/reedline", default-features = false, features = ["sqlite", "bashisms"] }`
+  - `code/termsurf/rs/ahsh` `reedline = { version = "0.50.0", path = "../../../../forks/reedline", default-features = false, features = ["sqlite", "bashisms"] }`
 
 ## Prior State (Issue 26081311412273 Exp 5)
 

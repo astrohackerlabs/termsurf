@@ -35,7 +35,7 @@ contract applies.
 
 - Archive style: start an issue-scoped archive and regenerate with
   `git format-patch` per the hub contract and this fork’s `README.md`.
-- Consumers: `forks/nushell` path dep and `rust/ahsh`.
+- Consumers: `forks/nushell` path dep and `code/termsurf/rs/ahsh`.
 
 ## Fork-specific hazards
 

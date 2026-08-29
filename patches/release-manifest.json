@@ -6,17 +6,18 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26082217204646-exp6-overlay-screenshot",
-      "expected_head": "7f5e822c2a64e2017fe6aad55e5e205f4e1c2f23",
-      "expected_tree": "f30f77d0eaeb9ec033b3ad6e347e6de569c85b1e",
+      "branch": "issue-26082910011832-exp4-code-parent",
+      "expected_head": "7d2f6079775634e269f56c6482cf4f82aa701978",
+      "expected_tree": "b68272ac033d42cbfb6cdb35b53110c79f2b4d16",
       "patch_directories": [
         "patches/ghostty/patches/issue-26081616315182",
         "patches/ghostty/patches/issue-26081913378559",
         "patches/ghostty/patches/issue-26082214188331",
-        "patches/ghostty/patches/issue-26082217204646"
+        "patches/ghostty/patches/issue-26082217204646",
+        "patches/ghostty/patches/issue-26082910011832"
       ],
-      "patch_count": 36,
-      "archive_sha256": "1a42ad5c610e5cc23e747aafa86ee71a24a01a457fae00e85bda3ec4adf22553",
+      "patch_count": 38,
+      "archive_sha256": "e53d0be61fb4b92aa98c87e49a6b951bcb351ec85009a8c86edd6d60aba63162",
       "allowed_untracked": []
     },
     {

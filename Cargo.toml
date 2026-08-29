@@ -1,21 +1,20 @@
 [workspace]
 members = [
-    "rust/ahweb",
-    "rust/ah-chromiumd",
-    "rust/ahnexus",
-    "rust/ebxlib",
-    "rust/ebxfloat",
-    "rust/ebxpow5",
-    "rust/ebxmine",
+    "code/termsurf/rs/ahweb",
+    "code/termsurf/rs/ah-chromiumd",
+    "code/termsurf/rs/ahnexus",
+    "code/earthbucks/rs/ebxlib",
+    "code/earthbucks/rs/ebxfloat",
+    "code/earthbucks/rs/ebxpow5",
+    "code/earthbucks/rs/ebxmine",
 ]
 exclude = [
-    "rust/ahsh",
+    "code/termsurf/rs/ahsh",
     "vendor",
-    "rust/proto/test-rust",
+    "code/termsurf/proto/test-rust",
     "forks",
     "patches",
     "scripts",
-    "bun",
     "docs",
     "node_modules",
     "target",
@@ -23,6 +22,6 @@ exclude = [
     "logs",
     "assets",
     "skills",
-    "rust/ahtch",
+    "code/termsurf/rs/ahtch",
 ]
 resolver = "2"

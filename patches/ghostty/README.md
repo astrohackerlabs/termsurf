@@ -1,6 +1,52 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26082217204646 Exp 6 overlay screenshot)
+## Active Pin (Issue 26082910011832 Exp 4 code parent)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26082910011832-exp4-code-parent`
+- **Product HEAD:** `7d2f6079775634e269f56c6482cf4f82aa701978`
+- **Product tree:** `b68272ac033d42cbfb6cdb35b53110c79f2b4d16`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**) +
+  `issue-26082217204646/` (**1**) + `issue-26082910011832/` (**2**)
+  from `base..HEAD`
+- **Patches:** **38** total. Render-channel include is
+  `../../code/termsurf/render-channel`.
+- **Archive SHA-256:**
+  `e53d0be61fb4b92aa98c87e49a6b951bcb351ec85009a8c86edd6d60aba63162`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 4 — flatten bun+rust into `code/`. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 38 patches
+- **Patch SHA-256 (bookends):**
+  - 0001 (squash): `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0002 (code parent path): `ad51ccb8a2152a7bc32ea084afb62c7d2b78a4d02749f8a2630ba46f9670437b`
+
+## Prior Active Pin (Issue 26082910011832 Exp 1 rust folder layout)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26082910011832-exp1-rust-folder-layout`
+- **Product HEAD:** `aef88b003370c3997e05df154c1bf4c372fbe25d`
+- **Product tree:** `b4d854d5db5019b90244f828cc5204e47ab91c27`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**) +
+  `issue-26082217204646/` (**1**) + `issue-26082910011832/` (**1**)
+  from `base..HEAD`
+- **Patches:** **37** total. Render-channel include is
+  `../../rust/termsurf/render-channel`.
+- **Archive SHA-256:**
+  `0f327ca5ed3813cb8c8f241d2a9ad80e59d0676e735b2d9ca78d9c2a6fb2e32f`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — rust folder layout. Not Homebrew.
+- **TREE_MATCH:** tip matches base + 37 patches
+- **Patch SHA-256 (bookends):**
+  - 0001 (squash): `40c81c85a4670fb212b99203471d1513a1938b7a951cd0fc264c40434adde7ea`
+  - 0001 (render-channel path): `e0ddf74df0b7e95d0bfcc239e80c94adaf5a6be086bcb36a13a9e86272579fe7`
+
+## Prior Active Pin (Issue 26082217204646 Exp 6 overlay screenshot)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
