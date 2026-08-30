@@ -4,7 +4,7 @@
      role="img"
      aria-label="TermSurf">
   <!-- TermSurf product mark: wave + shell prompt.
-       Source: assets/termsurf-14-dark.png (800x800 RGBA).
+       Source: assets/reference/legacy/termsurf-dark.png (800x800 RGBA).
        Construction: alpha>128 binary mask; 4-connected components;
        outer Moore contours; wave = recursive LS cubic Beziers
        (max_err~0.85px); prompt = RDP polylines (eps~0.75).

@@ -1,0 +1,41 @@
+From 06fcc7049f387afc61920b2a119209637b7fefe0 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 30 Aug 2026 18:13:49 -0500
+Subject: [PATCH] Refresh Astrohacker reedline guidance
+
+---
+ AGENTS.md | 22 +++++++---------------
+ 1 file changed, 7 insertions(+), 15 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 0514ee2..7f09ac6 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,17 +1,9 @@
+-# Reedline working tree (Astrohacker overlay)
++# AGENTS.md — Reedline checkout
+ 
+-You are under the **local Reedline checkout** for **Astrohacker
+-TermSurf** (`ahsh`). This file is the tracked monorepo overlay.
+-Do **not** follow upstream agent instructions that conflict with
+-Astrohacker InE.
++Ignored Reedline checkout used by `ahsh`. Read `patches/AGENTS.md`,
++`patches/reedline/AGENTS.md`, and its reconstruction README before work.
+ 
+-Pin-only default: no product patch until source is edited. Then the
+-full hub contract applies.
+-
+-1. [`patches/AGENTS.md`](../../patches/AGENTS.md) and
+-   [`patches/reedline/AGENTS.md`](../../patches/reedline/AGENTS.md).
+-2. Branch must include **issue id** and **`exp{N}`**.
+-3. Pin notes: [`patches/reedline/README.md`](../../patches/reedline/README.md).
+-
+-Do not commit Reedline source or build outputs to the Astrohacker
+-repo.
++The default is a zero-patch tip pin. Any intentional source edit requires an
++`issue-{ISSUE_ID}-exp{N}` branch, archive and README evidence, plus a manifest
++update if the shipped series changes, in the same experiment result. Never
++commit checkout source or build outputs to the monorepo.
+-- 
+2.50.1 (Apple Git-155)
+

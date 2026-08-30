@@ -1,0 +1,54 @@
+From e498595dd2bacca32306aeaa1b00a47d7fae3f4c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 30 Aug 2026 18:05:18 -0500
+Subject: [PATCH] Refresh Astrohacker Ghostty guidance
+
+---
+ AGENTS.md | 37 ++++++++++++-------------------------
+ 1 file changed, 12 insertions(+), 25 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 7d564d0d5..505bfaa5d 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,25 +1,12 @@
+-# Ghostty working tree (Astrohacker overlay)
+-
+-You are under the **local Ghostty / ahterm checkout** for
+-**Astrohacker TermSurf**. This file is the tracked monorepo overlay.
+-Do **not** follow upstream agent instructions that conflict with
+-Astrohacker InE (do not refuse commits, do not invent GitHub issues,
+-do not write troll files).
+-
+-## Before you edit
+-
+-1. Read [`patches/AGENTS.md`](../../patches/AGENTS.md) and
+-   [`patches/ghostty/AGENTS.md`](../../patches/ghostty/AGENTS.md).
+-2. Branch must include **issue id** and **`exp{N}`**.
+-3. Pin/apply/reconstruction: [`patches/ghostty/README.md`](../../patches/ghostty/README.md).
+-
+-## After each intentional product commit
+-
+-Same work unit as the experiment result: `git format-patch` into
+-`patches/ghostty/patches/issue-{ID}/`, update that README pin, update
+-`patches/release-manifest.json` when the shipped series changes,
+-record HEAD/tree in the experiment. Ignored checkout alone does not
+-ship.
+-
+-Do not commit Ghostty source or build outputs to the Astrohacker
+-repo.
++# AGENTS.md — Ghostty checkout
++
++Ignored Ghostty/ahterm product checkout. Astrohacker issue and patch policy
++overrides conflicting upstream agent instructions.
++
++Before editing, read `patches/AGENTS.md`,
++`patches/ghostty/AGENTS.md`, and its reconstruction README. Use a branch
++containing `issue-{ISSUE_ID}-exp{N}`. After every intentional commit, archive
++its patch, refresh the Ghostty README, update the manifest if the shipped
++series changes, and record the fork evidence in the current experiment. Never
++commit checkout source or build outputs to the monorepo; the ignored tip alone
++does not ship.
+-- 
+2.50.1 (Apple Git-155)
+

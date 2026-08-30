@@ -42,8 +42,8 @@ Relevant public patch docs:
 
 ## Project Layout
 
-- `assets/` — TermSurf mark SVG and icon masters (`termsurf-icon.svg`,
-  `termsurf-14-*.png`).
+- `assets/` — canonical TermSurf mark (`termsurf.svg`) and generated
+  `termsurf-<theme>-<size>.<format>`/dock projections.
 - `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install/test helpers.
 - `rust/` — Astrohacker TermSurf Rust workspace.

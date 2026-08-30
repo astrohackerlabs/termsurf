@@ -1,102 +1,34 @@
-# Fork Patches
+# AGENTS.md — fork patches
 
-Read this before any work under `patches/` or ignored `forks/`.
+This is the durable record for ignored product forks. Every intentional source
+edit under `forks/` must be represented here; there is no local-only fork
+change.
 
-## Fork change contract (MUST)
+Before editing, create or switch to a branch containing both issue id and
+experiment number:
 
-These rules apply to **every** product fork (Chromium, WebKit,
-Ghostty, Gecko, Nushell, and Reedline when source is edited). There is no
-"local-only" fork edit. Per-fork `AGENTS.md` files restate this contract and
-add local paths and branch prefixes only.
+```text
+issue-{ISSUE_ID}-exp{N}-{short-slug}
+```
 
-1. **Never modify a fork without logging a monorepo patch record.**
-   Ignored `forks/` trees are not the durable product record. Tracked
-   archives under `patches/<fork>/patches/` are. Log a patch whenever the
-   fork is intentionally changed — whether or not that change ships in the
-   next Homebrew release.
+Per-fork guidance may add a version prefix. After every intentional fork commit,
+complete the same monorepo work unit:
 
-2. **Branch names include issue id and experiment number.**
-   Create (or switch to) a branch that encodes both before committing.
-   Generic pattern:
+1. generate the ordered `format-patch` archive under
+   `patches/<fork>/patches/issue-{ISSUE_ID}/`;
+2. update that fork's reconstruction README pin;
+3. update `release-manifest.json` whenever the shipped series changes; and
+4. record branch, base, HEAD/tree, patch paths, and required digests in the
+   current experiment.
 
-   ```text
-   issue-{ISSUE_ID}-exp{N}-{short-slug}
-   ```
+Work is incomplete while the branch name lacks `exp{N}`, a commit has no
+tracked patch, the README/manifest pin differs from the fork tip, or the archive
+is not committed in the monorepo. Release builds apply only the manifest.
 
-   Forks may prefix platform or version tokens (for example Chromium
-   `{version}-issue-{ID}-exp{N}-…`, Gecko `{short8}-issue-{ID}-exp{N}-…`)
-   but **must not omit** the issue id or `exp{N}`.
+A zero-patch tip pin is allowed only when no intentional Astrohacker source edit
+exists; never create no-op patches. Per-fork reconstruction and archive style
+live in each `README.md`; local hazards live in its `AGENTS.md`.
 
-3. **One experiment → branch name for that experiment's work.**
-   Do not pile unrelated experiments onto an issue-only branch name.
-   Cumulative archives under `issue-{ID}/` may still hold ordered
-   `0001…NNNN` patches from multiple experiments; the **branch name** still
-   names the experiment you are working on.
-
-4. **After each intentional commit on that branch, update the monorepo in
-   the same work unit:**
-   - `git format-patch` into `patches/<fork>/patches/issue-{ISSUE_ID}/`
-     (next ordered `NNNN-….patch`, or regenerate the full series when that
-     fork's `README.md` says the archive is cumulative-from-base).
-   - Update that fork's `README.md` Active/Current pin (HEAD, tree, count,
-     digests as applicable).
-   - Update `patches/release-manifest.json` for that fork (head/tree/count/
-     archive digest) whenever the shipped series changes.
-   - Record branch, base, HEAD/tree, patch path(s), and digests in the
-     **current** issue experiment file.
-
-5. **Incomplete work definition.** A fork change is **not done** if any of
-   these are still true:
-   - branch lacks issue id or `exp{N}`;
-   - new commits exist in `forks/` with no matching tracked `.patch`;
-   - manifest/README pin is stale vs fork tip;
-   - patch files are only untracked or uncommitted in the monorepo.
-
-6. **Pin-only forks (e.g. Reedline default).** A tip pin with zero product
-   patches is allowed only when there is **no** intentional Astrohacker
-   source edit. The moment you edit source, rules 1–5 apply in full. Do not
-   invent empty no-op `.patch` files for pin-only state.
-
-## Navigation
-
-- Shared policy and merge-upstream portfolio notes: [`README.md`](./README.md).
-- **Release authority:** [`release-manifest.json`](./release-manifest.json).
-  Do not invent the cumulative shipped series from “latest” issue folder
-  names.
-- Per-fork reconstruction detail (bases, archives, apply/generate/verify):
-  each fork’s `README.md`.
-- Local hygiene and fork-specific hazards: each fork’s `AGENTS.md` when
-  present. Those files **obey** this contract; they do not replace it.
-
-## Forks with patch (or pin) workspaces
-
-| Fork | Notes |
-| --- | --- |
-| `chromium/` | Shipped product browser engine; large cumulative archives |
-| `ghostty/` | Host (`ahterm` / Astrohacker TermSurf) |
-| `nushell/` | Shell product fork (`ahsh`) |
-| `reedline/` | Reedline path pin; product `AGENTS.md` overlay (Issue 26082214188331) |
-| `nexus/` | Nexus BBS protocol (`nexus-common`); product `AGENTS.md` overlay (Issue 26082214188331) |
-| `webkit/` | **Tombstone** — not a shipped engine (Issue 26072120115614) |
-| `gecko/` | **Tombstone** — never shipped (Issue 26072121272459) |
-| `ladybird/` | **Tombstone** — not a shipped engine (Issue 26072117006454) |
-
-Working trees stay under ignored `forks/`; only archives and docs live here.
-
-## Upstream origins
-
-Canonical clone URLs. Pin, apply, and generate commands stay in each
-fork’s `README.md`. When adding a fork: add a row here, create
-`patches/<name>/` with a reconstruction `README.md`, ignore the large
-checkout in root `.gitignore`, and keep a tracked
-`forks/<name>/AGENTS.md`.
-
-| Local path | Upstream origin |
-| --- | --- |
-| `chromium/` (`src/`, `depot_tools/`) | Electron stable Chromium + Chromium `depot_tools` (not a single GitHub product repo) |
-| `webkit/src/` | `https://github.com/WebKit/WebKit.git` |
-| `gecko/` | `https://github.com/mozilla-firefox/firefox.git` |
-| `ghostty/` | `https://github.com/ghostty-org/ghostty` |
-| `nushell/` | `https://github.com/nushell/nushell` |
-| `reedline/` | `https://github.com/nushell/reedline` |
-| `nexus/` | `https://github.com/zquestz/nexus` |
+Chromium, Ghostty, Nushell, Reedline, and Nexus are active patch/pin workspaces.
+WebKit, Gecko, and Ladybird are tombstones. Their historical archives remain
+immutable unless a new issue deliberately revives the engine.

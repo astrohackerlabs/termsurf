@@ -4,7 +4,31 @@ Astrohacker Shell uses a Reedline checkout under `forks/reedline` that
 Nushell and `code/termsurf/rs/ahsh` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26082310413946 Exp 2)
+## Current State (Issue 26083023000538 Exp 2)
+
+- Upstream repository: `https://github.com/nushell/reedline`
+- Upstream base policy: **latest commit on upstream `main`**
+- Upstream base: `9230319ae57f88bac5a2a17dc3f9a313cff3330d`
+- Product branch: `issue-26083023000538-exp2-refresh-guidance`
+- Product parent: `3a5079b3627445327881da20d9aa03b9fa8e5a3a`
+- Product HEAD: `06fcc7049f387afc61920b2a119209637b7fefe0`
+- Product tree: `73c3e0b5e552d7aa2edacfdb7ca334a6a15d8ab7`
+- Version: `0.50.0`
+- Local fork working tree: `forks/reedline`
+- Issue archives: `patches/reedline/patches/issue-26082214188331/`
+  (**1**) + `patches/reedline/patches/issue-26082310413946/` (**1**) +
+  `patches/reedline/patches/issue-26083023000538/` (**1** refreshed
+  `AGENTS.md`)
+- Product commits / patch files: `3` / `3`
+- Archive aggregate SHA-256:
+  `49861ea2c5e566bc9cccd0a2b217c4b72a22adc04a80fe0bcd97b4d2a182baa3`
+- New patch SHA-256:
+  `4ab772538038638c247bb0b1e0f5b8ec7786b1264321a571a91e92ef027e42fb`
+- New stable patch ID: `fcc2a9292c5a9d04521cd8b2f78ae0482bde24e0`
+- Verification: guidance-only direct child; canonical release manifest is the
+  shipping authority.
+
+## Prior State (Issue 26082310413946 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/reedline`
 - Upstream base policy: **latest commit on upstream `main`**

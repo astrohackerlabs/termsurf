@@ -6,64 +6,68 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26082916261801-exp1-dock-termsurf-mark",
-      "expected_head": "d694ad810f315c2307036a38cc40c8c66de0ce63",
-      "expected_tree": "1cb225f6b00ff295dec9bbb7e7df5defea51b9e5",
+      "branch": "issue-26083023000538-exp1-refresh-guidance",
+      "expected_head": "e498595dd2bacca32306aeaa1b00a47d7fae3f4c",
+      "expected_tree": "bb2a9c7fc45d99419e1218e7a9279b0045fbc690",
       "patch_directories": [
         "patches/ghostty/patches/issue-26081616315182",
         "patches/ghostty/patches/issue-26081913378559",
         "patches/ghostty/patches/issue-26082214188331",
         "patches/ghostty/patches/issue-26082217204646",
         "patches/ghostty/patches/issue-26082910011832",
-        "patches/ghostty/patches/issue-26082916261801"
+        "patches/ghostty/patches/issue-26082916261801",
+        "patches/ghostty/patches/issue-26083023000538"
       ],
-      "patch_count": 39,
-      "archive_sha256": "1dbe2e75234f71e3bf029e0893881eee66cc859ba1e8074a880c59fd3eba8cd2",
+      "patch_count": 40,
+      "archive_sha256": "3d565efb2a28938ab2d08a6e075dbe61c054d39029fb6399b10b7821753a78d5",
       "allowed_untracked": []
     },
     {
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "8e03210652f3c48c4521cec982d96e4cb6c67181",
-      "branch": "issue-26082310413946-exp3-ai-line-foreground",
-      "expected_head": "effe0d79d9940f7c7fed41b5d7d0172c20577860",
-      "expected_tree": "3cbc84522f3c4734019a9ca455d606391dbb24a7",
+      "branch": "issue-26083023000538-exp2-refresh-guidance",
+      "expected_head": "160286563ff338d6a8571a6fef27572a3eba58b9",
+      "expected_tree": "c8b2dee3e411ff051cd6db68b24e117c5625c225",
       "patch_directories": [
         "patches/nushell/patches/issue-26081615463315",
         "patches/nushell/patches/issue-26082214188331",
-        "patches/nushell/patches/issue-26082310413946"
+        "patches/nushell/patches/issue-26082310413946",
+        "patches/nushell/patches/issue-26083023000538"
       ],
-      "patch_count": 13,
-      "archive_sha256": "cf2d74d5de860f247600e551434bb587215c1fbc5ec2834cb33d9d82b309f589",
+      "patch_count": 14,
+      "archive_sha256": "c85f49dbc529233e8b13c263b1c4b6805f13ac01b5b013d2052cb2ed9ff6cd86",
       "allowed_untracked": []
     },
     {
       "name": "reedline",
       "checkout": "forks/reedline",
       "base": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
-      "branch": "issue-26082310413946-exp2-live-ai-prompt",
-      "expected_head": "3a5079b3627445327881da20d9aa03b9fa8e5a3a",
-      "expected_tree": "6cf0fc1141427db8a5db2cc3f4f439a0f515f847",
+      "branch": "issue-26083023000538-exp2-refresh-guidance",
+      "expected_head": "06fcc7049f387afc61920b2a119209637b7fefe0",
+      "expected_tree": "73c3e0b5e552d7aa2edacfdb7ca334a6a15d8ab7",
       "patch_directories": [
         "patches/reedline/patches/issue-26082214188331",
-        "patches/reedline/patches/issue-26082310413946"
+        "patches/reedline/patches/issue-26082310413946",
+        "patches/reedline/patches/issue-26083023000538"
       ],
-      "patch_count": 2,
-      "archive_sha256": "c6b6701f23f3287f897c86921e4a4f911803606608071dea42419ae1161681bc",
+      "patch_count": 3,
+      "archive_sha256": "49861ea2c5e566bc9cccd0a2b217c4b72a22adc04a80fe0bcd97b4d2a182baa3",
       "allowed_untracked": []
     },
     {
       "name": "nexus",
       "checkout": "forks/nexus",
       "base": "85c9edab73733f412f6855800fecdd8da3e76d14",
-      "branch": "issue-26082214188331-exp1-agents-overlay",
-      "expected_head": "57243d2337ea4a0fc351b3ad632d330a3659a484",
-      "expected_tree": "4699720ef4b6480430a936df06cf3da076b6bbed",
+      "branch": "issue-26083023000538-exp2-refresh-guidance",
+      "expected_head": "1e2dfb14426172f327b80447d876474298c451d9",
+      "expected_tree": "eb29a2f35fbb3b78ecca59003961669bb7ba64e8",
       "patch_directories": [
-        "patches/nexus/patches/issue-26082214188331"
+        "patches/nexus/patches/issue-26082214188331",
+        "patches/nexus/patches/issue-26083023000538"
       ],
-      "patch_count": 1,
-      "archive_sha256": "fab23ef20e14cf3d51c91789613f72d7a74d10451a60eaaf48afc4526308f9f3",
+      "patch_count": 2,
+      "archive_sha256": "cfa38a04e7396780ecc4848b38f90bd1b5bdb9e795a94d53ea696d4a995f0ac6",
       "allowed_untracked": []
     },
     {

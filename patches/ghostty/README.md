@@ -1,6 +1,34 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26082916261801 Exp 1 TermSurf Dock mark)
+## Active Pin (Issue 26083023000538 Exp 1 refreshed guidance)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26083023000538-exp1-refresh-guidance`
+- **Product parent:** `d694ad810f315c2307036a38cc40c8c66de0ce63`
+- **Product HEAD:** `e498595dd2bacca32306aeaa1b00a47d7fae3f4c`
+- **Product tree:** `bb2a9c7fc45d99419e1218e7a9279b0045fbc690`
+- **Issue archives:** `issue-26081616315182/` (**33**) +
+  `issue-26081913378559/` (**1**) + `issue-26082214188331/` (**1**) +
+  `issue-26082217204646/` (**1**) + `issue-26082910011832/` (**2**) +
+  `issue-26082916261801/` (**1**) + `issue-26083023000538/` (**1**)
+  from `base..HEAD`
+- **Patches:** **40** total. The final patch refreshes the tracked Astrohacker
+  `AGENTS.md` overlay; product runtime and TermSurf Dock/AppIcon bytes are
+  unchanged.
+- **Archive SHA-256:**
+  `3d565efb2a28938ab2d08a6e075dbe61c054d39029fb6399b10b7821753a78d5`
+- **Toolchain:** Zig **0.16.0**
+- **Release authority:** `patches/release-manifest.json` ghostty entry
+- **Scope:** Exp 1 — guidance-only patch to restore nested release cleanliness
+  and unblock the operator's `0.3.19` retry. No build or publish.
+- **TREE_MATCH:** tip matches base + 40 patches
+- **Patch SHA-256 (new add-on):**
+  `e586ec2520f38b5fd4418c49f167e2219d1bbf4a978e6f70987e04d0290d0b1e`
+- **Stable patch ID:**
+  `9265b69377ddab6ddd2a01385b26d85954bc36f2`
+
+## Prior Active Pin (Issue 26082916261801 Exp 1 TermSurf Dock mark)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`

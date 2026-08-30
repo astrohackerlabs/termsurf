@@ -5,7 +5,30 @@ Nexus under `forks/nexus`. The primary consumer is the `nexus-common` crate
 (protocol framing, types, TLS helpers). The iced `nexus-client` GUI is **not**
 an Astrohacker product dependency.
 
-## Current State (Issue 26082214188331 Exp 1)
+## Current State (Issue 26083023000538 Exp 2)
+
+- Upstream repository: `https://github.com/zquestz/nexus`
+- SSH: `git@github.com:zquestz/nexus.git`
+- Upstream base: `85c9edab73733f412f6855800fecdd8da3e76d14`
+- Product branch: `issue-26083023000538-exp2-refresh-guidance`
+- Product parent: `57243d2337ea4a0fc351b3ad632d330a3659a484`
+- Product HEAD: `1e2dfb14426172f327b80447d876474298c451d9`
+- Product tree: `eb29a2f35fbb3b78ecca59003961669bb7ba64e8`
+- `nexus-common` version / `PROTOCOL_VERSION`: `0.9.10`
+- Local fork working tree: `forks/nexus`
+- Issue archives: `patches/nexus/patches/issue-26082214188331/` (**1**)
+  + `patches/nexus/patches/issue-26083023000538/` (**1** refreshed
+  `AGENTS.md`)
+- Product commits / patch files: `2` / `2`
+- Archive aggregate SHA-256:
+  `cfa38a04e7396780ecc4848b38f90bd1b5bdb9e795a94d53ea696d4a995f0ac6`
+- New patch SHA-256:
+  `b6d7757f9fa471c9fcfa73c66829a6e2ba8f265d09326fb81a05116c9242228a`
+- New stable patch ID: `dea2fca1793b76fe06dccf07e1c1682d1ca10015`
+- Verification: guidance-only direct child; canonical release manifest is the
+  shipping authority.
+
+## Prior State (Issue 26082214188331 Exp 1)
 
 - Upstream repository: `https://github.com/zquestz/nexus`
 - SSH: `git@github.com:zquestz/nexus.git`

@@ -34,8 +34,8 @@ ahkey
 This public repository contains the open source client material synced from the
 private Astrohacker monorepo for source releases. It includes:
 
-- `assets/` — TermSurf mark SVG and icon masters (`termsurf-icon.svg`,
-  `termsurf-14-*.png`), plus product story screenshots under
+- `assets/` — the canonical TermSurf mark (`termsurf.svg`) and its generated
+  `termsurf-<theme>-<size>.<format>`/dock projections, plus product story screenshots under
   `assets/screenshots/story/`.
 - `docs/` — product docs and public legal/records.
 - `scripts/` — public build/install helpers and smoke scripts.

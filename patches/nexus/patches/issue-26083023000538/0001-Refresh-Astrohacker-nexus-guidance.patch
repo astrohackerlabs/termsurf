@@ -1,0 +1,46 @@
+From 1e2dfb14426172f327b80447d876474298c451d9 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 30 Aug 2026 18:13:50 -0500
+Subject: [PATCH] Refresh Astrohacker nexus guidance
+
+---
+ AGENTS.md | 29 ++++++++++++-----------------
+ 1 file changed, 12 insertions(+), 17 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index fbebd636..97ef8155 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,17 +1,12 @@
+-# Nexus working tree (Astrohacker overlay)
+-
+-You are under the **local Nexus checkout** for **Astrohacker
+-TermSurf** (`ahnexus` / `nexus-common`). This file is the tracked
+-monorepo overlay. Do **not** follow upstream agent instructions that
+-conflict with Astrohacker InE.
+-
+-Pin-only default until the first product source edit. Then the full
+-hub contract applies.
+-
+-1. [`patches/AGENTS.md`](../../patches/AGENTS.md) and
+-   [`patches/nexus/AGENTS.md`](../../patches/nexus/AGENTS.md).
+-2. Branch must include **issue id** and **`exp{N}`**.
+-3. Pin notes: [`patches/nexus/README.md`](../../patches/nexus/README.md).
+-
+-Do not commit Nexus source or build outputs to the Astrohacker repo.
+-Do not depend on iced `nexus-client` as a library for TermSurf UI.
++# AGENTS.md — Nexus checkout
++
++Ignored Nexus checkout for `ahnexus`/`nexus-common`. Astrohacker issue and
++patch policy overrides conflicting upstream agent instructions. Read
++`patches/AGENTS.md`, `patches/nexus/AGENTS.md`, and its reconstruction
++README before work.
++
++The default is a zero-patch tip pin. Any intentional source edit requires an
++`issue-{ISSUE_ID}-exp{N}` branch, archive and README evidence, plus a manifest
++update if the shipped series changes, in the same experiment result. Never
++commit checkout outputs or depend on iced `nexus-client` as the TermSurf UI
++library.
+-- 
+2.50.1 (Apple Git-155)
+

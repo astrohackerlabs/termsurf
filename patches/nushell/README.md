@@ -5,7 +5,32 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26082310413946 Exp 3)
+## Current State (Issue 26083023000538 Exp 2)
+
+- Upstream repository: `https://github.com/nushell/nushell`
+- Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26083023000538-exp2-refresh-guidance`
+- Product parent: `effe0d79d9940f7c7fed41b5d7d0172c20577860`
+- Product HEAD: `160286563ff338d6a8571a6fef27572a3eba58b9`
+- Product tree: `c8b2dee3e411ff051cd6db68b24e117c5625c225`
+- Local fork working tree: `forks/nushell`
+- Issue archives (release authority):
+  `patches/nushell/patches/issue-26081615463315/` (**8**) +
+  `patches/nushell/patches/issue-26082214188331/` (**1**) +
+  `patches/nushell/patches/issue-26082310413946/` (**4**) +
+  `patches/nushell/patches/issue-26083023000538/` (**1** refreshed
+  `AGENTS.md`) from `base..HEAD`
+- Total patch count: **14**
+- Archive aggregate SHA-256:
+  `c85f49dbc529233e8b13c263b1c4b6805f13ac01b5b013d2052cb2ed9ff6cd86`
+- New patch SHA-256:
+  `b65371a0eb3ba606646b7272da4a62f041f8e69369b620db3a767b9cd76c2362`
+- New stable patch ID: `ce62fd3d5305e83a4ab7fc739f41164aaa339f02`
+- Verification: guidance-only direct child; canonical release manifest is the
+  shipping authority.
+
+## Prior State (Issue 26082310413946 Exp 3)
 
 - Upstream repository: `https://github.com/nushell/nushell`
 - Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`
