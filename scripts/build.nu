@@ -11,7 +11,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahsh, ahweb, ahcalc, ahkey, ahplt, ahebx, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
+  print "Components: ahterm, ahsh, ahweb, ahcalc, ahplt, ahebx, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
   print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -219,27 +219,6 @@ def build-ahcalc [opts: record] {
   print $"  ahcalc: ($ahcalc_dir)/dist/ahcalc"
 }
 
-def build-ahkey [opts: record] {
-  let ahkey_dir = ($opts.repo_dir | path join "code/keypears/ts/ahkey")
-  if not (is-d $ahkey_dir) {
-    print --stderr $"Error: ahkey package missing: ($ahkey_dir)"
-    exit 1
-  }
-  if not (has-cmd "bun") {
-    print --stderr "Error: bun is required to build ahkey (not found on PATH)"
-    exit 1
-  }
-  if $opts.clean {
-    print "==> Cleaning ahkey dist..."
-    ^rm -rf ($ahkey_dir | path join "dist")
-  }
-  maybe-termsurf-version
-  let kind = (if $opts.release { "release" } else { "debug" })
-  print $"==> Building ahkey \(($kind)(version-extra)\)..."
-  bun-build $opts.repo_dir $ahkey_dir "build:ahkey"
-  print $"  ahkey: ($ahkey_dir)/dist/ahkey"
-}
-
 def build-ahplt [opts: record] {
   let ahplt_dir = ($opts.repo_dir | path join "code/termsurf/ts/ahplt")
   if not (is-d $ahplt_dir) {
@@ -402,7 +381,6 @@ def --wrapped main [...args: string] {
     "ahweb" | "webtui" => { build-ahweb $opts }
     "ahsh" => { build-ahsh $opts }
     "ahcalc" => { build-ahcalc $opts }
-    "ahkey" => { build-ahkey $opts }
     "ahplt" => { build-ahplt $opts }
     "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
@@ -414,7 +392,6 @@ def --wrapped main [...args: string] {
       build-ahweb $opts
       build-ahsh $opts
       build-ahcalc $opts
-      build-ahkey $opts
       build-ahplt $opts
       build-ahebx $opts
       build-ahnexus $opts

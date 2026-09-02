@@ -14,21 +14,17 @@ workspace members.
 ## Product boundaries
 
 - `ahebx` is the TermSurf EBX1 pool client; `ebxmine` is the EBX2 validating
-  mine; `ebxweb` is the pool/app.
-- ahweb and kpnode expose oRPC `/api`; ebxweb exposes tRPC `/trpc`.
-  ahkey's browser talks only to its local `/api`, whose server calls kpnode.
+  mine; `ebxcom` is the pool/app.
+- ahcom exposes oRPC `/api`; ebxcom exposes tRPC `/trpc`.
+  kpnode/kpcom/ahkey source is archived off HEAD.
 - ahnexus is a Vite SPA backed by Rust `ahnexus`; Nexus wire code stays in
   Rust. Other React apps use React Router framework mode as configured.
-- ahweb owns its MySQL schema with push-only Drizzle. kpnode uses committed
-  migrations on boot and no production foreign keys. ebxweb/ebxdb own the
+- ahcom owns its MySQL schema with push-only Drizzle. ebxcom/ebxdb own the
   EarthBucks MySQL schema. TermSurf apps, UI, and static sites have no DB.
 - `ah-chromiumd` consumes optional
   `--render-surface-service=<NAME>` before Chromium argument handling.
 
-Exact KeyPears crypto parameters belong in
-`code/keypears/ts/ahkey/AGENTS.md` and
-`code/keypears/ts/kpnode/AGENTS.md`. Package-specific commands and traps belong
-in the nearest package guidance.
+Package-specific commands and traps belong in the nearest package guidance.
 
 ## React Router and UI
 
@@ -36,7 +32,7 @@ Framework-mode apps use their existing `@react-router/dev` configuration,
 typed route modules, and generated `+types`; never hand-edit `.react-router/`.
 Internal links use typed `href(...)`; external links use plain anchors.
 
-ahweb page reads use loaders backed by models, and writes use its browser
+ahcom page reads use loaders backed by models, and writes use its browser
 oRPC client—never product route actions. Apps without an RPC mutation surface
 may use RR actions. Keep server-only dependencies and environment values out of
 browser graphs. Bun SSR uses `renderToReadableStream`.
@@ -62,7 +58,7 @@ TermSurf/protobuf varint encoding separate.
 
 ## TermSurf Bun binaries
 
-`ahcalc`, `ahkey`, `ahplt`, and `ahebx` use a dedicated server process for UDS
+`ahcalc`, `ahplt`, and `ahebx` use a dedicated server process for UDS
 and HTTP; foreground binaries are clients. `--version` and `--help` must exit
 before requiring TermSurf. Compiled output is one `dist/<binary>`, not a
 separate server executable. Socket names and product-specific behavior live in
@@ -77,5 +73,5 @@ workspace `format` scripts.
 
 Do not commit dependencies, generated Vite assets, or secrets. Do not recreate
 the deleted `code/website`; the company site is
-`code/astrohacker/ts/ahweb`, while `termsurf.com` and its public `/docs`
-live in `code/termsurf/ts/tsweb`.
+`code/astrohacker/ts/ahcom`, while `termsurf.com` and its public `/docs`
+live in `code/termsurf/ts/tscom`.
