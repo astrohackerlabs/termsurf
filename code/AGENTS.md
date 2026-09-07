@@ -5,11 +5,18 @@ Product code is grouped as `code/<product>/rs/` for Rust and
 own the shared workspaces; names remain unprefixed crates or
 `@astrohacker/<package>`.
 
-`code/termsurf/rs/ahsh` and `ahtch` are excluded nested Cargo workspaces.
-Build `ahsh` with its manifest. Run Cargo for `ahtch` after `cd
-code/termsurf/rs/ahtch` so its LibTorch `.cargo/config.toml` applies. Fixtures
+`code/termsurf/rs/ahsh` is an excluded nested Cargo workspace.
+Build `ahsh` with its manifest. Fixtures
 `code/termsurf/ts/test-html` and `code/termsurf/ts/slow-load` are not Bun
 workspace members.
+
+NuTorch is also isolated at `code/nutorch/rs/`; run Cargo after changing into
+that directory to load its LibTorch configuration. Its React Router site is the
+root Bun workspace member `code/nutorch/ts/ntcom`. The shipped Nu module lives
+in `code/nutorch/nu/`. Experiment 9 promotes the accepted port to this canonical
+path and the existing Cloudflare Pages publisher. Experiment 11 adopts shared
+UI, Austin Night and Space Rain; preserve content, interactions and the colorful
+3D homepage hero. The page is dark-only; PNG favicons follow OS preference.
 
 ## Product boundaries
 

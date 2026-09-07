@@ -24,7 +24,6 @@ ahplt
 ahebx
 ahnexus
 ah-chromiumd
-ahtch
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
@@ -36,7 +35,6 @@ ahplt
 ahebx
 ahnexus
 ah-chromiumd
-ahtch
 <!-- /released-payload-roots -->
 
 | Command | Role |
@@ -48,7 +46,6 @@ ahtch
 | `ahplt` | Plotly viewer TermSurf app (full-pane web UI) |
 | `ahebx` | EarthBucks miner TermSurf app (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
-| `ahtch` | Astrohacker Torch (GPU tensors; daemon is `ahtch --daemon`) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
 
@@ -114,7 +111,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
 - PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahplt`, `ahebx`,
-  `ahnexus`, `ahtch`, engine helpers
+  `ahnexus`, engine helpers
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
@@ -130,11 +127,6 @@ require `sudo` (helpers are Homebrew `artifact`s).
   `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
   or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
   `ahnexus/ui/`)
-- ahtch package payload →
-  `/opt/homebrew/opt/astrohacker-terminal-ahtch/` (when installed as artifact)
-  or under Caskroom stage `ahtch/` (`bin/ahtch`,
-  `libexec/libtorch/lib/`, `ahtch.nu`)
-
 ## Release tarball contract
 
 Asset name: `astrohacker-<version>-aarch64-apple-darwin.tar.gz`
@@ -145,14 +137,13 @@ Top-level contents:
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/third_party/` (Chromium credits/LICENSE
-  copyrights, Nushell/Reedline LICENSE copies, LibTorch LICENSE/NOTICE)
+  copyrights, Nushell/Reedline LICENSE copies)
 - `ahweb`, `ahsh`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahplt/` (payload: `dist/ahplt`, `build/client/` SPA, `public/`)
 - `ahebx/` (payload: `dist/ahebx`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 - `ah-chromiumd/`
-- `ahtch/` (payload: `bin/ahtch`, LibTorch dylibs, `ahtch.nu`)
 
 Gate before publish: `scripts/check-release-legal-notices.nu` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -308,8 +299,7 @@ normal operator interface.
    Version contract:
 
    - First-party product crate package versions under the monorepo root track the
-     Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`,
-     nested `code/termsurf/rs/ahtch` workspace.package). The
+     Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`). The
      canonical command rewrites and commits those manifests before building so
      `CARGO_PKG_VERSION` matches the cask. It also rewrites `code/termsurf/ts/ahcalc`,
      `code/termsurf/ts/ahplt`, and `code/earthbucks/ts/ahebx` `package.json` `"version"` and
@@ -335,7 +325,6 @@ normal operator interface.
      | `ahebx --version` | `Astrohacker EarthBucks <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
-     | `ahtch --version` | `Astrohacker Torch <version>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be
      shown only as secondary detail after the product release line.
@@ -416,6 +405,41 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 4. Do not add product qualification to the release transaction.
 5. Preserve valid build outputs and caches; never turn release mode into an
    implicit clean build.
+
+## Independent NuTorch distribution
+
+The former ahtch component is retired from TermSurf source and packaging.
+NuTorch is not a compatibility alias for ahtch and is never installed or removed
+by the TermSurf cask. An upgrade uses the old cask's own uninstall artifacts to
+remove its old ahtch links/payload; do not manually delete independent NuTorch
+files, configuration or caches as part of that migration.
+
+NuTorch has its own source repository, Homebrew formula, version and release
+transaction. It is not added to the TermSurf payload lists above. Its source
+checkout is `~/dev/nutorch` (`astrohackerlabs/nutorch`); its tap checkout is
+`~/dev/homebrew-nutorch` (`astrohackerlabs/homebrew-nutorch`), with formula
+`Formula/nutorch.rb`.
+
+The human-operated publisher is `scripts/release-nutorch.nu`, with
+`--dry-run`, optional `--version X.Y.Z`, and `--resume X.Y.Z`. It publishes
+source and a source-build formula without invoking Homebrew or changing the
+installed environment. Installation is a separate human action; no prebuilt
+bottle is claimed. Setup, confirmation and the explicit `--supersede 1.0.2`
+path for the failed legacy run are documented in
+[NuTorch release](nutorch/release.md). Source-only release/manual-install
+acceptance is being qualified in Issue 26090715198117 Experiment 4.
+
+```nu
+brew tap astrohackerlabs/nutorch
+brew trust astrohackerlabs/nutorch
+brew install astrohackerlabs/nutorch/nutorch
+```
+
+The independent formula provides `torch`, its `nutorch` alias, `nutorchd`,
+the Nushell module at `/opt/homebrew/share/nutorch/nutorch.nu` and LibTorch
+license/notices. Add `/opt/homebrew/share/nutorch` to `$env.NU_LIB_DIRS` in
+`config.nu` to enable `use nutorch.nu *`. It does not require
+TermSurf or a development checkout. Agents must not confirm publication.
 
 ## Installed smoke expectations
 

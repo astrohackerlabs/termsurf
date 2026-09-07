@@ -9,6 +9,7 @@ members = [
     "code/earthbucks/rs/ebxmine",
 ]
 exclude = [
+    "code/nutorch/rs",
     "code/termsurf/rs/ahsh",
     "vendor",
     "code/termsurf/proto/test-rust",
@@ -22,6 +23,5 @@ exclude = [
     "logs",
     "assets",
     "skills",
-    "code/termsurf/rs/ahtch",
 ]
 resolver = "2"

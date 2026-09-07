@@ -11,7 +11,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahsh, ahweb, ahcalc, ahplt, ahebx, ahnexus, ahtch, chromium-fork, ah-chromiumd, all"
+  print "Components: ahterm, ahsh, ahweb, ahcalc, ahplt, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, all"
   print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -107,34 +107,16 @@ def build-ahsh [opts: record] {
   }
 }
 
-def build-ahtch [opts: record] {
-  let ahtch_dir = ($opts.rust_dir | path join "code/termsurf/rs/ahtch")
-  if not (is-d $ahtch_dir) {
-    print --stderr $"Missing nested ahtch workspace: ($ahtch_dir)"
-    exit 1
+def build-nutorch [opts: record] {
+  let workspace = ($opts.repo_dir | path join code/nutorch/rs)
+  if not (is-d ($workspace | path join .libtorch/lib)) {
+    error make {msg: 'Missing NuTorch LibTorch dependency. Run: nu scripts/lib/nutorch/bootstrap.nu'}
   }
-  let libtorch = ($ahtch_dir | path join ".libtorch")
-  let has_dir = (^test -d $libtorch | complete).exit_code == 0
-  let has_link = (^test -L $libtorch | complete).exit_code == 0
-  if (not $has_dir) and (not $has_link) {
-    print --stderr $"Missing LibTorch pin: ($libtorch)"
-    print --stderr "Run: code/termsurf/rs/ahtch/scripts/bootstrap.sh"
-    exit 1
-  }
-  cd $ahtch_dir
-  if $opts.clean {
-    print "==> Cleaning ahtch..."
-    ^cargo clean
-  }
-  if $opts.release {
-    print "==> Building ahtch (release)..."
-    ^cargo build --release --bin ahtch
-    print $"  ahtch: ($ahtch_dir)/target/release/ahtch"
-  } else {
-    print "==> Building ahtch (debug)..."
-    ^cargo build --bin ahtch
-    print $"  ahtch: ($ahtch_dir)/target/debug/ahtch"
-  }
+  if $opts.clean { error make {msg: 'NuTorch builds preserve caches. Diagnose and explicitly approve a scoped clean separately.'} }
+  cd $workspace
+  let args = (if $opts.release { [--release] } else { [] })
+  ^cargo build --locked --bin torch --bin nutorchd ...$args
+  if $env.LAST_EXIT_CODE != 0 { error make {msg: 'NuTorch build failed'} }
 }
 
 def build-chromiumd [opts: record] {
@@ -385,7 +367,7 @@ def --wrapped main [...args: string] {
     "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
     "ah-chromiumd" | "chromium" => { build-chromiumd $opts }
-    "ahtch" => { build-ahtch $opts }
+    "nutorch" => { build-nutorch $opts }
     "ahterm" | "aht" => { build-ahterm $opts }
     "all" => {
       build-chromium-fork $opts
@@ -395,7 +377,6 @@ def --wrapped main [...args: string] {
       build-ahplt $opts
       build-ahebx $opts
       build-ahnexus $opts
-      build-ahtch $opts
       build-chromiumd $opts
       build-ahterm $opts
       print ""
