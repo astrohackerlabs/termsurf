@@ -19,12 +19,10 @@ wrapper|ahterm|ghostty|MIT
 wrapper|ahweb|first-party|MIT
 wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
-wrapper|ahplt|first-party|MIT
 wrapper|ahebx|first-party|MIT
 wrapper|ahnexus|first-party|MIT
 wrapper|ah-chromiumd|chromium|BSD-3-Clause
 payload|ahcalc|first-party|MIT
-payload|ahplt|first-party|MIT
 payload|ahebx|first-party|MIT
 payload|ahnexus|first-party|MIT
 payload|ah-chromiumd|chromium|BSD-3-Clause
@@ -58,16 +56,6 @@ binary and staged Vite SPA under `ui/`) is licensed under the MIT License in
 LICENSE (Copyright (c) 2026 Astrohacker Inc.). The SPA build embeds third-party
 runtime components under their respective licenses as used by the frontend
 toolchain at build time; Astrohacker first-party source remains MIT as above.
-
-================================================================================
-## first-party — ahplt
-
-Astrohacker-owned product code for ahplt (Plotly viewer TermSurf app,
-including the compiled product binary and package static assets) is licensed
-under the MIT License in LICENSE (Copyright (c) 2026 Astrohacker Inc.). The
-distributed binary is produced with the Bun toolchain and embeds third-party
-runtime components under their respective licenses as used by Bun and Plotly
-at build time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
 ## first-party — ahebx

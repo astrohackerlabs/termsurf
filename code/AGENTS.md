@@ -65,7 +65,7 @@ TermSurf/protobuf varint encoding separate.
 
 ## TermSurf Bun binaries
 
-`ahcalc`, `ahplt`, and `ahebx` use a dedicated server process for UDS
+`ahcalc`, independent `termplot`, and `ahebx` use a dedicated server process for UDS
 and HTTP; foreground binaries are clients. `--version` and `--help` must exit
 before requiring TermSurf. Compiled output is one `dist/<binary>`, not a
 separate server executable. Socket names and product-specific behavior live in

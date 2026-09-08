@@ -11,7 +11,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahsh, ahweb, ahcalc, ahplt, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, all"
+  print "Components: ahterm, ahsh, ahweb, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, all"
   print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -201,25 +201,24 @@ def build-ahcalc [opts: record] {
   print $"  ahcalc: ($ahcalc_dir)/dist/ahcalc"
 }
 
-def build-ahplt [opts: record] {
-  let ahplt_dir = ($opts.repo_dir | path join "code/termsurf/ts/ahplt")
-  if not (is-d $ahplt_dir) {
-    print --stderr $"Error: ahplt package missing: ($ahplt_dir)"
+def build-termplot [opts: record] {
+  let termplot_dir = ($opts.repo_dir | path join "code/termplot/ts/termplot")
+  if not (is-d $termplot_dir) {
+    print --stderr $"Error: termplot package missing: ($termplot_dir)"
     exit 1
   }
   if not (has-cmd "bun") {
-    print --stderr "Error: bun is required to build ahplt (not found on PATH)"
+    print --stderr "Error: bun is required to build termplot (not found on PATH)"
     exit 1
   }
   if $opts.clean {
-    print "==> Cleaning ahplt dist..."
-    ^rm -rf ($ahplt_dir | path join "dist")
+    print "==> Cleaning termplot dist..."
+    ^rm -rf ($termplot_dir | path join "dist")
   }
-  maybe-termsurf-version
   let kind = (if $opts.release { "release" } else { "debug" })
-  print $"==> Building ahplt \(($kind)(version-extra)\)..."
-  bun-build $opts.repo_dir $ahplt_dir "build:ahplt"
-  print $"  ahplt: ($ahplt_dir)/dist/ahplt"
+  print $"==> Building termplot \(($kind), independent package version\)..."
+  bun-build $opts.repo_dir $termplot_dir "build:termplot"
+  print $"  termplot: ($termplot_dir)/dist/termplot"
 }
 
 def build-ahebx [opts: record] {
@@ -363,7 +362,7 @@ def --wrapped main [...args: string] {
     "ahweb" | "webtui" => { build-ahweb $opts }
     "ahsh" => { build-ahsh $opts }
     "ahcalc" => { build-ahcalc $opts }
-    "ahplt" => { build-ahplt $opts }
+    "termplot" => { build-termplot $opts }
     "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
     "ah-chromiumd" | "chromium" => { build-chromiumd $opts }
@@ -374,7 +373,6 @@ def --wrapped main [...args: string] {
       build-ahweb $opts
       build-ahsh $opts
       build-ahcalc $opts
-      build-ahplt $opts
       build-ahebx $opts
       build-ahnexus $opts
       build-chromiumd $opts

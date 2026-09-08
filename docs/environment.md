@@ -68,6 +68,25 @@ new docs/scripts):
 - `HOMEBREW_TERMSURF_SKIP_POSTFLIGHT_WARMUP`
 
 
+## Independent TermPlot
+
+TermPlot uses `TERMPLOT_*` for its own process settings, not `AHPLT_*`.
+`TERMSURF_SOCKET` and `TERMSURF_PANE_ID` retain their protocol meaning.
+Its version comes only from its package/build stamp; `ASTROHACKER_VERSION`
+and `TERMSURF_VERSION` cannot override it.
+
+| Variable | Role |
+| --- | --- |
+| `TERMPLOT_RUNTIME_DIR` / `TERMPLOT_SOCK_PATH` | Override per-user control socket (default `/tmp/tplot-$UID/termplot.sock`) |
+| `TERMPLOT_TTL_MS` | Server idle timeout; default 60000 ms |
+| `TERMPLOT_PKG_ROOT` | Development resource-root override; not needed by installed packages |
+| `TERMPLOT_ROLE` / `TERMPLOT_COMPILED` / `TERMPLOT_SERVER_BIN` | Internal server spawning and test overrides |
+| `TERMPLOT_COLS` / `TERMPLOT_ROWS` | Geometry test overrides |
+| `TERMPLOT_SKIP_TERMSURF` / `TERMPLOT_SKIP_SHOT` | Test-only bypasses, never installed-product acceptance |
+| `TERMPLOT_ALLOW_TTY_STDIN` | Allow interactive stdin JSON input |
+| `TERMPLOT_VERBOSE` / `TERMPLOT_DEBUG` | Diagnostic output |
+| `TERMPLOT_BUN` / `TERMPLOT_SHOT_SETTLE_MS` | Development screenshot helper only |
+
 ## Engine path overrides
 
 Resolution order for each engine family:
