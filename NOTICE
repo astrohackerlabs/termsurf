@@ -17,7 +17,6 @@ Package legal layout (Homebrew / release tarball):
 # kind|id|section|license
 wrapper|ahterm|ghostty|MIT
 wrapper|ahweb|first-party|MIT
-wrapper|ahsh|nushell-reedline|MIT
 wrapper|ahcalc|first-party|MIT
 wrapper|ahebx|first-party|MIT
 wrapper|ahnexus|first-party|MIT
@@ -138,11 +137,14 @@ bundle (not a full dump of every third_party source tree):
 
 ================================================================================
 
-## nushell-reedline — ahsh
+## nushell-reedline — independent NuTorch dependency
+
+NuTorch is installed separately by Homebrew. These license references accompany
+the source/build tooling; the TermSurf archive does not contain a NuTorch shell.
 
 ### Nushell
 
-Nushell (forks/nushell) as Astrohacker Shell (`ahsh`)
+Nushell (forks/nushell), used by the independently distributed NuTorch shell
 https://github.com/nushell/nushell
 
 MIT License
@@ -171,7 +173,7 @@ Also: legal/third_party/nushell/LICENSE
 
 ### Reedline
 
-Reedline (forks/reedline), path dependency of ahsh
+Reedline (forks/reedline), path dependency of NuTorch
 https://github.com/nushell/reedline
 
 MIT License

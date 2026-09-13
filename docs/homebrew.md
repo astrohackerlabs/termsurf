@@ -1,5 +1,11 @@
 # Homebrew
 
+The next release uses Homebrew-installed NuTorch as the default shell. The cask
+requires `astrohackerlabs/nutorch/nutorch` without a version constraint; the
+TermSurf archive contains no shell or LibTorch copy. Installed qualification is
+pending in Issue 26091215074416 Experiment 7. Current supported installation is
+Apple silicon on macOS Tahoe 26.x, matching the NuTorch binary distribution.
+
 **Canonical user install and operator release documentation** for Astrohacker
 on Apple silicon macOS. Shell / direct install (`install.sh`) is **retired** as
 a product channel; do not revive public bootstrap install as the primary path.
@@ -8,8 +14,8 @@ Full environment variable taxonomy: [`docs/environment.md`](./environment.md).
 
 Astrohacker ships to macOS through the `astrohackerlabs/termsurf` Homebrew tap.
 There is **one desktop download**: the cask `termsurf`. It installs
-Astrohacker TermSurf, Shell, Web, and related helpers as one Astrohacker
-bundle. The app lands in **`/Applications/Astrohacker TermSurf.app`**.
+Astrohacker TermSurf, Web, and related helpers, with NuTorch installed as a formula
+dependency. The app lands in **`/Applications/Astrohacker TermSurf.app`**.
 
 ## Public command surface
 
@@ -18,7 +24,6 @@ Released PATH names (machine-readable for gates):
 <!-- released-wrappers -->
 ahterm
 ahweb
-ahsh
 ahcalc
 ahebx
 ahnexus
@@ -38,7 +43,7 @@ ah-chromiumd
 | Command | Role |
 | --- | --- |
 | `ahterm` | Astrohacker TermSurf (app executable + PATH launcher) |
-| `ahsh` | Astrohacker Shell |
+| `nutorch` | NuTorch shell, supplied by the separate Homebrew dependency |
 | `ahweb` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
 | `ahebx` | EarthBucks miner TermSurf app (full-pane web UI) |
@@ -75,6 +80,8 @@ second formula.
 ```nu
 brew tap astrohackerlabs/termsurf
 brew trust astrohackerlabs/termsurf
+brew tap astrohackerlabs/nutorch
+brew trust astrohackerlabs/nutorch
 brew install --cask termsurf
 ```
 
@@ -107,8 +114,12 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahsh`, `ahcalc`, `ahebx`,
+- PATH: `ahterm`, `ahweb`, `ahcalc`, `ahebx`,
   `ahnexus`, engine helpers
+- Shell dependency: `/opt/homebrew/bin/nutorch`. With no explicit `command`,
+  TermSurf selects that path (then `/usr/local/bin/nutorch`), even from a GUI
+  launch without Homebrew on PATH. An explicit shell setting takes precedence;
+  remove an old ahsh `command` setting to use the new default.
 - Chromium tree →
   `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
 - ahcalc package payload →
@@ -132,7 +143,7 @@ Top-level contents:
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/third_party/` (Chromium credits/LICENSE
   copyrights, Nushell/Reedline LICENSE copies)
-- `ahweb`, `ahsh`
+- `ahweb`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahebx/` (payload: `dist/ahebx`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
@@ -215,7 +226,7 @@ Before confirmation the command performs read-only version, repository, tool,
 and credential discovery. After the operator types the exact confirmation, it:
 
 1. sets first-party product Cargo package versions to the selected release
-   version (`ahsh`, `ahweb`, `ah-chromiumd`), refreshes their `Cargo.lock`
+   version (`ahweb`, `ah-chromiumd`), refreshes their `Cargo.lock`
    files, commits that bump on private `main` when needed, and pushes it so
    the monorepo stays aligned with `origin/main`. This step never rewrites
    anything under `forks/` (fork trees are out of scope; `ahterm` still gets
@@ -280,19 +291,19 @@ normal operator interface.
 2. **Land product changes** in private monorepo; push tap **content** changes
    (not version/sha) if needed so the tap is clean for publish.
 
-3. **Full release build** (`scripts/build.nu all` ships Terminal components
+3. **Full release build** (`scripts/build.nu termsurf` ships Terminal components
    only — no editor; preserve all valid incremental build outputs):
 
    ```sh
    TERMSURF_VERSION=<version> \
    ASTROHACKER_VERSION=<version> \
-     scripts/build.nu all --release
+     scripts/build.nu termsurf --release
    ```
 
    Version contract:
 
    - First-party product crate package versions under the monorepo root track the
-     Homebrew release version (`ahsh`, `ahweb`, `ah-chromiumd`, `ahnexus`). The
+     Homebrew release version (`ahweb`, `ah-chromiumd`, `ahnexus`). The
      canonical command rewrites and commits those manifests before building so
      `CARGO_PKG_VERSION` matches the cask. It also rewrites `code/termsurf/ts/ahcalc`,
      and `code/earthbucks/ts/ahebx` `package.json` `"version"` and
@@ -312,7 +323,6 @@ normal operator interface.
      | Wrapper | Expected first line |
      | --- | --- |
      | `ahweb --version` | `Astrohacker Web <version>` |
-     | `ahsh --version` | `Astrohacker Shell <version>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ahebx --version` | `Astrohacker EarthBucks <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
@@ -401,8 +411,8 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 ## Independent NuTorch distribution
 
 The former ahtch component is retired from TermSurf source and packaging.
-NuTorch is not a compatibility alias for ahtch and is never installed or removed
-by the TermSurf cask. An upgrade uses the old cask's own uninstall artifacts to
+NuTorch is the independently installed shell dependency. An upgrade uses the old
+cask's own uninstall artifacts to
 remove its old ahtch links/payload; do not manually delete independent NuTorch
 files, configuration or caches as part of that migration.
 
@@ -414,12 +424,11 @@ checkout is `~/dev/nutorch` (`astrohackerlabs/nutorch`); its tap checkout is
 
 The human-operated publisher is `scripts/release-nutorch.nu`, with
 `--dry-run`, optional `--version X.Y.Z`, and `--resume X.Y.Z`. It publishes
-source and a source-build formula without invoking Homebrew or changing the
-installed environment. Installation is a separate human action; no prebuilt
-bottle is claimed. Setup, confirmation and the explicit `--supersede 1.0.2`
-path for the failed legacy run are documented in
-[NuTorch release](nutorch/release.md). Source-only release/manual-install
-acceptance is being qualified in Issue 26090715198117 Experiment 4.
+source and a prebuilt binary with bundled LibTorch without invoking Homebrew or
+changing the installed environment. Installation follows publication as a separate
+human action. Setup and confirmation are documented in
+[NuTorch release](nutorch/release.md). Ryan accepted the corrected 2.0.2 binary
+release and installation. TermSurf publication neither builds nor bumps NuTorch.
 
 ```nu
 brew tap astrohackerlabs/nutorch
@@ -427,11 +436,10 @@ brew trust astrohackerlabs/nutorch
 brew install astrohackerlabs/nutorch/nutorch
 ```
 
-The independent formula provides `torch`, its `nutorch` alias, `nutorchd`,
-the Nushell module at `/opt/homebrew/share/nutorch/nutorch.nu` and LibTorch
-license/notices. Add `/opt/homebrew/share/nutorch` to `$env.NU_LIB_DIRS` in
-`config.nu` to enable `use nutorch.nu *`. It does not require
-TermSurf or a development checkout. Agents must not confirm publication.
+The formula provides the `nutorch` shell and its runtime libraries/licenses.
+Run `use torch` inside NuTorch for native tensor commands; there is no daemon or
+external Nu module to configure. NuTorch itself does not require TermSurf or a
+development checkout. Agents must not confirm publication.
 
 ## Installed smoke expectations
 

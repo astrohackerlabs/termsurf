@@ -91,6 +91,8 @@ The Astrohacker Homebrew cask targets Apple silicon macOS and installs into
 ```nu
 brew tap astrohackerlabs/termsurf
 brew trust astrohackerlabs/termsurf
+brew tap astrohackerlabs/nutorch
+brew trust astrohackerlabs/nutorch
 brew install --cask termsurf
 ```
 
@@ -191,7 +193,7 @@ scripts/build.nu ahterm
 Release-style local build (still requires reconstructed forks):
 
 ```nu
-scripts/build.nu all --release
+scripts/build.nu termsurf --release
 ```
 
 The host app bundle (when Ghostty/`ahterm` succeeds) is written to:

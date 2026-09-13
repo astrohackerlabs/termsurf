@@ -20,7 +20,7 @@ Common build commands:
 scripts/build.nu chromium
 scripts/build.nu ahweb
 scripts/build.nu ahterm
-scripts/build.nu all --release
+scripts/build.nu termsurf --release
 ```
 
 Shipped product engine is **Chromium** only. Optional historical WebKit/Gecko
@@ -49,6 +49,6 @@ Relevant public patch docs:
 - `rust/` — Astrohacker TermSurf Rust workspace.
 - `patches/` — fork patch archives and reconstruction notes.
 
-This public repository intentionally excludes private issue records, epics,
+This public repository intentionally excludes private issue records,
 company operations, marketing plans, private release orchestration, local agent
 metadata, ignored fork working trees, and build outputs.

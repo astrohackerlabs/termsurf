@@ -1,10 +1,29 @@
 # Reedline Patches
 
-Astrohacker Shell uses a Reedline checkout under `forks/reedline` that
-Nushell and `code/termsurf/rs/ahsh` share via path dependency. Issue 26082214188331
+NuTorch uses a Reedline checkout under `forks/reedline` that
+Nushell and `code/nutorch/rs/shell` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26083023000538 Exp 2)
+## Current State (Issue 26091215074416 Exp 1)
+
+NuTorch at `code/nutorch/rs/shell` replaces ahsh as the application consumer.
+The empty `[workspace]` table isolates this checkout from enclosing monorepo
+workspaces during Cargo formatting. Editor behavior is unchanged.
+
+- Upstream base: `9230319ae57f88bac5a2a17dc3f9a313cff3330d`
+- Version: `0.50.0`
+- Product branch: `issue-26091215074416-exp1-transplant-shell`
+- Product parent: `06fcc7049f387afc61920b2a119209637b7fefe0`
+- Product HEAD: `a4e8953b8dca874b12fcb323bbd90a6958e5f6b1`
+- Product tree: `5a8db2ccdb3c12a92b0ffab8944210e5490e4284`
+- Archive: append `patches/reedline/patches/issue-26091215074416/`
+  to the three-patch series below; total **4** patches.
+- New patch: `0001-Isolate-Reedline-for-the-NuTorch-workspace.patch`
+- Aggregate SHA-256:
+  `d31226d0c371c0ba09d6f3b82e19aa64cd7146f944d35b804896afd082c63b1b`
+- Release authority: `patches/release-manifest.json`.
+
+## Prior State (Issue 26083023000538 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/reedline`
 - Upstream base policy: **latest commit on upstream `main`**

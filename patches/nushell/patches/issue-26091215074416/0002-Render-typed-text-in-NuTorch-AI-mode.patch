@@ -1,0 +1,61 @@
+From d58006cb47f3526ff74fd38f27420e36175b1b11 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 12 Sep 2026 14:19:46 -0500
+Subject: [PATCH] Render typed text in NuTorch AI mode
+
+The keys arrived in invisible ink;
+Now prose appears before you blink.
+---
+ crates/nu-cli/src/repl.rs | 22 +++++++++++++++++++++-
+ 1 file changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 0b0306377..9e83c258f 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -681,7 +681,7 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+                 .and_then(|v| v.as_str().ok().map(str::to_string))
+                 .unwrap_or_else(|| "nu".to_string());
+             let inner: Box<dyn reedline::Highlighter> = if shannon_mode != "nu" {
+-                Box::<NoOpHighlighter>::default()
++                Box::new(AlternateModeHighlighter)
+             } else {
+                 Box::new(NuHighlighter::new(
+                     engine_reference.clone(),
+@@ -1380,6 +1380,17 @@ fn flush_engine_state_repl_buffer(
+     line_editor
+ }
+ 
++/// Render AI prose literally, without parsing it as Nushell syntax.
++struct AlternateModeHighlighter;
++
++impl reedline::Highlighter for AlternateModeHighlighter {
++    fn highlight(&self, line: &str, _cursor: usize) -> reedline::StyledText {
++        let mut text = reedline::StyledText::new();
++        text.push((nu_ansi_term::Style::new(), line.to_owned()));
++        text
++    }
++}
++
+ struct AlternateModeValidator;
+ 
+ impl reedline::Validator for AlternateModeValidator {
+@@ -2119,6 +2130,15 @@ mod product_keybinding_tests {
+         }
+     }
+ 
++    #[test]
++    fn ai_input_is_rendered_literally() {
++        use reedline::Highlighter;
++        for input in ["", "please explain {", "hello 🌍", "first\nsecond"] {
++            let rendered = super::AlternateModeHighlighter.highlight(input, input.len());
++            assert_eq!(rendered.render_simple(), input);
++        }
++    }
++
+     #[test]
+     fn ai_input_does_not_require_balanced_nushell_syntax() {
+         use reedline::Validator;
+-- 
+2.50.1 (Apple Git-155)
+

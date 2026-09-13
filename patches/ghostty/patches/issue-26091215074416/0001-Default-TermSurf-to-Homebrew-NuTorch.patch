@@ -1,0 +1,73 @@
+From bea019e3a9622d499db3418134378609dce79822 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 13 Sep 2026 08:37:30 -0500
+Subject: [PATCH] Default TermSurf to Homebrew NuTorch
+
+---
+ src/config/Config.zig | 22 +++++++++++-----------
+ 1 file changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 31d8b2d9e..9c1b283bb 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1181,8 +1181,8 @@ palette: Palette = .{},
+ /// be looked up in the `PATH`. If this is not set, a default will be looked up
+ /// from your system. The rules for the default lookup are:
+ ///
+-///   * Astrohacker TermSurf: packaged `ahsh` if present at
+-///     `/opt/homebrew/bin/ahsh` or `/usr/local/bin/ahsh` (GUI apps do not
++///   * Astrohacker TermSurf: packaged `nutorch` if present at
++///     `/opt/homebrew/bin/nutorch` or `/usr/local/bin/nutorch` (GUI apps do not
+ ///     inherit Homebrew PATH, so we use absolute paths)
+ ///
+ ///   * `SHELL` environment variable (when launched from a CLI environment)
+@@ -1373,7 +1373,7 @@ command: ?Command = null,
+ ///
+ /// Astrohacker TermSurf: if neither the process environment nor this map sets
+ /// `XDG_CONFIG_HOME`, finalize injects `$HOME/.config` so session children
+-/// (including ahsh) use the XDG layout on macOS as well as Linux.
++/// (including nutorch) use the XDG layout on macOS as well as Linux.
+ env: RepeatableStringMap = .{},
+ 
+ /// The default homepage URL opened by `web` when no URL is supplied.
+@@ -4674,7 +4674,7 @@ pub fn finalize(self: *Config) !void {
+ 
+     // Astrohacker TermSurf: default XDG_CONFIG_HOME to $HOME/.config when the
+     // process and config do not already set it. Dock-launched .app processes
+-    // often lack XDG_*; ahsh and other tools then prefer platform dirs.
++    // often lack XDG_*; nutorch and other tools then prefer platform dirs.
+     // User `env = XDG_CONFIG_HOME=…` and a pre-set process env both win.
+     {
+         const process_xdg_c = std.posix.system.getenv("XDG_CONFIG_HOME");
+@@ -4752,20 +4752,20 @@ pub fn finalize(self: *Config) !void {
+         (comptime !builtin.is_test))
+     {
+         if (self.command == null or wd == .home) command: {
+-            // Astrohacker TermSurf: prefer packaged ahsh via absolute paths.
++            // Astrohacker TermSurf: prefer Homebrew-installed NuTorch via absolute paths.
+             // GUI-launched .app processes do not inherit Homebrew PATH, so a
+-            // bare `ahsh` name is unreliable; fall through to SHELL/passwd if
++            // bare `nutorch` name is unreliable; fall through to SHELL/passwd if
+             // neither candidate exists.
+             if (self.command == null and !internal_os.isFlatpak()) {
+-                const ahsh_candidates = [_][]const u8{
+-                    "/opt/homebrew/bin/ahsh",
+-                    "/usr/local/bin/ahsh",
++                const nutorch_candidates = [_][]const u8{
++                    "/opt/homebrew/bin/nutorch",
++                    "/usr/local/bin/nutorch",
+                 };
+-                for (ahsh_candidates) |path| {
++                for (nutorch_candidates) |path| {
+                     if (std.Io.Dir.accessAbsolute(global.io(), path, .{})) {
+                         const copy = try alloc.dupeZ(u8, path);
+                         self.command = .{ .shell = copy };
+-                        log.info("default shell src=ahsh value={s}", .{path});
++                        log.info("default shell src=nutorch value={s}", .{path});
+                         break;
+                     } else |_| {}
+                 }
+-- 
+2.50.1 (Apple Git-155)
+

@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Build ahterm / ahsh / ahweb / engines and related components.
+# Build ahterm / nutorch / ahweb / engines and related components.
 
 def is-d [p: string] { (^test -d $p | complete).exit_code == 0 }
 def is-x [p: string] { (^test -x $p | complete).exit_code == 0 }
@@ -11,7 +11,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahsh, ahweb, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, all"
+  print "Components: ahterm, ahweb, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, termsurf, all"
   print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
 }
 
@@ -34,6 +34,8 @@ def bun-build [repo_dir: string, pkg_dir: string, script: string] {
     if not (is-d ($pkg_dir | path join "node_modules")) and not (is-d ($repo_dir | path join "node_modules")) {
       ^bun install
     }
+    ^bun run --cwd $repo_dir build:webbuf
+    if $env.LAST_EXIT_CODE != 0 { error make {msg: 'Local WebBuf build failed; consumer build stopped'} }
     ^bun run $script
   }
 }
@@ -79,34 +81,6 @@ def build-ahweb [opts: record] {
   }
 }
 
-def build-ahsh [opts: record] {
-  let ahsh_dir = ($opts.rust_dir | path join "code/termsurf/rs/ahsh")
-  if not (is-d ($opts.company_dir | path join "forks/nushell")) {
-    print --stderr $"Missing Nushell fork checkout: ($opts.company_dir)/forks/nushell"
-    print --stderr "Reconstruct it from patches/nushell before building ahsh."
-    exit 1
-  }
-  if not (is-d ($opts.company_dir | path join "forks/reedline")) {
-    print --stderr $"Missing Reedline fork checkout: ($opts.company_dir)/forks/reedline"
-    print --stderr "Reconstruct it from patches/reedline before building ahsh."
-    exit 1
-  }
-  cd $ahsh_dir
-  if $opts.clean {
-    print "==> Cleaning ahsh..."
-    ^cargo clean
-  }
-  if $opts.release {
-    print "==> Building ahsh (release)..."
-    ^cargo build --release
-    print $"  ahsh: ($ahsh_dir)/target/release/ahsh"
-  } else {
-    print "==> Building ahsh (debug)..."
-    ^cargo build
-    print $"  ahsh: ($ahsh_dir)/target/debug/ahsh"
-  }
-}
-
 def build-nutorch [opts: record] {
   let workspace = ($opts.repo_dir | path join code/nutorch/rs)
   if not (is-d ($workspace | path join .libtorch/lib)) {
@@ -115,7 +89,7 @@ def build-nutorch [opts: record] {
   if $opts.clean { error make {msg: 'NuTorch builds preserve caches. Diagnose and explicitly approve a scoped clean separately.'} }
   cd $workspace
   let args = (if $opts.release { [--release] } else { [] })
-  ^cargo build --locked --bin torch --bin nutorchd ...$args
+  ^cargo build --locked --bin nutorch ...$args
   if $env.LAST_EXIT_CODE != 0 { error make {msg: 'NuTorch build failed'} }
 }
 
@@ -360,7 +334,6 @@ def --wrapped main [...args: string] {
   match $component {
     "chromium-fork" => { build-chromium-fork $opts }
     "ahweb" | "webtui" => { build-ahweb $opts }
-    "ahsh" => { build-ahsh $opts }
     "ahcalc" => { build-ahcalc $opts }
     "termplot" => { build-termplot $opts }
     "ahebx" => { build-ahebx $opts }
@@ -368,17 +341,17 @@ def --wrapped main [...args: string] {
     "ah-chromiumd" | "chromium" => { build-chromiumd $opts }
     "nutorch" => { build-nutorch $opts }
     "ahterm" | "aht" => { build-ahterm $opts }
-    "all" => {
+    "all" | "termsurf" => {
       build-chromium-fork $opts
       build-ahweb $opts
-      build-ahsh $opts
+      if $component == "all" { build-nutorch $opts }
       build-ahcalc $opts
       build-ahebx $opts
       build-ahnexus $opts
       build-chromiumd $opts
       build-ahterm $opts
       print ""
-      print "Done (all)."
+      print $"Done (($component))."
     }
     _ => {
       print $"Unknown component: ($component)"

@@ -6,9 +6,9 @@
       "name": "ghostty",
       "checkout": "forks/ghostty",
       "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26083023000538-exp1-refresh-guidance",
-      "expected_head": "e498595dd2bacca32306aeaa1b00a47d7fae3f4c",
-      "expected_tree": "bb2a9c7fc45d99419e1218e7a9279b0045fbc690",
+      "branch": "issue-26091215074416-exp7-nutorch-default",
+      "expected_head": "bea019e3a9622d499db3418134378609dce79822",
+      "expected_tree": "7f1f923e8d826f838f82a1c053d5322a1670df5a",
       "patch_directories": [
         "patches/ghostty/patches/issue-26081616315182",
         "patches/ghostty/patches/issue-26081913378559",
@@ -16,43 +16,46 @@
         "patches/ghostty/patches/issue-26082217204646",
         "patches/ghostty/patches/issue-26082910011832",
         "patches/ghostty/patches/issue-26082916261801",
-        "patches/ghostty/patches/issue-26083023000538"
+        "patches/ghostty/patches/issue-26083023000538",
+        "patches/ghostty/patches/issue-26091215074416"
       ],
-      "patch_count": 40,
-      "archive_sha256": "3d565efb2a28938ab2d08a6e075dbe61c054d39029fb6399b10b7821753a78d5",
+      "patch_count": 41,
+      "archive_sha256": "5817562f55c0f8ec6dcd9fd2f72db395fdef9017130607f8ad4ca1984d334d18",
       "allowed_untracked": []
     },
     {
       "name": "nushell",
       "checkout": "forks/nushell",
       "base": "8e03210652f3c48c4521cec982d96e4cb6c67181",
-      "branch": "issue-26083023000538-exp2-refresh-guidance",
-      "expected_head": "160286563ff338d6a8571a6fef27572a3eba58b9",
-      "expected_tree": "c8b2dee3e411ff051cd6db68b24e117c5625c225",
+      "branch": "issue-26091215074416-exp1-transplant-shell",
+      "expected_head": "d58006cb47f3526ff74fd38f27420e36175b1b11",
+      "expected_tree": "83a2decde78dd04aabc3bfbbfb9d6a4b8c9033da",
       "patch_directories": [
         "patches/nushell/patches/issue-26081615463315",
         "patches/nushell/patches/issue-26082214188331",
         "patches/nushell/patches/issue-26082310413946",
-        "patches/nushell/patches/issue-26083023000538"
+        "patches/nushell/patches/issue-26083023000538",
+        "patches/nushell/patches/issue-26091215074416"
       ],
-      "patch_count": 14,
-      "archive_sha256": "c85f49dbc529233e8b13c263b1c4b6805f13ac01b5b013d2052cb2ed9ff6cd86",
+      "patch_count": 16,
+      "archive_sha256": "a4a1f9c8252884705e93bc4c9e638aeb12d85ca6fda1bb741913ca49b134abb0",
       "allowed_untracked": []
     },
     {
       "name": "reedline",
       "checkout": "forks/reedline",
       "base": "9230319ae57f88bac5a2a17dc3f9a313cff3330d",
-      "branch": "issue-26083023000538-exp2-refresh-guidance",
-      "expected_head": "06fcc7049f387afc61920b2a119209637b7fefe0",
-      "expected_tree": "73c3e0b5e552d7aa2edacfdb7ca334a6a15d8ab7",
+      "branch": "issue-26091215074416-exp1-transplant-shell",
+      "expected_head": "a4e8953b8dca874b12fcb323bbd90a6958e5f6b1",
+      "expected_tree": "5a8db2ccdb3c12a92b0ffab8944210e5490e4284",
       "patch_directories": [
         "patches/reedline/patches/issue-26082214188331",
         "patches/reedline/patches/issue-26082310413946",
-        "patches/reedline/patches/issue-26083023000538"
+        "patches/reedline/patches/issue-26083023000538",
+        "patches/reedline/patches/issue-26091215074416"
       ],
-      "patch_count": 3,
-      "archive_sha256": "49861ea2c5e566bc9cccd0a2b217c4b72a22adc04a80fe0bcd97b4d2a182baa3",
+      "patch_count": 4,
+      "archive_sha256": "d31226d0c371c0ba09d6f3b82e19aa64cd7146f944d35b804896afd082c63b1b",
       "allowed_untracked": []
     },
     {

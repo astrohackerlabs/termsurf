@@ -1,11 +1,35 @@
 # Nushell Patches
 
-Astrohacker Shell uses a patched Nushell fork derived from Shannon. The fork
+NuTorch uses the patched Nushell fork inherited from ahsh and Shannon. The fork
 working tree is local-only under `forks/nushell`; this directory tracks the
-patch archive needed to reconstruct Astrohacker Shell's Nushell changes without
+patch archive needed to reconstruct NuTorch's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26083023000538 Exp 2)
+## Current State (Issue 26091215074416 Exp 1)
+
+NuTorch now owns the former ahsh application at `code/nutorch/rs/shell`.
+The fork supplies explicit Nu/AI switching; AI input is never parsed as Nu,
+and switching clears the editor buffer. Zsh bootstrap/highlighting and
+hash-line AI dispatch/prompt overlays are removed. Existing crate names retain
+their Shannon provenance; this is not an upstream version refresh.
+
+- Upstream base: `8e03210652f3c48c4521cec982d96e4cb6c67181`
+- Workspace version: `0.115.1`
+- Product branch: `issue-26091215074416-exp1-transplant-shell`
+- Product parent: `160286563ff338d6a8571a6fef27572a3eba58b9`
+- Product HEAD: `d58006cb47f3526ff74fd38f27420e36175b1b11`
+- Product tree: `83a2decde78dd04aabc3bfbbfb9d6a4b8c9033da`
+- Archive: append `patches/nushell/patches/issue-26091215074416/`
+  to the 14-patch series below; total **16** patches.
+- New patches: `0001-Replace-shell-modes-for-NuTorch.patch`, then
+  `0002-Render-typed-text-in-NuTorch-AI-mode.patch`. The second fixes invisible
+  AI input reported during human acceptance by rendering prose literally.
+- Aggregate SHA-256:
+  `a4a1f9c8252884705e93bc4c9e638aeb12d85ca6fda1bb741913ca49b134abb0`
+- Release authority: `patches/release-manifest.json`. Installed-product
+  publication remains disabled pending NuTorch dependency qualification.
+
+## Prior State (Issue 26083023000538 Exp 2)
 
 - Upstream repository: `https://github.com/nushell/nushell`
 - Upstream base commit (main tip): `8e03210652f3c48c4521cec982d96e4cb6c67181`

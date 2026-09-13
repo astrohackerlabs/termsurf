@@ -68,6 +68,16 @@ new docs/scripts):
 - `HOMEBREW_TERMSURF_SKIP_POSTFLIGHT_WARMUP`
 
 
+## Independent NuTorch
+
+NuTorch owns `NUTORCH_*` shell state. `NUTORCH_MODE` is the interactive mode
+(`nu` or `ai`), initialized to `nu` at shell startup and changed by Shift+Tab.
+The old `SHANNON_MODE` is no longer consumed by the product shell. This is mode
+state for the prompt/dispatcher, not an AI execution or model configuration.
+`NUTORCH_TEST_*` names are isolated regression-fixture variables only.
+NuTorch reports its Cargo workspace version; `ASTROHACKER_VERSION` does not
+override it.
+
 ## Independent TermPlot
 
 TermPlot uses `TERMPLOT_*` for its own process settings, not `AHPLT_*`.

@@ -1,6 +1,24 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26083023000538 Exp 1 refreshed guidance)
+## Active Pin (Issue 26091215074416 Exp 7 NuTorch default)
+
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26091215074416-exp7-nutorch-default`
+- **Product parent:** `e498595dd2bacca32306aeaa1b00a47d7fae3f4c`
+- **Product HEAD:** `bea019e3a9622d499db3418134378609dce79822`
+- **Product tree:** `7f1f923e8d826f838f82a1c053d5322a1670df5a`
+- **Patches:** prior 40 plus `issue-26091215074416/0001-Default-TermSurf-to-Homebrew-NuTorch.patch` (41 total).
+- **Archive SHA-256:** `5817562f55c0f8ec6dcd9fd2f72db395fdef9017130607f8ad4ca1984d334d18`
+- **Toolchain:** Zig 0.16.0.
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Scope:** select Homebrew NuTorch as the default shell while preserving
+  explicit shell configuration and system-shell fallback.
+- **Verification:** manifest inspection reports ready with matching patch identities
+  and tree. Config suite: 264 pass, three skip, one pre-existing BOM-test failure
+  reproduced on the unchanged parent. Real published Homebrew installation and
+  GUI acceptance remain Ryan's gate; see the experiment implementation evidence.
+
+## Prior Active Pin (Issue 26083023000538 Exp 1 refreshed guidance)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
