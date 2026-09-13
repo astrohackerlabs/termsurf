@@ -1,0 +1,74 @@
+From ba56c46337c2232a4f66251794754d3bfb960951 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 13 Sep 2026 12:21:36 -0500
+Subject: [PATCH] Preserve NuTorch chords in Helix modes
+
+Helix joins the editor crew.
+Shift Tab still switches AI and Nu.
+---
+ crates/nu-cli/src/repl.rs | 42 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 4d4a74a80..e32672766 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -1487,6 +1487,20 @@ pub(crate) fn build_product_keybindings(config: &Config) -> Result<KeybindingsMo
+                 normal_keybindings,
+             })
+         }
++        KeybindingsMode::Helix {
++            mut insert_keybindings,
++            mut normal_keybindings,
++            mut select_keybindings,
++        } => {
++            apply_astrohacker_product_keybinding_overrides(&mut insert_keybindings);
++            apply_astrohacker_product_keybinding_overrides(&mut normal_keybindings);
++            apply_astrohacker_product_keybinding_overrides(&mut select_keybindings);
++            Ok(KeybindingsMode::Helix {
++                insert_keybindings,
++                normal_keybindings,
++                select_keybindings,
++            })
++        }
+     }
+ }
+ 
+@@ -2217,6 +2231,34 @@ mod product_keybinding_tests {
+         }
+     }
+ 
++    #[test]
++    fn product_helix_preserves_host_chords_in_all_modes() {
++        let config = Config {
++            edit_mode: EditBindings::Helix,
++            ..Config::default()
++        };
++        let KeybindingsMode::Helix {
++            insert_keybindings,
++            normal_keybindings,
++            select_keybindings,
++        } = build_product_keybindings(&config).expect("product keybindings")
++        else {
++            panic!("expected helix product maps");
++        };
++        for (label, kb) in [
++            ("helix insert", insert_keybindings),
++            ("helix normal", normal_keybindings),
++            ("helix select", select_keybindings),
++        ] {
++            assert_ctrl_l_unbound(&kb, label);
++            assert_hash_not_host_command(&kb, label);
++            assert!(matches!(
++                kb.find_binding(KeyModifiers::SHIFT, KeyCode::BackTab),
++                Some(ReedlineEvent::ExecuteHostCommand(command)) if command == "__nutorch_switch"
++            ));
++        }
++    }
++
+     #[test]
+     fn product_vi_unbinds_ctrl_l_clear_screen() {
+         let mut config = Config::default();
+-- 
+2.50.1 (Apple Git-155)
+

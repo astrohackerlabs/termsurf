@@ -5,7 +5,25 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct NuTorch's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26091215074416 Exp 1)
+## Current State (Issue 26091316465368 Exp 1)
+
+Both forks are rebased onto upstream main frozen on 2026-09-13. Version: 0.115.2.
+All prior product patches are retained; the new archive is cumulative.
+Historical archives below remain unchanged. NuTorch 2.0.3 release qualification
+is in progress; these pins do not claim publication or installed acceptance.
+
+- Upstream base: `b6e6562a9a385df439ae864714c609c60314fde9`
+- Product branch: `issue-26091316465368-exp1-upstream-update`
+- Product HEAD: `284809ad08c3babc41a5e5ef68c49656e73613ae`
+- Product tree: `c7ae198010c51b563b51162908e69aa5062c6fbb`
+- Archive: `patches/nushell/patches/issue-26091316465368/`
+- Patch count: **19**
+- Aggregate SHA-256: `a05e4bcc99a75eae8ffa90183b07a6165b84f02426f8edffd5e77b0786f909b0`
+- Release authority: `patches/release-manifest.json`.
+- Reconstruction: from the monorepo root, run
+  `nu scripts/prepare-nutorch-forks.nu --apply`, then `--check`.
+
+## Prior State (Issue 26091215074416 Exp 1)
 
 NuTorch now owns the former ahsh application at `code/nutorch/rs/shell`.
 The fork supplies explicit Nu/AI switching; AI input is never parsed as Nu,

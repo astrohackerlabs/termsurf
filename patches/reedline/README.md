@@ -4,7 +4,25 @@ NuTorch uses a Reedline checkout under `forks/reedline` that
 Nushell and `code/nutorch/rs/shell` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26091215074416 Exp 1)
+## Current State (Issue 26091316465368 Exp 1)
+
+Both forks are rebased onto upstream main frozen on 2026-09-13. Version: 0.51.0.
+All prior product patches are retained; the new archive is cumulative.
+Historical archives below remain unchanged. NuTorch 2.0.3 release qualification
+is in progress; these pins do not claim publication or installed acceptance.
+
+- Upstream base: `d9db2f7979471b70eb3c3901a2eba3ef5197b656`
+- Product branch: `issue-26091316465368-exp1-upstream-update`
+- Product HEAD: `4acac3aeba448c0ce5274d048335846fad36d627`
+- Product tree: `2292d9479f5a00d6c7709ab408749530c93efce4`
+- Archive: `patches/reedline/patches/issue-26091316465368/`
+- Patch count: **4**
+- Aggregate SHA-256: `1d40621bf620a04f1fd1fddc99c3955e891fedae8e5f48bb5b4d55234623a13f`
+- Release authority: `patches/release-manifest.json`.
+- Reconstruction: from the monorepo root, run
+  `nu scripts/prepare-nutorch-forks.nu --apply`, then `--check`.
+
+## Prior State (Issue 26091215074416 Exp 1)
 
 NuTorch at `code/nutorch/rs/shell` replaces ahsh as the application consumer.
 The empty `[workspace]` table isolates this checkout from enclosing monorepo

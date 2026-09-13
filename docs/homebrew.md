@@ -1,7 +1,13 @@
 # Homebrew
 
+Issue 26091322413429 Experiment 1 prepares the shared
+`astrohackerlabs/astrohacker` tap for NuTorch 2.0.4 and TermSurf 0.3.25.
+The instructions below describe that candidate. Publication and fresh-install
+qualification are pending; do not deploy these instructions before qualification.
+See [shared-tap rollout](homebrew-shared-tap.md) for ordering and migration.
+
 The next release uses Homebrew-installed NuTorch as the default shell. The cask
-requires `astrohackerlabs/nutorch/nutorch` without a version constraint; the
+requires `astrohackerlabs/astrohacker/nutorch` without a version constraint; the
 TermSurf archive contains no shell or LibTorch copy. Installed qualification is
 pending in Issue 26091215074416 Experiment 7. Current supported installation is
 Apple silicon on macOS Tahoe 26.x, matching the NuTorch binary distribution.
@@ -12,7 +18,7 @@ a product channel; do not revive public bootstrap install as the primary path.
 
 Full environment variable taxonomy: [`docs/environment.md`](./environment.md).
 
-Astrohacker ships to macOS through the `astrohackerlabs/termsurf` Homebrew tap.
+Astrohacker ships to macOS through the `astrohackerlabs/astrohacker` Homebrew tap.
 There is **one desktop download**: the cask `termsurf`. It installs
 Astrohacker TermSurf, Web, and related helpers, with NuTorch installed as a formula
 dependency. The app lands in **`/Applications/Astrohacker TermSurf.app`**.
@@ -70,7 +76,7 @@ Homebrew cask.
 Retired cask aliases are unsupported. Users install `termsurf` only. The public
 GitHub source and release asset host
 is `astrohackerlabs/termsurf` (local default `~/dev/termsurf`), and its Homebrew
-tap is `astrohackerlabs/termsurf` (local default `~/dev/homebrew-termsurf`).
+tap is `astrohackerlabs/astrohacker` (local default `~/dev/homebrew-astrohacker`).
 
 Astrohacker Wallet is planned for a future update of this **same** cask—not a
 second formula.
@@ -78,12 +84,13 @@ second formula.
 ## Install
 
 ```nu
-brew tap astrohackerlabs/termsurf
-brew trust astrohackerlabs/termsurf
-brew tap astrohackerlabs/nutorch
-brew trust astrohackerlabs/nutorch
+brew tap astrohackerlabs/astrohacker
+brew trust astrohackerlabs/astrohacker
 brew install --cask termsurf
 ```
+
+NuTorch is installed automatically from the same trusted tap as a dependency.
+There is no separate NuTorch tap, trust or installation step for TermSurf users.
 
 Upgrade:
 
@@ -163,9 +170,9 @@ Canonical three-repository Homebrew release flow. Packaging scripts live in the
 | --- | --- | --- |
 | Private monorepo | this repo | private business monorepo |
 | Public TermSurf source | `~/dev/termsurf` | `astrohackerlabs/termsurf` |
-| Homebrew tap | `~/dev/homebrew-termsurf` | `astrohackerlabs/homebrew-termsurf` |
+| Homebrew tap | `~/dev/homebrew-astrohacker` | `astrohackerlabs/homebrew-astrohacker` |
 
-Cask file: `~/dev/homebrew-termsurf/Casks/termsurf.rb`
+Cask file: `~/dev/homebrew-astrohacker/Casks/termsurf.rb`
 
 Env overrides: `ASTROHACKER_TERMINAL_PUBLIC_REPO`,
 `ASTROHACKER_TERMINAL_PUBLIC_GITHUB_REPO`,
@@ -282,8 +289,8 @@ normal operator interface.
    ```nu
    gh release list --repo astrohackerlabs/termsurf --limit 5
    git -C ~/dev/termsurf ls-remote origin 'refs/heads/main' 'refs/tags/v*'
-   git -C ~/dev/homebrew-termsurf fetch origin
-   git -C ~/dev/homebrew-termsurf show origin/main:Casks/termsurf.rb | rg 'version |sha256 '
+   git -C ~/dev/homebrew-astrohacker fetch origin
+   git -C ~/dev/homebrew-astrohacker show origin/main:Casks/termsurf.rb | rg 'version |sha256 '
    ```
 
    Choose next version from max(public release, tag, remote cask).
@@ -410,6 +417,20 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 
 ## Independent NuTorch distribution
 
+The 0.3.24 repair below is historical. New publications use
+`~/dev/homebrew-astrohacker`, with product-specific `termsurf-vX.Y.Z` tap tags.
+Existing version tags remain unchanged in the old tap.
+
+For the failed 0.3.24 installation, Issue 26091215074416 Experiment 8 prepares a
+tap-only correction removing two obsolete ahsh postflight hooks. Keep the existing
+0.3.24 archive, URL, checksum and tags. Ryan publishes the reviewed tap commit with
+`git -C ~/dev/homebrew-termsurf push origin main`, then runs `brew update` and
+retries installation. Do not rerun the full publisher to publish this correction.
+The observed rollback restored 0.3.23, so the next consumer command is
+`brew upgrade --cask termsurf`; if a later attempt records 0.3.24 as installed,
+use `brew reinstall --cask termsurf`. Inspect current state before choosing.
+No manual installed-tap or Caskroom edits are part of this repair.
+
 The former ahtch component is retired from TermSurf source and packaging.
 NuTorch is the independently installed shell dependency. An upgrade uses the old
 cask's own uninstall artifacts to
@@ -419,7 +440,7 @@ files, configuration or caches as part of that migration.
 NuTorch has its own source repository, Homebrew formula, version and release
 transaction. It is not added to the TermSurf payload lists above. Its source
 checkout is `~/dev/nutorch` (`astrohackerlabs/nutorch`); its tap checkout is
-`~/dev/homebrew-nutorch` (`astrohackerlabs/homebrew-nutorch`), with formula
+`~/dev/homebrew-astrohacker` (`astrohackerlabs/homebrew-astrohacker`), with formula
 `Formula/nutorch.rb`.
 
 The human-operated publisher is `scripts/release-nutorch.nu`, with
@@ -431,9 +452,9 @@ human action. Setup and confirmation are documented in
 release and installation. TermSurf publication neither builds nor bumps NuTorch.
 
 ```nu
-brew tap astrohackerlabs/nutorch
-brew trust astrohackerlabs/nutorch
-brew install astrohackerlabs/nutorch/nutorch
+brew tap astrohackerlabs/astrohacker
+brew trust astrohackerlabs/astrohacker
+brew install astrohackerlabs/astrohacker/nutorch
 ```
 
 The formula provides the `nutorch` shell and its runtime libraries/licenses.

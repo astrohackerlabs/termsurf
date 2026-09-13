@@ -1,0 +1,228 @@
+From 159c0504f1b89e98d743ee6d7b29c70d1ac8c36d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 13 Sep 2026 12:19:49 -0500
+Subject: [PATCH 17/17] Refresh lockfile for rebased NuTorch forks
+
+New upstream crates take their allotted seat.
+Local Reedline keeps the editing beat.
+---
+ Cargo.lock | 147 ++++++++++++++++++++++++++---------------------------
+ 1 file changed, 73 insertions(+), 74 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index b5aeabc2f..680f8d361 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4653,7 +4653,6 @@ dependencies = [
+  "miette 7.6.0",
+  "multipart-rs",
+  "nix 0.31.3",
+- "nu-cli",
+  "nu-cmd-base",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+@@ -4663,7 +4662,6 @@ dependencies = [
+  "nu-engine",
+  "nu-experimental",
+  "nu-explore",
+- "nu-lsp",
+  "nu-mcp",
+  "nu-parser",
+  "nu-path",
+@@ -4682,6 +4680,8 @@ dependencies = [
+  "rstest",
+  "same-file",
+  "serde_json",
++ "shannon-nu-cli",
++ "shannon-nu-lsp",
+  "simplelog",
+  "tango-bench",
+  "tempfile",
+@@ -4698,46 +4698,6 @@ dependencies = [
+  "windows-sys 0.59.0",
+ ]
+ 
+-[[package]]
+-name = "nu-cli"
+-version = "0.115.2"
+-dependencies = [
+- "chrono",
+- "crossterm",
+- "fancy-regex",
+- "is_executable",
+- "log",
+- "lru",
+- "lscolors",
+- "miette 7.6.0",
+- "nu-ansi-term",
+- "nu-cmd-base",
+- "nu-cmd-lang",
+- "nu-color-config",
+- "nu-command",
+- "nu-config",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-path",
+- "nu-plugin-engine",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "percent-encoding",
+- "reedline",
+- "rstest",
+- "strum",
+- "sysinfo",
+- "tempfile",
+- "unicode-segmentation",
+- "uuid",
+- "which 8.0.6",
+-]
+-
+ [[package]]
+ name = "nu-cmd-base"
+ version = "0.115.2"
+@@ -5083,36 +5043,6 @@ dependencies = [
+  "serde_json",
+ ]
+ 
+-[[package]]
+-name = "nu-lsp"
+-version = "0.115.2"
+-dependencies = [
+- "assert-json-diff",
+- "crossbeam-channel",
+- "fancy-regex",
+- "lsp-server",
+- "lsp-textdocument",
+- "lsp-types",
+- "memchr",
+- "miette 7.6.0",
+- "nu-cli",
+- "nu-cmd-lang",
+- "nu-command",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "rstest",
+- "serde",
+- "serde_json",
+- "url",
+-]
+-
+ [[package]]
+ name = "nu-mcp"
+ version = "0.115.2"
+@@ -5370,7 +5300,6 @@ dependencies = [
+  "linkme",
+  "miette 7.6.0",
+  "nu-ansi-term",
+- "nu-cli",
+  "nu-cmd-base",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+@@ -5392,6 +5321,7 @@ dependencies = [
+  "pastey",
+  "rstest",
+  "serde_json",
++ "shannon-nu-cli",
+  "tempfile",
+  "thiserror 2.0.20",
+  "which 8.0.6",
+@@ -7659,7 +7589,6 @@ dependencies = [
+ [[package]]
+ name = "reedline"
+ version = "0.51.0"
+-source = "git+https://github.com/nushell/reedline?branch=main#436f17bf2ffa543dcfd352f37659512e653d771b"
+ dependencies = [
+  "arboard",
+  "chrono",
+@@ -8466,6 +8395,76 @@ dependencies = [
+  "jiff",
+ ]
+ 
++[[package]]
++name = "shannon-nu-cli"
++version = "0.115.2"
++dependencies = [
++ "chrono",
++ "crossterm",
++ "fancy-regex",
++ "is_executable",
++ "log",
++ "lru",
++ "lscolors",
++ "miette 7.6.0",
++ "nu-ansi-term",
++ "nu-cmd-base",
++ "nu-cmd-lang",
++ "nu-color-config",
++ "nu-command",
++ "nu-config",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-path",
++ "nu-plugin-engine",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "percent-encoding",
++ "reedline",
++ "rstest",
++ "strum",
++ "sysinfo",
++ "tempfile",
++ "unicode-segmentation",
++ "uuid",
++ "which 8.0.6",
++]
++
++[[package]]
++name = "shannon-nu-lsp"
++version = "0.115.2"
++dependencies = [
++ "assert-json-diff",
++ "crossbeam-channel",
++ "fancy-regex",
++ "lsp-server",
++ "lsp-textdocument",
++ "lsp-types",
++ "memchr",
++ "miette 7.6.0",
++ "nu-cmd-lang",
++ "nu-command",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "rstest",
++ "serde",
++ "serde_json",
++ "shannon-nu-cli",
++ "url",
++]
++
+ [[package]]
+ name = "sharded-slab"
+ version = "0.1.7"
+-- 
+2.50.1 (Apple Git-155)
+

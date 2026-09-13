@@ -1,0 +1,40 @@
+From 78d32fabf8652d16f8f4621a3aa42e7b140648b3 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 16 Aug 2026 11:16:37 -0500
+Subject: [PATCH 08/17] Bump shannon crate versions and lock for 0.115.1 +
+ reedline 0.50.0
+
+---
+ crates/nu-cli/Cargo.toml | 2 +-
+ crates/nu-lsp/Cargo.toml | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/crates/nu-cli/Cargo.toml b/crates/nu-cli/Cargo.toml
+index 8ce0cd325..c505f3915 100644
+--- a/crates/nu-cli/Cargo.toml
++++ b/crates/nu-cli/Cargo.toml
+@@ -6,7 +6,7 @@ edition.workspace = true
+ license.workspace = true
+ name = "shannon-nu-cli"
+ rust-version.workspace = true
+-version = "0.114.2"
++version.workspace = true
+ autotests = false
+ 
+ [lib]
+diff --git a/crates/nu-lsp/Cargo.toml b/crates/nu-lsp/Cargo.toml
+index 7de2e948d..9f8b035e1 100644
+--- a/crates/nu-lsp/Cargo.toml
++++ b/crates/nu-lsp/Cargo.toml
+@@ -3,7 +3,7 @@ authors.workspace = true
+ description = "Nushell's integrated LSP server"
+ repository = "https://github.com/nushell/nushell/tree/main/crates/nu-lsp"
+ name = "shannon-nu-lsp"
+-version = "0.114.2"
++version.workspace = true
+ edition.workspace = true
+ rust-version.workspace = true
+ license.workspace = true
+-- 
+2.50.1 (Apple Git-155)
+
