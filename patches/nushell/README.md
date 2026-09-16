@@ -5,7 +5,28 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct NuTorch's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26091316465368 Exp 1)
+## Current State (Issue 26091523132966 Exp 1)
+
+Adds the default no-op `ModeDispatcher::before_prompt` host callback after
+environment merging/signal reset and before prompt hooks. NuTorch uses it to
+apply queued child environments on the REPL thread. Reedline is unchanged.
+
+- Upstream base: `b6e6562a9a385df439ae864714c609c60314fde9`
+- Product branch: `issue-26091523132966-exp1-environment-sync`
+- Product parent: `284809ad08c3babc41a5e5ef68c49656e73613ae`
+- Product HEAD: `9b381cb3bb3f325ae898e7dc5cd788af4f99f2b0`
+- Product tree: `0551fcb838a83036853148db4df5a4e19aa78452`
+- Append `patches/nushell/patches/issue-26091523132966/` to the prior
+  `issue-26091316465368` series; total **20** patches.
+- New patch SHA-256:
+  `133ab2b08146a2811a7d005d2d427712d419aac73d98bf4d170072c347330bae`
+- Aggregate SHA-256:
+  `8d98f785481956e2461f330ee0df922fc16daa4bb08e2f6ac7aea841e67e69f4`
+- Reconstruction authority: `patches/release-manifest.json`; run
+  `nu scripts/prepare-nutorch-forks.nu --apply`, then `--check`.
+- Local candidate accepted by Ryan in Experiment 1; this is not a publication pin claim.
+
+## Prior State (Issue 26091316465368 Exp 1)
 
 Both forks are rebased onto upstream main frozen on 2026-09-13. Version: 0.115.2.
 All prior product patches are retained; the new archive is cumulative.

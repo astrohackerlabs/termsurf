@@ -89,10 +89,8 @@ The Astrohacker Homebrew cask targets Apple silicon macOS and installs into
 `/Applications` as **Astrohacker TermSurf.app**:
 
 ```nu
-brew tap astrohackerlabs/astrohacker
 brew trust astrohackerlabs/astrohacker
-brew tap astrohackerlabs/nutorch
-brew trust astrohackerlabs/nutorch
+brew tap astrohackerlabs/astrohacker
 brew install --cask termsurf
 ```
 

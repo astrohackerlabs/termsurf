@@ -55,6 +55,14 @@ Package-specific commands and traps belong in the nearest package guidance.
 
 ## React Router and UI
 
+**OS motion preference:** Only SpaceRain may consult or respond to
+`prefers-reduced-motion`. No other component, animation, transition, glow or
+interaction may use the operating system's motion preference, whether through
+CSS media queries, JavaScript or shared helpers. Outside SpaceRain, System must
+not inherit the OS setting. Explicit app-level choices are separate and do not
+authorize consulting the OS. Do not add OS-motion gating as an automatic
+accessibility enhancement.
+
 Framework-mode apps use their existing `@react-router/dev` configuration,
 typed route modules, and generated `+types`; never hand-edit `.react-router/`.
 Internal links use typed `href(...)`; external links use plain anchors.

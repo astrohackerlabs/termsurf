@@ -78,6 +78,20 @@ state for the prompt/dispatcher, not an AI execution or model configuration.
 NuTorch reports its Cargo workspace version; `ASTROHACKER_VERSION` does not
 override it.
 
+`NUTORCH_SYNC_SOCKET` and `NUTORCH_SYNC_TOKEN` identify the nearest interactive
+NuTorch environment-sync receiver. Each interactive instance replaces both for
+its children and privately remembers its inherited parent for native
+`nutorch sync`. Treat the token as a session capability; never log or persist it.
+Receiver initialization failure clears both exports and disables sync in that
+shell, preventing accidental routing to an ancestor.
+
+Sockets use `$XDG_RUNTIME_DIR/astrohacker/nutorch/<random-id>.sock`, with private
+0700 directories and 0600 sockets. Unset, empty, relative or overlong runtime
+paths fall back, with a diagnostic, to `/tmp/nutorch-<uid>/`. An existing unsafe
+directory is an error, not a reason to bypass its ownership/mode checks. Normal
+exit removes only the session's socket; forced termination can leave a stale
+random name that future sessions never reuse. No snapshots are stored on disk.
+
 ## Independent TermPlot
 
 TermPlot uses `TERMPLOT_*` for its own process settings, not `AHPLT_*`.

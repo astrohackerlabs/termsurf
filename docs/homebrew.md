@@ -1,9 +1,9 @@
 # Homebrew
 
-Issue 26091322413429 Experiment 1 prepares the shared
-`astrohackerlabs/astrohacker` tap for NuTorch 2.0.4 and TermSurf 0.3.25.
-The instructions below describe that candidate. Publication and fresh-install
-qualification are pending; do not deploy these instructions before qualification.
+Issue 26091322413429 Experiment 1 published NuTorch 2.0.4 and TermSurf 0.3.25
+through `astrohackerlabs/astrohacker`, with installed use accepted by Ryan.
+Experiment 2 publishes the corrected trust-first installation instructions.
+Strict pristine-machine installation evidence remains unproven.
 See [shared-tap rollout](homebrew-shared-tap.md) for ordering and migration.
 
 The next release uses Homebrew-installed NuTorch as the default shell. The cask
@@ -84,8 +84,8 @@ second formula.
 ## Install
 
 ```nu
-brew tap astrohackerlabs/astrohacker
 brew trust astrohackerlabs/astrohacker
+brew tap astrohackerlabs/astrohacker
 brew install --cask termsurf
 ```
 
@@ -240,7 +240,8 @@ and credential discovery. After the operator types the exact confirmation, it:
    the release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
 2. proves or reconstructs all released fork inputs from the tracked cumulative
    patch manifest (Ghostty, Nushell, Reedline, Chromium; WebKit/Gecko historical
-   archives are excluded from ship; editor fork excluded);
+   archives are excluded from ship; editor fork excluded), automatically upgrading
+   clean checkouts at an exact older prefix of the selected cumulative series;
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
 4. packages one archive and freezes its SHA-256;
@@ -255,6 +256,22 @@ The release command runs no product tests, smokes, browser checks, screenshots,
 or UI automation. Publication and product qualification are separate. Agents
 may implement or review the command, but the human operator owns its publishing
 confirmation and the resulting app acceptance.
+
+Fork preparation validates all selected inputs before changing any checkout.
+It reconstructs a newer series in an isolated clone, proves its ordered patch
+identities and final tree, and activates the manifest-selected branch. Original
+branches, valid ignored caches, and pinned nested checkouts remain in place.
+TermSurf preparation and explicit NuTorch preparation share repository-local
+`nutorch-prepare.lock` locks. A repeated release attempt verifies already-prepared
+inputs and continues normally.
+
+Dirty/divergent history, active Git operations, conflicting target branches,
+occupied worktrees, and ignored files at incoming tracked paths stop preparation.
+The error identifies completed fork steps and any retained reconstruction.
+Preserve that evidence, resolve the reported conflict, and retry the same release
+version or its saved transaction. Changed-base history requires explicit
+provenance recovery; automatic upgrade accepts exact prefixes of the selected
+cumulative series with the selected base available locally.
 
 ### Lower-level helpers
 
@@ -452,9 +469,9 @@ human action. Setup and confirmation are documented in
 release and installation. TermSurf publication neither builds nor bumps NuTorch.
 
 ```nu
-brew tap astrohackerlabs/astrohacker
 brew trust astrohackerlabs/astrohacker
-brew install astrohackerlabs/astrohacker/nutorch
+brew tap astrohackerlabs/astrohacker
+brew install nutorch
 ```
 
 The formula provides the `nutorch` shell and its runtime libraries/licenses.

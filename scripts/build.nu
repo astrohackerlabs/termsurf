@@ -89,8 +89,15 @@ def build-nutorch [opts: record] {
   if $opts.clean { error make {msg: 'NuTorch builds preserve caches. Diagnose and explicitly approve a scoped clean separately.'} }
   cd $workspace
   let args = (if $opts.release { [--release] } else { [] })
-  ^cargo build --locked --bin nutorch ...$args
-  if $env.LAST_EXIT_CODE != 0 { error make {msg: 'NuTorch build failed'} }
+  if $opts.release {
+    with-env {MACOSX_DEPLOYMENT_TARGET: '26.0'} {
+      ^cargo build --locked --bin nutorch ...$args
+      if $env.LAST_EXIT_CODE != 0 { error make {msg: 'NuTorch build failed'} }
+    }
+  } else {
+    ^cargo build --locked --bin nutorch ...$args
+    if $env.LAST_EXIT_CODE != 0 { error make {msg: 'NuTorch build failed'} }
+  }
 }
 
 def build-chromiumd [opts: record] {
