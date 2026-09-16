@@ -10,7 +10,8 @@ The next release uses Homebrew-installed NuTorch as the default shell. The cask
 requires `astrohackerlabs/astrohacker/nutorch` without a version constraint; the
 TermSurf archive contains no shell or LibTorch copy. Installed qualification is
 pending in Issue 26091215074416 Experiment 7. Current supported installation is
-Apple silicon on macOS Tahoe 26.x, matching the NuTorch binary distribution.
+Apple silicon on macOS 26 (Tahoe) and newer, including macOS 27, with no upper
+version limit. NuTorch is installed separately through the shared tap.
 
 **Canonical user install and operator release documentation** for Astrohacker
 on Apple silicon macOS. Shell / direct install (`install.sh`) is **retired** as
