@@ -2,7 +2,9 @@
 
 This is the durable record for ignored product forks. Every intentional source
 edit under `forks/` must be represented here; there is no local-only fork
-change.
+change. Never `git add` a path under `forks/`. Checkout `AGENTS.md` files are
+ignored with the clone; write operator guidance in this tree
+(`patches/<fork>/AGENTS.md`).
 
 Before editing, create or switch to a branch containing both issue id and
 experiment number:
@@ -29,6 +31,39 @@ A zero-patch tip pin is allowed only when no intentional Astrohacker source edit
 exists; never create no-op patches. Per-fork reconstruction and archive style
 live in each `README.md`; local hazards live in its `AGENTS.md`.
 
-Chromium, Ghostty, Nushell, Reedline, and Nexus are active patch/pin workspaces.
+Chromium, Ghostty, Nushell, Reedline, Nexus, and Red are active patch/pin workspaces.
+Red supplies the independent RedVim source baseline; TermSurf and NuTorch
+release preparation exclude it.
 WebKit, Gecko, and Ladybird are tombstones. Their historical archives remain
 immutable unless a new issue deliberately revives the engine.
+
+## Ah workflow
+
+From the monorepo checkout, import `use scripts/ah.nu *`. Use `ah fork ls`,
+`ah fork status [name]`, `ah fork check [name]`, `ah patch ls <name>` and
+`ah patch check <name>` for discovery and verification. The manifest defines
+the active ordered series; archive date or issue number does not select it.
+Patch checks need no clone. Status distinguishes actual commit identity from
+equivalent replayed patches and trees; readiness also requires cleanliness,
+the selected branch and pinned nested checkouts.
+
+Preview with `ah fork prepare <name> --dry-run`, then run
+`ah fork prepare <name>` to reconstruct and activate the selected series.
+This preserves old branches and caches and refuses unsafe/divergent state.
+PWD selects this checkout's forks, including on linked branches; no clone,
+network fetch, build, install, publication or fallback to main is implicit.
+
+For committed changes, use `ah patch export <name> --issue <id> --experiment <n>
+--from <commit> --dry-run`, then omit `--dry-run` to export. Supply the selected
+base for a cumulative archive, or a tip verified equivalent to the full selected
+series for a delta. The issue must be open, the experiment unfinished, and the
+clean fork branch must contain their IDs. Export verifies reconstruction and
+returns ordered hashes, HEAD/tree and a proposed manifest entry.
+
+Export only creates a new `patches/<name>/patches/issue-<id>/` directory;
+existing directories refuse. It does not support appending inside an existing
+issue archive or changing upstream bases. Such work retains the documented
+manual archive workflow; never delete historical patches to make export run.
+After export, explicitly update the reconstruction README, the manifest when
+the shipped series changes, and experiment evidence, then commit the archive
+with those records. Generated evidence is not approval or product qualification.

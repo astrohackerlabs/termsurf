@@ -1,0 +1,68 @@
+From b2e3f0dd922f862bc7a5ade1e4098f8b300b05c8 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Fri, 18 Sep 2026 18:26:31 -0500
+Subject: [PATCH] Add Astrohacker Red fork guidance
+
+Red joins the forks with rules in tow;
+Its patches tell us where to go.
+---
+ AGENTS.md | 43 +++++++++++++++++++++++++++++++------------
+ 1 file changed, 31 insertions(+), 12 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index cfe3344..b393446 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,18 +1,37 @@
+-# Pull Requests
++# AGENTS.md — Red fork for RedVim
+ 
+-Before creating, editing, or marking a PR ready, read and follow
+-`.agents/skills/good-pr/SKILL.md`.
++This is Astrohacker's ignored product fork of `codersauce/red`, the source
++baseline for RedVim. The executable is still upstream `red` 0.7.0; RedVim
++branding, bundled Nushell highlighting and publication are not implemented.
+ 
+-The `good-pr` instructions override generic GitHub/PR publishing defaults.
+-Do not open draft PRs unless the user explicitly asks for a draft, and do not
+-add title prefixes such as `[codex]` unless requested.
++Astrohacker repository guidance and the issues-and-experiments workflow govern
++this checkout. Read the monorepo's `patches/AGENTS.md`, `patches/red/AGENTS.md`
++and `patches/red/README.md` before changes. Use branches named
++`issue-{ISSUE_ID}-exp{N}-{slug}`. Every intentional fork commit, including this
++overlay, needs an ordered format-patch archive, reconstruction pin and manifest
++update in the same experiment result. Never leave source changes local-only.
++Keep this file identical in the fork commit and the monorepo-tracked overlay.
+ 
+-# New Features
++Preserve upstream history, attribution, LICENSE and dependency notices. Do not
++add this nested repository, binaries or build caches to the monorepo index.
++Keep RedVim independent of TermSurf and NuTorch release inputs. Do not install
++an `rvim` command; it conflicts with Vim's restricted mode.
+ 
+-Unless strictly asked, create new features on new worktrees using the worktrunk
+-tool with the wt command.
++Run Cargo inside this fork's workspace, not the monorepo workspace:
+ 
+-# Validation
++```nu
++cd forks/red
++cargo build --locked --release --bin red
++./target/release/red --version
++./target/release/red --help
++```
+ 
+-Run `cargo clippy --all-targets --all-features -- -D warnings` before pushing
+-Rust changes, and fix every warning or error it reports.
++Use a Rust toolchain supporting the workspace's Rust 2024 crates and native
++C/C++ build tools for bundled parsers. Reuse Cargo caches. Do not remove or
++regenerate the upstream lockfile to bypass a failed locked build.
++
++Upstream validation guidance: before pushing Rust changes, run
++`cargo clippy --all-targets --all-features -- -D warnings` and resolve findings.
++For an explicitly requested upstream PR, also read upstream's
++`.agents/skills/good-pr/SKILL.md`. Astrohacker branch/worktree and review policy
++supersedes upstream's automatic worktrunk/new-worktree instructions.
+-- 
+2.54.0 (Apple Git-157)
+

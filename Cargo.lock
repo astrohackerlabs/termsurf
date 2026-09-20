@@ -44,16 +44,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "ah-chromiumd"
-version = "0.3.28"
-dependencies = [
- "prost 0.14.4",
- "prost-build 0.14.4",
-]
-
-[[package]]
 name = "ahnexus"
-version = "0.3.28"
+version = "0.3.29"
 dependencies = [
  "axum 0.8.9",
  "clap",
@@ -85,20 +77,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "ahweb"
-version = "0.3.28"
-dependencies = [
- "arboard",
- "clap",
- "crossterm",
- "edtui",
- "libc",
- "prost 0.14.4",
- "prost-build 0.14.4",
- "ratatui",
 ]
 
 [[package]]
@@ -4069,6 +4047,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd124222d17ad93a644ed9d011a40f4fb64aa54275c08cc216524a9ea82fb09f"
 dependencies = [
  "digest 0.10.7",
+]
+
+[[package]]
+name = "roamari"
+version = "0.1.5"
+dependencies = [
+ "arboard",
+ "clap",
+ "crossterm",
+ "edtui",
+ "libc",
+ "prost 0.14.4",
+ "prost-build 0.14.4",
+ "ratatui",
+]
+
+[[package]]
+name = "roamari-chromiumd"
+version = "0.1.5"
+dependencies = [
+ "prost 0.14.4",
+ "prost-build 0.14.4",
 ]
 
 [[package]]

@@ -2,17 +2,17 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() {
-    emit_astrohacker_cli_version();
-    println!("cargo:rerun-if-changed=../../proto/termsurf.proto");
+    emit_cli_version();
+    println!("cargo:rerun-if-changed=../../../termsurf/proto/termsurf.proto");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-    // Crate lives at code/termsurf/rs/ah-chromiumd; monorepo root is four parents up.
+    // Crate lives at code/roamari/rs/roamari-chromiumd; monorepo root is four parents up.
     let repo_root = manifest_dir
         .parent()
         .and_then(|rs_dir| rs_dir.parent())
-        .and_then(|termsurf_dir| termsurf_dir.parent())
+        .and_then(|roamari_dir| roamari_dir.parent())
         .and_then(|code_dir| code_dir.parent())
-        .expect("ah-chromiumd must live under code/termsurf/rs/ in the monorepo");
+        .expect("roamari-chromiumd must live under code/roamari/rs/ in the monorepo");
 
     // Chromium build output directory in the ignored top-level fork checkout.
     let chromium_out = env::var_os("TERMSURF_CHROMIUM_OUT")
@@ -34,13 +34,14 @@ fn main() {
 
     // Compile protobuf (same pattern as TUI).
     prost_build::Config::new()
-        .compile_protos(&["../../proto/termsurf.proto"], &["../../proto/"])
+        .compile_protos(
+            &["../../../termsurf/proto/termsurf.proto"],
+            &["../../../termsurf/proto/"],
+        )
         .unwrap();
 }
 
-fn emit_astrohacker_cli_version() {
-    println!("cargo:rerun-if-env-changed=ASTROHACKER_VERSION");
-    let version =
-        env::var("ASTROHACKER_VERSION").unwrap_or_else(|_| env::var("CARGO_PKG_VERSION").unwrap());
+fn emit_cli_version() {
+    let version = env::var("CARGO_PKG_VERSION").unwrap();
     println!("cargo:rustc-env=ASTROHACKER_CLI_VERSION={version}");
 }

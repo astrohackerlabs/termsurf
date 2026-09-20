@@ -7,6 +7,9 @@ own the shared workspaces; names remain unprefixed crates or
 
 The shell formerly at `code/termsurf/rs/ahsh` now belongs to NuTorch's isolated
 workspace at `code/nutorch/rs/shell`. Build it with `scripts/build.nu nutorch`.
+The browser client formerly at `code/termsurf/rs/ahweb` now belongs to Roamari
+at `code/roamari/rs/roamari`. Build it with `scripts/build.nu roamari`. The
+engine helper is `roamari-chromiumd` at `code/roamari/rs/roamari-chromiumd`.
 Fixtures
 `code/termsurf/ts/test-html` and `code/termsurf/ts/slow-load` are private Bun
 workspace members for shared formatting, linting and typechecking; they are
@@ -26,6 +29,11 @@ approved and applied; human acceptance is recorded. Legacy Pages requires explic
 confirmation. See infra guidance; routine publishing never changes DNS.
 
 ## Product boundaries
+
+Ryan's personal homepage and blog are at `code/rxc/ts/rxccom`, a root Bun
+workspace using shared UI and SpaceRain. `bun run dev:rxccom` serves port 3530.
+It retains Cloudflare Pages project `rxc`; `scripts/deploy-rxccom.nu` is its
+separate publisher. CV and personal agent skills were not imported.
 
 WebBuf is integrated at `code/webbuf/rs/` and `code/webbuf/ts/`, in the root
 Cargo and Bun workspaces. Public `@webbuf/*`, `webbuf` and `webbuf_*` names are
@@ -48,7 +56,7 @@ approval gates. No executable release inclusion.
   Rust. Other React apps use React Router framework mode as configured.
 - ahcom owns its MySQL schema with push-only Drizzle. ebxcom/ebxdb own the
   EarthBucks MySQL schema. TermSurf apps, UI, and static sites have no DB.
-- `ah-chromiumd` consumes optional
+- `roamari-chromiumd` consumes optional
   `--render-surface-service=<NAME>` before Chromium argument handling.
 
 Package-specific commands and traps belong in the nearest package guidance.

@@ -1,0 +1,48 @@
+From a4f5a5638429b4dd0a94852151755e60692e923a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 06:53:02 -0500
+Subject: [PATCH] Prepare RedVim for automatic version updates
+
+The test reads its badge instead of a date.
+New patches can pass through the same gate.
+---
+ AGENTS.md                | 5 +++--
+ tests/redvim_identity.rs | 5 ++++-
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 640c7dd..2f49738 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,9 +1,10 @@
+ # AGENTS.md — Red fork for RedVim
+ 
+ This is Astrohacker's ignored product fork of `codersauce/red`, the source
+-baseline for RedVim. The executable is `redvim` 0.7.0, with independent RedVim configuration. Nushell's
++baseline for RedVim. The executable is `redvim`, with independent RedVim configuration. Nushell's
+ parser and highlighting queries are bundled; see `docs/NUSHELL.md` for pinned
+-provenance. The shared-tap publisher is human-operated; installed qualification is pending.
++provenance. The shared-tap publisher is human-operated; installed 0.7.0 use was
++accepted in Experiment 5. The publisher archives each automatic version bump.
+ 
+ Astrohacker repository guidance and the issues-and-experiments workflow govern
+ this checkout. Read the monorepo's `patches/AGENTS.md`, `patches/red/AGENTS.md`
+diff --git a/tests/redvim_identity.rs b/tests/redvim_identity.rs
+index b659f88..8d81bd7 100644
+--- a/tests/redvim_identity.rs
++++ b/tests/redvim_identity.rs
+@@ -8,7 +8,10 @@ fn redvim_identity_and_configuration_are_independent_of_red() {
+     let old = root.path().join("red/config.toml");
+     fs::write(&old, "this is deliberately invalid TOML").unwrap();
+     for (args, expected) in [
+-        (vec!["--version"], "redvim 0.7.0"),
++        (
++            vec!["--version"],
++            concat!("redvim ", env!("CARGO_PKG_VERSION")),
++        ),
+         (vec!["--help"], "Usage: redvim"),
+         (vec!["--check-config"], "config ok"),
+         (vec!["--self-check"], "language nu: bundled highlighting ok"),
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,19 +1,19 @@
 # Astrohacker TermSurf
 
 **Astrohacker TermSurf** is a desktop host with a real browser in the pane. Run
-`ahweb`, open a URL, and the page appears alongside shells and other terminal
+`roamari`, open a URL, and the page appears alongside shells and other terminal
 workflows.
 
 Open a site in a browser pane:
 
 ```bash
-ahweb astrohacker.com
+roamari astrohacker.com
 ```
 
 Open the same site under a named browser profile (separate cookies and logins):
 
 ```bash
-ahweb astrohacker.com --profile work
+roamari astrohacker.com --profile work
 ```
 
 **TermSurf apps** are native graphical apps that run inside your terminal with
@@ -160,21 +160,27 @@ fetching source (this repo does not vendor Chromium).
 3. Pattern (simplified; **use the base SHA and archive list from the
    release-manifest + per-fork README**, not invent paths):
 
-   ```bash
-   # Example shape only — replace base, branch, and archive dirs from the pin.
-   cd forks/<fork>
-   git checkout <base-from-release-manifest>
-   git checkout -b <product-branch-name>
-   git am ../../patches/<fork>/patches/<issue-dir>/*.patch
-   # …apply every directory listed for that fork in order…
+   ```nu
+   # Run from the repository root after provisioning the fork and recorded base.
+   let entry = (open patches/release-manifest.json | get forks | where name == ghostty | first)
+   let root = $env.PWD
+   let files = ($entry.patch_directories | each {|dir|
+     glob ($root | path join $dir '*.patch') | sort
+   } | flatten)
+   git -C $entry.checkout switch -c $entry.branch $entry.base
+   if not ($files | is-empty) { git -C $entry.checkout am ...$files }
    ```
 
    Chromium’s base is an Electron Chromium tag/commit recorded in the
    manifest; fetch that tree with `depot_tools` / your usual Chromium workflow
    into `forks/chromium/src`, then apply the Chromium series the same way.
 
-4. Confirm `git rev-parse HEAD` (and tree, if you verify) matches
-   `expected_head` / `expected_tree` in `release-manifest.json` for that fork.
+4. Confirm the reconstructed tree matches `expected_tree` and the ordered patch
+   identities/count match the selected archive. Record `git rev-parse HEAD`
+   separately: replaying the same patches can change commit hashes, so equality
+   with `expected_head` alone is not the reconstruction oracle. In the internal
+   Astrohacker monorepo, `ah fork check <name>` performs the full readiness check;
+   see its `patches/AGENTS.md` for preparation and export tooling.
 
 Expect a **large** Chromium build (many GB, often hours on first compile).
 
@@ -183,8 +189,8 @@ Expect a **large** Chromium build (many GB, often hours on first compile).
 After forks are reconstructed and (for Chromium) built as needed:
 
 ```nu
-scripts/build.nu chromium      # Chromium fork / ah-chromiumd path
-scripts/build.nu ahweb
+scripts/build.nu chromium      # Chromium fork / roamari-chromiumd path
+scripts/build.nu roamari
 scripts/build.nu ahterm
 ```
 
@@ -212,12 +218,12 @@ cd macos
 ./build.nu --configuration Debug --action build
 ```
 
-Inside Astrohacker TermSurf, run a local `ahweb` and point it at a built
-engine (paths after a successful Chromium/`ah-chromiumd` build):
+Inside Astrohacker TermSurf, run a local `roamari` and point it at a built
+engine (paths after a successful Chromium/`roamari-chromiumd` build):
 
 ```bash
-./rust/target/debug/ahweb \
-  --browser ./forks/chromium/src/out/Default/ah-chromiumd \
+./target/debug/roamari \
+  --browser ./forks/chromium/src/out/Default/roamari-chromiumd \
   https://example.com
 ```
 

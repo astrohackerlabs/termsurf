@@ -1,6 +1,49 @@
 # Ghostty Patches
 
-## Active Pin (Issue 26091215074416 Exp 7 NuTorch default)
+## Current operator commands
+
+Run from the intended monorepo checkout; the manifest selects the ordered series.
+Existing clones and their recorded base objects must already be provisioned.
+
+```nu
+use scripts/ah.nu *
+ah fork status ghostty
+ah patch ls ghostty
+ah patch check ghostty
+ah fork prepare ghostty --dry-run
+ah fork prepare ghostty
+ah fork check ghostty
+```
+
+Preparation preserves original branches and caches and refuses divergent state.
+Linked checkouts use their own local forks, with no fallback to main.
+For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
+export verifies a new issue archive and proposes pins; README, manifest and
+experiment updates remain explicit. Existing archive directories refuse.
+Older pin recipes below are historical reconstruction context; the manifest
+and these commands select current inputs.
+
+## Active Pin (Issue 26092000444652 Exp 1 roamari cask artifact)
+
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26092000444652-exp1-roamari-cask-artifact`
+- **Product parent:** `0e82fb68eeef974b7684f89ca516997a0e72396e`
+- **Product HEAD:** `52163ef98eb9da2b1e6d9101e945110b93a81709`
+- **Product tree:** `6a375c3d8281b040d37849a382dad22fed4a057f`
+- **Patches:** prior 42 plus
+  `issue-26092000444652/0001-Resolve-Chromium-helper-at-roamari-artifact-path.patch`
+  (43 total).
+- **Archive SHA-256:** `968d420ea90ae322d87cb7f8eac65234bf425744d221e487acf9b68de0998cea`
+- **Toolchain:** Zig 0.16.0.
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Scope:** installed default is
+  `/opt/homebrew/opt/roamari-chromiumd/roamari-chromiumd`. PATH
+  `roamari-chromiumd` is used only when `libtermsurf_chromium.dylib` sits
+  next to it.
+- **Verification:** `ah patch check ghostty`. Real published Homebrew cask
+  install remains Ryan's gate.
+
+## Prior Active Pin (Issue 26091410263129 Exp 4 roamari-chromiumd)
 
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
 - **Product branch:** `issue-26091215074416-exp7-nutorch-default`

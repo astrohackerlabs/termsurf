@@ -13,8 +13,8 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component>"
-  print "Components: ahterm, ah-chromiumd, ahweb, all"
-  print "Aliases: aht→ahterm, webtui→ahweb"
+  print "Components: ahterm, roamari-chromiumd, roamari, all"
+  print "Aliases: aht→ahterm"
 }
 
 def is-root [] {
@@ -22,7 +22,7 @@ def is-root [] {
 }
 
 def needs-root [component: string, chromiumd_install_dir: string, applications_dir: string] {
-  if $component == "ah-chromiumd" and $chromiumd_install_dir != "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd" {
+  if $component == "roamari-chromiumd" and $chromiumd_install_dir != "/opt/homebrew/opt/roamari-chromiumd" {
     try {
       mkdir $chromiumd_install_dir
     } catch {
@@ -62,32 +62,33 @@ def reexec-root [applications_dir: string, chromiumd_install_dir: string, args: 
 }
 
 def install-chromiumd [rust_dir: string, chromium_out: string, chromiumd_install_dir: string] {
-  let chromiumd_src = ($rust_dir | path join "target/release/ah-chromiumd")
+  let chromiumd_src = ($rust_dir | path join "target/release/roamari-chromiumd")
   let install_dir = $chromiumd_install_dir
 
   if not (is-f $chromiumd_src) {
     print $"Error: Release build not found at ($chromiumd_src)"
-    print "Run: scripts/build.nu ah-chromiumd --release"
+    print "Run: scripts/build.nu roamari-chromiumd --release"
     print "(alias: scripts/build.nu chromium --release)"
     exit 1
   }
 
-  print $"==> Installing ah-chromiumd to ($install_dir)..."
+  print $"==> Installing roamari-chromiumd to ($install_dir)..."
   mkdir $install_dir
-  ^cp $chromiumd_src ($install_dir | path join "ah-chromiumd")
+  ^cp $chromiumd_src ($install_dir | path join "roamari-chromiumd")
 
   copy-chromium-runtime-resources $chromium_out $install_dir
 
-  print "==> Codesigning ah-chromiumd..."
-  try { ^codesign --force --sign - ($install_dir | path join "ah-chromiumd") } catch { }
+  print "==> Codesigning roamari-chromiumd..."
+  try { ^codesign --force --sign - ($install_dir | path join "roamari-chromiumd") } catch { }
 
   ^rm -rf /usr/local/chromium
   ^rm -f /usr/local/bin/chromium
   ^rm -rf /usr/local/lib/chromium
   ^rm -rf /opt/homebrew/opt/astrohacker-terminal-chromium
+  ^rm -rf /opt/homebrew/opt/astrohacker-terminal-ah-chromiumd
 
   print $"  Dir: ($install_dir)"
-  print $"  Bin: ($install_dir)/ah-chromiumd"
+  print $"  Bin: ($install_dir)/roamari-chromiumd"
 }
 
 def install-ahterm [ahterm_release_app: string, applications_dir: string, lsregister: string] {
@@ -114,20 +115,20 @@ def install-ahterm [ahterm_release_app: string, applications_dir: string, lsregi
   print $"  App: ($app)"
 }
 
-def install-ahweb [rust_dir: string] {
-  let web = ($rust_dir | path join "target/release/ahweb")
+def install-roamari [rust_dir: string] {
+  let web = ($rust_dir | path join "target/release/roamari")
 
   if not (is-f $web) {
     print $"Error: Release build not found at ($web)"
-    print "Run: scripts/build.nu ahweb --release"
+    print "Run: scripts/build.nu roamari --release"
     exit 1
   }
 
-  print "==> Installing ahweb to /usr/local/bin/ahweb..."
-  ^cp $web /usr/local/bin/ahweb
-  try { ^codesign --force --sign - /usr/local/bin/ahweb } catch { }
+  print "==> Installing roamari to /usr/local/bin/roamari..."
+  ^cp $web /usr/local/bin/roamari
+  try { ^codesign --force --sign - /usr/local/bin/roamari } catch { }
 
-  print "  Bin: /usr/local/bin/ahweb"
+  print "  Bin: /usr/local/bin/roamari"
 }
 
 def --wrapped main [...args: string] {
@@ -138,7 +139,7 @@ def --wrapped main [...args: string] {
   let lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
   let ahterm_release_app = ($repo_dir | path join "forks/ghostty/macos/build/Release/Astrohacker Terminal.app")
   let applications_dir = ($env.TERMSURF_APPLICATIONS_DIR? | default "/Applications")
-  let chromiumd_install_dir = ($env.ASTROHACKER_CHROMIUM_INSTALL_DIR? | default "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd")
+  let chromiumd_install_dir = ($env.ASTROHACKER_CHROMIUM_INSTALL_DIR? | default "/opt/homebrew/opt/roamari-chromiumd")
 
   mut component = ($args | get 0? | default "")
 
@@ -149,11 +150,10 @@ def --wrapped main [...args: string] {
 
   match $component {
     "aht" => { $component = "ahterm" }
-    "webtui" => { $component = "ahweb" }
     _ => {}
   }
 
-  if $component not-in ["ahterm" "ah-chromiumd" "ahweb" "all"] {
+  if $component not-in ["ahterm" "roamari-chromiumd" "roamari" "all"] {
     print $"Unknown component: ($component)"
     usage
     exit 1
@@ -170,13 +170,13 @@ def --wrapped main [...args: string] {
   }
 
   match $component {
-    "ah-chromiumd" => { install-chromiumd $rust_dir $chromium_out $chromiumd_install_dir }
+    "roamari-chromiumd" => { install-chromiumd $rust_dir $chromium_out $chromiumd_install_dir }
     "ahterm" => { install-ahterm $ahterm_release_app $applications_dir $lsregister }
-    "ahweb" => { install-ahweb $rust_dir }
+    "roamari" => { install-roamari $rust_dir }
     "all" => {
       install-chromiumd $rust_dir $chromium_out $chromiumd_install_dir
       install-ahterm $ahterm_release_app $applications_dir $lsregister
-      install-ahweb $rust_dir
+      install-roamari $rust_dir
       print ""
       print "Done (all)."
     }

@@ -1,6 +1,29 @@
 # Chromium Patches
 
-Astrohacker Terminal uses Chromium through the Roamium engine. The Chromium
+## Current operator commands
+
+Run from the intended monorepo checkout; the manifest selects the ordered series.
+Existing clones and their recorded base objects must already be provisioned.
+
+```nu
+use scripts/ah.nu *
+ah fork status chromium
+ah patch ls chromium
+ah patch check chromium
+ah fork prepare chromium --dry-run
+ah fork prepare chromium
+ah fork check chromium
+```
+
+Preparation preserves original branches and caches and refuses divergent state.
+Linked checkouts use their own local forks, with no fallback to main.
+For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
+export verifies a new issue archive and proposes pins; README, manifest and
+experiment updates remain explicit. Existing archive directories refuse.
+Older pin recipes below are historical reconstruction context; the manifest
+and these commands select current inputs.
+
+Astrohacker TermSurf uses Chromium for web content. The Chromium
 working tree is local-only under `forks/chromium/src`; Chromium tooling lives in
 `forks/chromium/depot_tools`. This directory tracks the patch archives and
 branch notes that are safe to commit.

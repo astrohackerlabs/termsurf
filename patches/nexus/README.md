@@ -1,5 +1,28 @@
 # Nexus Patches
 
+## Current operator commands
+
+Run from the intended monorepo checkout; the manifest selects the ordered series.
+Existing clones and their recorded base objects must already be provisioned.
+
+```nu
+use scripts/ah.nu *
+ah fork status nexus
+ah patch ls nexus
+ah patch check nexus
+ah fork prepare nexus --dry-run
+ah fork prepare nexus
+ah fork check nexus
+```
+
+Preparation preserves original branches and caches and refuses divergent state.
+Linked checkouts use their own local forks, with no fallback to main.
+For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
+export verifies a new issue archive and proposes pins; README, manifest and
+experiment updates remain explicit. Existing archive directories refuse.
+Older pin recipes below are historical reconstruction context; the manifest
+and these commands select current inputs.
+
 Astrohacker TermSurf chat (`ahnexus`) uses a **product fork** of upstream
 Nexus under `forks/nexus`. The primary consumer is the `nexus-common` crate
 (protocol framing, types, TLS helpers). The iced `nexus-client` GUI is **not**

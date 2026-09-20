@@ -21,8 +21,9 @@ Full environment variable taxonomy: [`docs/environment.md`](./environment.md).
 
 Astrohacker ships to macOS through the `astrohackerlabs/astrohacker` Homebrew tap.
 There is **one desktop download**: the cask `termsurf`. It installs
-Astrohacker TermSurf, Web, and related helpers, with NuTorch installed as a formula
-dependency. The app lands in **`/Applications/Astrohacker TermSurf.app`**.
+Astrohacker TermSurf and related helpers, with NuTorch as a formula dependency
+and roamari as a cask dependency (browser + Chromium). The app lands in
+**`/Applications/Astrohacker TermSurf.app`**.
 
 ## Public command surface
 
@@ -30,11 +31,9 @@ Released PATH names (machine-readable for gates):
 
 <!-- released-wrappers -->
 ahterm
-ahweb
 ahcalc
 ahebx
 ahnexus
-ah-chromiumd
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
@@ -44,14 +43,13 @@ paths in the release tarball besides bare CLI binaries):
 ahcalc
 ahebx
 ahnexus
-ah-chromiumd
 <!-- /released-payload-roots -->
 
 | Command | Role |
 | --- | --- |
 | `ahterm` | Astrohacker TermSurf (app executable + PATH launcher) |
 | `nutorch` | NuTorch shell, supplied by the separate Homebrew dependency |
-| `ahweb` | Open URLs / browser panes in Terminal |
+| `roamari` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
 | `ahebx` | EarthBucks miner TermSurf app (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
@@ -60,14 +58,14 @@ Reserved (not shipping until the product ships): `ahwallet`.
 
 There is **no** `ah` / `astrohacker` meta CLI dispatcher today.
 
-Engine helpers (implementation; on PATH for packaging/debug):
+Engine helper (from the roamari cask, not the TermSurf tarball):
 
-- `ah-chromiumd`
+- `roamari-chromiumd` at `/opt/homebrew/opt/roamari-chromiumd/roamari-chromiumd`
 
 **Not released:** `ah-webkitd` / webkit (archived; Issue 26072120115614).
 Gecko / `ah-geckod` was never a shipped product engine (Issue 26072121272459).
 
-Engine **selectors** for `ahweb`: family name `chromium` is the shipped
+Engine **selectors** for `roamari`: family name `chromium` is the shipped
 product engine. Historical names such as `webkit` are not shipped in the
 Homebrew cask.
 
@@ -122,14 +120,15 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `ahweb`, `ahcalc`, `ahebx`,
+- PATH: `ahterm`, `roamari`, `ahcalc`, `ahebx`,
   `ahnexus`, engine helpers
 - Shell dependency: `/opt/homebrew/bin/nutorch`. With no explicit `command`,
   TermSurf selects that path (then `/usr/local/bin/nutorch`), even from a GUI
   launch without Homebrew on PATH. An explicit shell setting takes precedence;
   remove an old ahsh `command` setting to use the new default.
 - Chromium tree →
-  `/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/`
+  `/opt/homebrew/opt/roamari-chromiumd/`
+  (TermSurf may still stage a copy until cask `depends_on`)
 - ahcalc package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
   or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
@@ -151,11 +150,11 @@ Top-level contents:
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/third_party/` (Chromium credits/LICENSE
   copyrights, Nushell/Reedline LICENSE copies)
-- `ahweb`
+- `roamari`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahebx/` (payload: `dist/ahebx`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
-- `ah-chromiumd/`
+- `roamari-chromiumd/`
 
 Gate before publish: `scripts/check-release-legal-notices.nu` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -174,6 +173,23 @@ Canonical three-repository Homebrew release flow. Packaging scripts live in the
 | Homebrew tap | `~/dev/homebrew-astrohacker` | `astrohackerlabs/homebrew-astrohacker` |
 
 Cask file: `~/dev/homebrew-astrohacker/Casks/termsurf.rb`
+
+Roamari is a separate PATH cask. Chromium is a cask artifact, not a formula keg:
+
+| Role | Local default | GitHub |
+| --- | --- | --- |
+| Public roamari source | `~/dev/roamari` | `astrohackerlabs/roamari` |
+| Cask | `~/dev/homebrew-astrohacker/Casks/roamari.rb` | same shared tap |
+
+```nu
+brew trust astrohackerlabs/astrohacker
+brew tap astrohackerlabs/astrohacker
+brew uninstall roamari
+brew install --cask roamari
+```
+
+See [roamari release](roamari/release.md). TermSurf's cask `depends_on` roamari
+and does not stage the browser or Chromium tree.
 
 Env overrides: `ASTROHACKER_TERMINAL_PUBLIC_REPO`,
 `ASTROHACKER_TERMINAL_PUBLIC_GITHUB_REPO`,
@@ -234,7 +250,7 @@ Before confirmation the command performs read-only version, repository, tool,
 and credential discovery. After the operator types the exact confirmation, it:
 
 1. sets first-party product Cargo package versions to the selected release
-   version (`ahweb`, `ah-chromiumd`), refreshes their `Cargo.lock`
+   version (`ahnexus`), refreshes their `Cargo.lock`
    files, commits that bump on private `main` when needed, and pushes it so
    the monorepo stays aligned with `origin/main`. This step never rewrites
    anything under `forks/` (fork trees are out of scope; `ahterm` still gets
@@ -259,7 +275,25 @@ may implement or review the command, but the human operator owns its publishing
 confirmation and the resulting app acceptance.
 
 Fork preparation validates all selected inputs before changing any checkout.
-It reconstructs a newer series in an isolated clone, proves its ordered patch
+For interactive diagnosis from the intended monorepo checkout:
+
+```nu
+use scripts/ah.nu *
+ah fork status
+ah fork check
+ah patch check chromium
+ah fork prepare chromium --dry-run
+ah fork prepare chromium
+```
+
+`prepare` changes exactly one named fork; the publisher retains its existing
+all-selected-fork preparation. Archive checks work without clones. Linked
+branches use their own manifest and local forks, never main's ignored clones.
+Missing clones/bases require separate provisioning. See `patches/AGENTS.md`
+for patch export and explicit shipping-pin updates. These commands do not
+publish, install, clean caches or replace the human publication gate.
+
+Shared preparation reconstructs a newer series in an isolated clone, proves its ordered patch
 identities and final tree, and activates the manifest-selected branch. Original
 branches, valid ignored caches, and pinned nested checkouts remain in place.
 TermSurf preparation and explicit NuTorch preparation share repository-local
@@ -328,7 +362,7 @@ normal operator interface.
    Version contract:
 
    - First-party product crate package versions under the monorepo root track the
-     Homebrew release version (`ahweb`, `ah-chromiumd`, `ahnexus`). The
+     Homebrew release version (`ahnexus`). The
      canonical command rewrites and commits those manifests before building so
      `CARGO_PKG_VERSION` matches the cask. It also rewrites `code/termsurf/ts/ahcalc`,
      and `code/earthbucks/ts/ahebx` `package.json` `"version"` and
@@ -347,11 +381,11 @@ normal operator interface.
 
      | Wrapper | Expected first line |
      | --- | --- |
-     | `ahweb --version` | `Astrohacker Web <version>` |
+     | `roamari --version` | `Roamari <independent X.Y.Z>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
      | `ahebx --version` | `Astrohacker EarthBucks <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
-     | `ah-chromiumd --version` | `Astrohacker Chromium Engine <version>` |
+     | `roamari-chromiumd --version` | `Roamari Chromium Engine <independent X.Y.Z>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be
      shown only as secondary detail after the product release line.
@@ -492,7 +526,7 @@ TermPlot files. Publication and installed-upgrade qualification are pending.
 
 After install, from inside Astrohacker TermSurf:
 
-- `ahweb --browser chromium https://example.com`
+- `roamari --browser chromium https://example.com`
 
 Helpers resolve under `/opt/homebrew/opt/astrohacker-terminal-ah-*` without
 browser path env overrides.

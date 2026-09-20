@@ -24,7 +24,7 @@ Script-local bash variables may use `AHTERM_*` to match shipped binary
 | Variable | Role |
 | --- | --- |
 | `TERMSURF_SOCKET` | Host↔client IPC socket |
-| `TERMSURF_PANE_ID` | Pane id for `ahweb` |
+| `TERMSURF_PANE_ID` | Pane id for `roamari` |
 | `TERMSURF_ENGINE_STARTUP_TRACE` / `_FILE` | Engine warmup/startup traces |
 | `TERMSURF_PDF_INPUT_TRACE` / `_FILE` | PDF input traces |
 | `TERMSURF_WEBTUI_STATE_TRACE_FILE` | WebTUI debug state |
@@ -85,10 +85,13 @@ its children and privately remembers its inherited parent for native
 Receiver initialization failure clears both exports and disables sync in that
 shell, preventing accidental routing to an ancestor.
 
-Sockets use `$XDG_RUNTIME_DIR/astrohacker/nutorch/<random-id>.sock`, with private
-0700 directories and 0600 sockets. Unset, empty, relative or overlong runtime
-paths fall back, with a diagnostic, to `/tmp/nutorch-<uid>/`. An existing unsafe
-directory is an error, not a reason to bypass its ownership/mode checks. Normal
+Sockets use `$XDG_DATA_HOME/astrohacker/nutorch/<random-id>.sock`; unset, empty
+or relative XDG_DATA_HOME uses `$HOME/.local/share` as the data root. The NuTorch
+directory is private (0700) and sockets are 0600. The shared data root need not
+be private; the Astrohacker directory must be user-owned, not a symlink, and not
+writable by others. XDG_RUNTIME_DIR is not consulted. No /tmp fallback or routine
+storage notice is emitted. Overlong addresses require a shorter absolute
+XDG_DATA_HOME; inaccessible or unsafe directories disable sync with an error. Normal
 exit removes only the session's socket; forced termination can leave a stale
 random name that future sessions never reuse. No snapshots are stored on disk.
 

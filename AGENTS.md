@@ -18,7 +18,7 @@ Common build commands:
 
 ```nu
 scripts/build.nu chromium
-scripts/build.nu ahweb
+scripts/build.nu roamari
 scripts/build.nu ahterm
 scripts/build.nu termsurf --release
 ```

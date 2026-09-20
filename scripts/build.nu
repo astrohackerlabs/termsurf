@@ -1,5 +1,5 @@
 #!/usr/bin/env nu
-# Build ahterm / nutorch / ahweb / engines and related components.
+# Build ahterm / nutorch / roamari / engines and related components.
 
 def is-d [p: string] { (^test -d $p | complete).exit_code == 0 }
 def is-x [p: string] { (^test -x $p | complete).exit_code == 0 }
@@ -11,8 +11,8 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, ahweb, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, ah-chromiumd, termsurf, all"
-  print "Aliases: aht→ahterm, webtui→ahweb, chromium→ah-chromiumd"
+  print "Components: ahterm, roamari, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, roamari-chromiumd, termsurf, all"
+  print "Aliases: aht→ahterm, chromium→roamari-chromiumd"
 }
 
 def --env maybe-termsurf-version [] {
@@ -64,20 +64,20 @@ def build-chromium-fork [opts: record] {
   print $"  Chromium: ($opts.chromium_out)"
 }
 
-def build-ahweb [opts: record] {
+def build-roamari [opts: record] {
   cd $opts.rust_dir
   if $opts.clean {
-    print "==> Cleaning ahweb..."
-    ^cargo clean -p ahweb
+    print "==> Cleaning roamari..."
+    ^cargo clean -p roamari
   }
   if $opts.release {
-    print "==> Building ahweb (release)..."
-    ^cargo build --release -p ahweb
-    print $"  ahweb: ($opts.rust_dir)/target/release/ahweb"
+    print "==> Building roamari (release)..."
+    ^cargo build --release -p roamari
+    print $"  roamari: ($opts.rust_dir)/target/release/roamari"
   } else {
-    print "==> Building ahweb (debug)..."
-    ^cargo build -p ahweb
-    print $"  ahweb: ($opts.rust_dir)/target/debug/ahweb"
+    print "==> Building roamari (debug)..."
+    ^cargo build -p roamari
+    print $"  roamari: ($opts.rust_dir)/target/debug/roamari"
   }
 }
 
@@ -109,18 +109,18 @@ def build-chromiumd [opts: record] {
   }
   if $opts.clean {
     print "==> Cleaning Chromium..."
-    ^cargo clean -p ah-chromiumd
+    ^cargo clean -p roamari-chromiumd
   }
   if $opts.release {
     print "==> Building Chromium (release)..."
-    ^cargo build --release -p ah-chromiumd
-    ^cp ($opts.rust_dir | path join "target/release/ah-chromiumd") ($opts.chromium_out | path join "ah-chromiumd")
+    ^cargo build --release -p roamari-chromiumd
+    ^cp ($opts.rust_dir | path join "target/release/roamari-chromiumd") ($opts.chromium_out | path join "roamari-chromiumd")
   } else {
     print "==> Building Chromium (debug)..."
-    ^cargo build -p ah-chromiumd
-    ^cp ($opts.rust_dir | path join "target/debug/ah-chromiumd") ($opts.chromium_out | path join "ah-chromiumd")
+    ^cargo build -p roamari-chromiumd
+    ^cp ($opts.rust_dir | path join "target/debug/roamari-chromiumd") ($opts.chromium_out | path join "roamari-chromiumd")
   }
-  print $"  Chromium: ($opts.chromium_out)/ah-chromiumd"
+  print $"  Chromium: ($opts.chromium_out)/roamari-chromiumd"
 }
 
 def build-ahterm [opts: record] {
@@ -340,17 +340,17 @@ def --wrapped main [...args: string] {
 
   match $component {
     "chromium-fork" => { build-chromium-fork $opts }
-    "ahweb" | "webtui" => { build-ahweb $opts }
+    "roamari" => { build-roamari $opts }
     "ahcalc" => { build-ahcalc $opts }
     "termplot" => { build-termplot $opts }
     "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
-    "ah-chromiumd" | "chromium" => { build-chromiumd $opts }
+    "roamari-chromiumd" | "chromium" => { build-chromiumd $opts }
     "nutorch" => { build-nutorch $opts }
     "ahterm" | "aht" => { build-ahterm $opts }
     "all" | "termsurf" => {
       build-chromium-fork $opts
-      build-ahweb $opts
+      build-roamari $opts
       if $component == "all" { build-nutorch $opts }
       build-ahcalc $opts
       build-ahebx $opts

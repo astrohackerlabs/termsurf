@@ -1,5 +1,28 @@
 # Reedline Patches
 
+## Current operator commands
+
+Run from the intended monorepo checkout; the manifest selects the ordered series.
+Existing clones and their recorded base objects must already be provisioned.
+
+```nu
+use scripts/ah.nu *
+ah fork status reedline
+ah patch ls reedline
+ah patch check reedline
+ah fork prepare reedline --dry-run
+ah fork prepare reedline
+ah fork check reedline
+```
+
+Preparation preserves original branches and caches and refuses divergent state.
+Linked checkouts use their own local forks, with no fallback to main.
+For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
+export verifies a new issue archive and proposes pins; README, manifest and
+experiment updates remain explicit. Existing archive directories refuse.
+Older pin recipes below are historical reconstruction context; the manifest
+and these commands select current inputs.
+
 NuTorch uses a Reedline checkout under `forks/reedline` that
 Nushell and `code/nutorch/rs/shell` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).

@@ -1,5 +1,28 @@
 # Nushell Patches
 
+## Current operator commands
+
+Run from the intended monorepo checkout; the manifest selects the ordered series.
+Existing clones and their recorded base objects must already be provisioned.
+
+```nu
+use scripts/ah.nu *
+ah fork status nushell
+ah patch ls nushell
+ah patch check nushell
+ah fork prepare nushell --dry-run
+ah fork prepare nushell
+ah fork check nushell
+```
+
+Preparation preserves original branches and caches and refuses divergent state.
+Linked checkouts use their own local forks, with no fallback to main.
+For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
+export verifies a new issue archive and proposes pins; README, manifest and
+experiment updates remain explicit. Existing archive directories refuse.
+Older pin recipes below are historical reconstruction context; the manifest
+and these commands select current inputs.
+
 NuTorch uses the patched Nushell fork inherited from ahsh and Shannon. The fork
 working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct NuTorch's Nushell changes without

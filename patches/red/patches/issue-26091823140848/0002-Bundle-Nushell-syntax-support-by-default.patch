@@ -1,0 +1,1059 @@
+From dd3050ccb72f0c293b9ca5b4ae4f7baa0a202e4f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 05:39:37 -0500
+Subject: [PATCH] Bundle Nushell syntax support by default
+
+The parser moves inside the door,
+Its colors need no files next door.
+Nu brings its own syntax to the show,
+With pinned receipts for what we know.
+---
+ AGENTS.md                          |   5 +-
+ Cargo.lock                         |  10 +
+ Cargo.toml                         |   1 +
+ docs/LANGUAGES.md                  |   5 +
+ docs/NUSHELL.md                    |  36 +++
+ docs/licenses/nvim-treesitter.txt  | 201 ++++++++++++++++
+ docs/licenses/tree-sitter-nu.txt   |  21 ++
+ src/config.rs                      |   1 +
+ src/editor.rs                      |  64 +++++
+ src/highlighter.rs                 | 107 +++++++++
+ src/queries/highlights/nu-smoke.nu |  10 +
+ src/queries/highlights/nu.scm      | 365 +++++++++++++++++++++++++++++
+ src/theme/mod.rs                   |  33 +++
+ 13 files changed, 857 insertions(+), 2 deletions(-)
+ create mode 100644 docs/NUSHELL.md
+ create mode 100644 docs/licenses/nvim-treesitter.txt
+ create mode 100644 docs/licenses/tree-sitter-nu.txt
+ create mode 100644 src/queries/highlights/nu-smoke.nu
+ create mode 100644 src/queries/highlights/nu.scm
+
+diff --git a/AGENTS.md b/AGENTS.md
+index b393446..47f879d 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,8 +1,9 @@
+ # AGENTS.md — Red fork for RedVim
+ 
+ This is Astrohacker's ignored product fork of `codersauce/red`, the source
+-baseline for RedVim. The executable is still upstream `red` 0.7.0; RedVim
+-branding, bundled Nushell highlighting and publication are not implemented.
++baseline for RedVim. The executable is still named `red` 0.7.0. Nushell's
++parser and highlighting queries are bundled; see `docs/NUSHELL.md` for pinned
++provenance. RedVim branding and publication are not implemented.
+ 
+ Astrohacker repository guidance and the issues-and-experiments workflow govern
+ this checkout. Read the monorepo's `patches/AGENTS.md`, `patches/red/AGENTS.md`
+diff --git a/Cargo.lock b/Cargo.lock
+index 8242aa1..92909b3 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2370,6 +2370,7 @@ dependencies = [
+  "tree-sitter-language",
+  "tree-sitter-lua",
+  "tree-sitter-md",
++ "tree-sitter-nu",
+  "tree-sitter-powershell",
+  "tree-sitter-rust",
+  "tree-sitter-toml-ng",
+@@ -3234,6 +3235,15 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-nu"
++version = "0.0.1"
++source = "git+https://github.com/nushell/tree-sitter-nu?rev=bb3f533e5792260291945e1f329e1f0a779def6e#bb3f533e5792260291945e1f329e1f0a779def6e"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-powershell"
+ version = "0.26.4"
+diff --git a/Cargo.toml b/Cargo.toml
+index e7866a0..b5ba98c 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -112,6 +112,7 @@ tree-sitter-javascript = "0.25.0"
+ tree-sitter-json = "0.24.8"
+ tree-sitter-lua = "0.5.0"
+ tree-sitter-md = "0.5.3"
++tree-sitter-nu = { git = "https://github.com/nushell/tree-sitter-nu", rev = "bb3f533e5792260291945e1f329e1f0a779def6e" }
+ tree-sitter-powershell = "0.26.4"
+ tree-sitter-rust = "0.24.2"
+ tree-sitter-toml-ng = "0.7.0"
+diff --git a/docs/LANGUAGES.md b/docs/LANGUAGES.md
+index fe454a4..c331b73 100644
+--- a/docs/LANGUAGES.md
++++ b/docs/LANGUAGES.md
+@@ -5,6 +5,11 @@ extension and shebang detection, comment templates, indentation, and language-se
+ routing. Definitions can live in your configuration or in an installable
+ external plugin package.
+ 
++The Astrohacker fork includes [Nushell support](NUSHELL.md) by default: `.nu`
++files, `nu` shebangs, and `nu`/`nushell` syntax names use a compiled-in parser
++and embedded highlighting rules. No native grammar approval is needed for
++this bundled language.
++
+ ## Add a language in your configuration
+ 
+ Add a table to `~/.config/red/config.toml`:
+diff --git a/docs/NUSHELL.md b/docs/NUSHELL.md
+new file mode 100644
+index 0000000..fcc91d3
+--- /dev/null
++++ b/docs/NUSHELL.md
+@@ -0,0 +1,36 @@
++# Bundled Nushell support
++
++The Astrohacker fork bundles Nushell syntax highlighting. Files ending in `.nu`
++are detected automatically. `:syntax nu`, the `nushell` alias, Markdown fences
++using either name, and `nu` shebangs use the bundled parser. Comments use `#`
++and indentation defaults to two spaces. User language settings can override
++these editing defaults.
++
++No user configuration, external parser library, query installation, trust
++command, or runtime download is required. Cargo compiles the grammar into the
++executable and `include_str!` embeds the highlights query. External grammar
++libraries retain the normal explicit trust requirement. This integration does
++not provide a Nushell language server or Nushell-specific structural queries.
++
++## Source and attribution
++
++The parser and query are the pair qualified using Ryan's installed Neovim in
++Astrohacker Issue 26091823140848 Experiment 3, then bundled in Experiment 4.
++
++- Grammar: [nushell/tree-sitter-nu](https://github.com/nushell/tree-sitter-nu/tree/bb3f533e5792260291945e1f329e1f0a779def6e),
++  commit `bb3f533e5792260291945e1f329e1f0a779def6e`, pinned in Cargo.toml and
++  Cargo.lock. Copyright 2019–2022 The Nushell Project Developers, MIT;
++  full notice in [licenses/tree-sitter-nu.txt](licenses/tree-sitter-nu.txt).
++- Query: [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter/blob/4d9466677a5ceadef104eaa0fe08d60d91c4e9a7/runtime/queries/nu/highlights.scm),
++  commit `4d9466677a5ceadef104eaa0fe08d60d91c4e9a7`,
++  `runtime/queries/nu/highlights.scm`, copied unchanged to
++  `src/queries/highlights/nu.scm`. SHA-256:
++  `6c3acab09f5707e2db70d46d3bac7e578692f1148e3053efedd0f865cfb79323`.
++  nvim-treesitter contributors, Apache-2.0; full license in
++  [licenses/nvim-treesitter.txt](licenses/nvim-treesitter.txt).
++
++Retain these notices and licenses when distributing the build. Updating either
++dependency requires qualifying the parser and query together. To bundle another
++language, pin its grammar source, embed compatible licensed queries, register
++it in the existing language/default tables, and verify a standalone build with
++empty configuration. Do not depend on the developer's editor installation.
+diff --git a/docs/licenses/nvim-treesitter.txt b/docs/licenses/nvim-treesitter.txt
+new file mode 100644
+index 0000000..261eeb9
+--- /dev/null
++++ b/docs/licenses/nvim-treesitter.txt
+@@ -0,0 +1,201 @@
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/docs/licenses/tree-sitter-nu.txt b/docs/licenses/tree-sitter-nu.txt
+new file mode 100644
+index 0000000..08090de
+--- /dev/null
++++ b/docs/licenses/tree-sitter-nu.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2019 - 2022 The Nushell Project Developers
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/src/config.rs b/src/config.rs
+index 6f6170b..869ad56 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -735,6 +735,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("jsx", "// %s"),
+         ("lua", "-- %s"),
+         ("markdown", "<!-- %s -->"),
++        ("nu", "# %s"),
+         ("powershell", "# %s"),
+         ("rust", "// %s"),
+         ("scss", "/* %s */"),
+diff --git a/src/editor.rs b/src/editor.rs
+index 590d7cf..1f9d619 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6648,6 +6648,7 @@ impl Editor {
+                 ("bash", 2),
+                 ("zsh", 2),
+                 ("fish", 4),
++                ("nu", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+                 (
+@@ -34450,6 +34451,69 @@ builtin = "rust"
+         assert_eq!(editor.config.commenting.languages["buildspec"], "# %s");
+     }
+ 
++    #[tokio::test]
++    async fn nu_defaults_comment_indent_and_user_overrides() {
++        let mut editor = test_editor(80, 12);
++        editor.buffer_manager[0] =
++            Buffer::new(Some("example.nu".into()), "let answer = 42\n".into());
++        assert_eq!(editor.current_language_id().as_deref(), Some("nu"));
++        assert_eq!(editor.indentation().shift_width, 2);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("# let answer"));
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert_eq!(editor.current_buffer().contents(), "let answer = 42\n");
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.nu]\nindent_width = 6\ncomment = '# custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.current_language_id().as_deref(), Some("nu"));
++        assert_eq!(editor.indentation().shift_width, 6);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("# custom let answer"));
++    }
++
++    #[test]
++    fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        editor.buffer_manager[0] =
++            Buffer::new(Some("example.nu".into()), "let answer = 42\n".into());
++        let before = editor.viewport_highlight_spans(0, 0, 10).unwrap();
++        assert!(!before.is_empty());
++        assert_eq!(
++            editor.highlight_cache[&0].language_id.as_deref(),
++            Some("nu")
++        );
++        editor.current_buffer_mut().insert_str(0, 0, "# ");
++        let after = editor.viewport_highlight_spans(0, 0, 10).unwrap();
++        let shape = |spans: &[HighlightSpan]| {
++            spans
++                .iter()
++                .map(|s| (s.start, s.end, s.style.clone()))
++                .collect::<Vec<_>>()
++        };
++        assert_ne!(shape(&before), shape(&after));
++        editor.current_buffer_mut().file = Some("notes.txt".into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("nu".into()));
++        assert!(!editor
++            .viewport_highlight_spans(0, 0, 10)
++            .unwrap()
++            .is_empty());
++        assert_eq!(editor.current_language_id().as_deref(), Some("nu"));
++    }
++
+     #[tokio::test]
+     async fn shebang_reload_updates_open_unsaved_buffer() {
+         let directory = tempfile::tempdir().unwrap();
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index fbcc881..7a5f2bd 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -601,6 +601,8 @@ const LANGUAGE_NAMES: &[(&str, &str)] = &[
+     ("shell", "bash"),
+     ("zsh", "bash"),
+     ("fish", "fish"),
++    ("nu", "nu"),
++    ("nushell", "nu"),
+     ("powershell", "powershell"),
+     ("pwsh", "powershell"),
+     ("ps1", "powershell"),
+@@ -2179,6 +2181,7 @@ fn bundled_shebangs(id: &str) -> &'static [&'static str] {
+     match id {
+         "bash" => &["sh", "bash", "dash", "ash", "zsh"],
+         "fish" => &["fish"],
++        "nu" => &["nu"],
+         "powershell" => &["pwsh", "powershell"],
+         "javascript" => &["node", "nodejs"],
+         "lua" => &["lua", "luajit"],
+@@ -2233,6 +2236,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "nu",
++            extensions: &["nu"],
++            filenames: &[],
++            language: Some(|| tree_sitter_nu::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/nu.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "rust",
+             extensions: &["rs"],
+@@ -5133,6 +5146,7 @@ mod tests {
+                 "jsx",
+                 "lua",
+                 "markdown",
++                "nu",
+                 "powershell",
+                 "rust",
+                 "toml",
+@@ -5173,6 +5187,99 @@ mod tests {
+         assert_token_highlighted(&styles, code, "\"hello, $name\"");
+     }
+ 
++    #[test]
++    fn nu_bundled_parser_queries_and_theme_highlight_real_syntax() {
++        let code = include_str!("queries/highlights/nu-smoke.nu");
++        let language = tree_sitter_nu::LANGUAGE.into();
++        let mut parser = Parser::new();
++        parser.set_language(&language).unwrap();
++        let tree = parser.parse(code, None).unwrap();
++        assert!(
++            !tree.root_node().has_error(),
++            "{}",
++            tree.root_node().to_sexp()
++        );
++        let theme = parse_vscode_theme("themes/mocha.json").unwrap();
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        let styles = highlighter
++            .highlight_for_file(Some("example.nu"), code)
++            .unwrap();
++        for (token, scope) in [
++            ("# café", "comment"),
++            ("def", "keyword.function"),
++            ("greet", "function"),
++            ("let", "keyword"),
++            ("if", "keyword.conditional"),
++            ("Hello", "string"),
++            ("name)", "variable"),
++            ("5sec", "number"),
++            ("| str", "operator"),
++            ("each", "function.builtin"),
++            ("loud]", "attribute"),
++        ] {
++            let expected = theme
++                .get_style(scope)
++                .unwrap_or_else(|| panic!("missing {scope}"));
++            let actual = effective_style_at(&styles, code.find(token).unwrap());
++            assert_eq!(actual, Some(&expected), "{token}: {scope}");
++            if scope != "variable" {
++                assert_ne!(expected.fg, theme.style.fg, "{scope} needs a visible color");
++            }
++        }
++    }
++
++    #[test]
++    fn nu_is_bundled_without_external_configuration_or_trust() {
++        let directory = tempfile::tempdir().unwrap();
++        let registry = LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
++        assert!(matches!(
++            registry.languages["nu"].grammar,
++            Some(GrammarSource::Bundled(_))
++        ));
++        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
++        let mut highlighter =
++            Highlighter::with_registry(&theme_with_scopes(&["keyword"]), Arc::new(registry))
++                .unwrap();
++        assert_eq!(
++            highlighter.language_id_for_file(Some("example.nu")),
++            Some("nu")
++        );
++        assert_eq!(highlighter.language_id_for_name("nushell"), Some("nu"));
++        assert_eq!(highlighter.language_id_for_name("nu"), Some("nu"));
++        assert_eq!(
++            highlighter.language_id_for_source(Some("script"), "#!/usr/bin/env nu\n"),
++            Some("nu")
++        );
++        for alias in ["nu", "nushell"] {
++            let code = format!("```{alias}\nlet answer = 42\n```\n");
++            let styles = highlighter.highlight("markdown", &code).unwrap();
++            assert_token_highlighted(&styles, &code, "let");
++        }
++    }
++
++    #[test]
++    fn nu_highlighting_recovers_from_incomplete_and_changed_tokens() {
++        let mut incremental = highlighter();
++        for code in [
++            "let value = \"hello\"\n",
++            "let value = \"",
++            "let value = 42\n",
++            "def greet [name: string] {\n",
++            "let value = $\"café ($env.USER)\"\n",
++        ] {
++            let actual = incremental.highlight("nu", code).unwrap();
++            let expected = highlighter().highlight("nu", code).unwrap();
++            let shape = |spans: &[StyleInfo]| {
++                spans
++                    .iter()
++                    .map(|s| (s.start, s.end, s.style.clone()))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(shape(&actual), shape(&expected), "{code}");
++            assert_token_highlighted(&actual, code, code.split_whitespace().next().unwrap());
++        }
++    }
++
+     #[test]
+     fn husk_highlights_tokens_from_lexer() {
+         let theme = theme_with_scopes(&[
+diff --git a/src/queries/highlights/nu-smoke.nu b/src/queries/highlights/nu-smoke.nu
+new file mode 100644
+index 0000000..78961be
+--- /dev/null
++++ b/src/queries/highlights/nu-smoke.nu
+@@ -0,0 +1,10 @@
++#!/usr/bin/env nu
++# café 🙂: bundled Nushell highlighting
++def greet [name: string, --loud] {
++  let message = $"Hello, ($name)!"
++  if $loud { $message | str upcase } else { $message }
++}
++let items = [1 2 3]
++let settings = {delay: 5sec, size: 10kb, enabled: true}
++$items | each {|item| $item * 2 }
++greet "café 🙂" --loud
+diff --git a/src/queries/highlights/nu.scm b/src/queries/highlights/nu.scm
+new file mode 100644
+index 0000000..2991ef9
+--- /dev/null
++++ b/src/queries/highlights/nu.scm
+@@ -0,0 +1,365 @@
++; ---
++; keywords
++[
++  "let"
++  "mut"
++  "const"
++] @keyword
++
++[
++  "if"
++  "else"
++  "match"
++] @keyword.conditional
++
++[
++  "loop"
++  "while"
++] @keyword.repeat
++
++"def" @keyword.function
++
++[
++  "try"
++  "catch"
++  "error"
++] @keyword.exception
++
++[
++  "module"
++  "use"
++] @keyword.import
++
++[
++  "alias"
++  "export-env"
++  "export"
++  "extern"
++] @keyword.modifier
++
++(decl_use
++  module: (unquoted) @module)
++
++(ctrl_for
++  "for" @keyword
++  "in" @keyword)
++
++; ---
++; literals
++(val_number) @number
++
++(val_duration
++  unit: _ @variable.parameter)
++
++(val_filesize
++  unit: _ @variable.parameter)
++
++(val_binary
++  [
++    "0b"
++    "0o"
++    "0x"
++  ] @number
++  digit: [
++    "," @punctuation.delimiter
++    (hex_digit) @number
++  ]) @number
++
++(val_bool) @constant.builtin
++
++(val_nothing) @constant.builtin
++
++(val_string) @string
++
++arg_str: (val_string) @variable.parameter
++
++file_path: (val_string) @variable.parameter
++
++(val_date) @number
++
++(inter_escape_sequence) @string.escape
++
++(escape_sequence) @string.escape
++
++(val_interpolated
++  [
++    "$\""
++    "$'"
++    "\""
++    "'"
++  ] @string)
++
++(unescaped_interpolated_content) @string
++
++(escaped_interpolated_content) @string
++
++(expr_interpolated
++  [
++    "("
++    ")"
++  ] @variable.parameter)
++
++; ---
++; operators
++[
++  "+"
++  "-"
++  "*"
++  "/"
++  "//"
++  "++"
++  "**"
++  "=="
++  "!="
++  "<"
++  "<="
++  ">"
++  ">="
++  "=~"
++  "!~"
++  "="
++  "+="
++  "-="
++  "*="
++  "/="
++  "++="
++  ".."
++  "..="
++  "..<"
++  "=>"
++  "|"
++  "o>"
++  "out>"
++  "e>"
++  "err>"
++  "e+o>"
++  "err+out>"
++  "o+e>"
++  "out+err>"
++  "o>>"
++  "out>>"
++  "e>>"
++  "err>>"
++  "e+o>>"
++  "err+out>>"
++  "o+e>>"
++  "out+err>>"
++  "e>|"
++  "err>|"
++  "e+o>|"
++  "err+out>|"
++  "o+e>|"
++  "out+err>|"
++] @operator
++
++[
++  "mod"
++  "and"
++  "or"
++  "xor"
++  "bit-or"
++  "bit-xor"
++  "bit-and"
++  "bit-shl"
++  "bit-shr"
++  "in"
++  "not-in"
++  "has"
++  "not-has"
++  "starts-with"
++  "ends-with"
++  "not"
++] @keyword.operator
++
++; ---
++; punctuation
++[
++  ","
++  ";"
++  ":"
++] @punctuation.delimiter
++
++(param_long_flag
++  "--" @punctuation.delimiter)
++
++(long_flag
++  "--" @punctuation.delimiter)
++
++(long_flag
++  "=" @punctuation.delimiter)
++
++(short_flag
++  "-" @punctuation.delimiter)
++
++(short_flag
++  "=" @punctuation.delimiter)
++
++(param_short_flag
++  "-" @punctuation.delimiter)
++
++(param_rest
++  "..." @punctuation.delimiter)
++
++(param_value
++  "=" @punctuation.delimiter)
++
++(param_completer
++  "@" @punctuation.delimiter)
++
++(param_opt
++  "?" @punctuation.delimiter)
++
++(returns
++  "->" @punctuation.delimiter)
++
++[
++  "("
++  ")"
++  "{"
++  "}"
++  "["
++  "]"
++  "<"
++  ">"
++  "...["
++  "...("
++  "...{"
++] @punctuation.bracket
++
++(parameter_pipes
++  "|" @punctuation.bracket)
++
++key: (identifier) @property
++
++; ---
++; identifiers
++(param_rest
++  name: (_) @variable.parameter)
++
++(param_opt
++  name: (_) @variable.parameter)
++
++(parameter
++  param_name: (_) @variable.parameter)
++
++(param_completer
++  (cmd_identifier) @string)
++
++(attribute
++  "@" @attribute)
++
++[
++  (attribute_identifier)
++  (long_flag_identifier)
++  (param_short_flag_identifier)
++  (short_flag_identifier)
++] @attribute
++
++(scope_pattern
++  (wild_card) @function)
++
++(cmd_identifier) @function
++
++; generated with Nu 0.108.0
++; > help commands
++;   | where $it.command_type == built-in and $it.category != core
++;   | each {$'"($in.name | split row " " | $in.0)"'}
++;   | uniq
++;   | str join ' '
++(command
++  head: [
++    (cmd_identifier) @function.builtin
++    (#any-of? @function.builtin
++      "all" "ansi" "any" "append" "ast" "bits" "bytes" "cal" "cd" "char" "chunk-by" "chunks" "clear"
++      "collect" "columns" "compact" "complete" "config" "cp" "date" "debug" "decode" "default"
++      "detect" "drop" "du" "each" "encode" "enumerate" "every" "exec" "exit" "explain" "explore"
++      "fill" "filter" "find" "first" "flatten" "format" "from" "generate" "get" "glob" "grid"
++      "group-by" "hash" "headers" "histogram" "history" "http" "input" "insert" "inspect"
++      "interleave" "into" "is-empty" "is-not-empty" "is-terminal" "items" "job" "join" "keybindings"
++      "kill" "last" "length" "let-env" "lines" "load-env" "ls" "math" "merge" "metadata" "mkdir"
++      "mktemp" "move" "mv" "nu-check" "nu-highlight" "open" "panic" "par-each" "parse" "path"
++      "plugin" "port" "prepend" "print" "ps" "query" "random" "reduce" "reject" "rename" "reverse"
++      "rm" "roll" "rotate" "run-external" "save" "schema" "select" "seq" "shuffle" "skip" "sleep"
++      "slice" "sort" "sort-by" "split" "start" "stor" "str" "sys" "table" "take" "tee" "term"
++      "timeit" "to" "touch" "transpose" "tutor" "ulimit" "uname" "uniq" "uniq-by" "update" "upsert"
++      "url" "values" "version" "view" "watch" "which" "whoami" "window" "with-env" "wrap" "zip")
++  ])
++
++(command
++  head: (cmd_identifier) @keyword
++  (#any-of? @keyword "do" "source" "source-env" "hide" "hide-env"))
++
++(command
++  head: (cmd_identifier) @keyword.repeat
++  (#any-of? @keyword.repeat "break" "continue" "return"))
++
++(command
++  head: (cmd_identifier) @keyword
++  .
++  arg_str: (val_string) @keyword.import
++  (#any-of? @keyword "overlay" "error"))
++
++(command
++  head: (cmd_identifier) @_cmd
++  arg_str: (val_string) @keyword
++  (#eq? @_cmd "overlay")
++  (#eq? @keyword "as"))
++
++(command
++  "^" @punctuation.delimiter
++  head: (_) @function)
++
++"where" @function.builtin
++
++(path
++  [
++    "."
++    "?"
++    "!"
++  ] @punctuation.delimiter) @variable.parameter
++
++(stmt_let
++  (identifier) @variable)
++
++(val_variable
++  "$"? @punctuation.special
++  "...$"? @punctuation.special
++  [
++    (identifier) @variable
++    "in" @variable.parameter.builtin
++    "nu" @module
++    "env" @constant
++  ]) @none
++
++; ---
++; types
++(flat_type) @type
++
++(list_type
++  "list" @type.builtin)
++
++(collection_type
++  [
++    "record"
++    "table"
++  ] @type.builtin)
++
++(collection_type
++  key: (_) @variable.parameter)
++
++(collection_type
++  ":" @punctuation.special)
++
++(composite_type
++  "oneof" @type.builtin)
++
++(shebang) @keyword.directive
++
++(comment) @comment @spell
++
++((comment)+ @comment.documentation @spell
++  .
++  (decl_def))
++
++(parameter
++  (comment) @comment.documentation @spell)
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index 572f486..67600c5 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -525,6 +525,15 @@ fn compatible_scopes(scope: &str) -> Vec<String> {
+         push_scope_with_parents(&mut scopes, alias);
+     }
+ 
++    // Neovim queries use these captures where imported TextMate themes use
++    // numeric constants and read/write variables. Preserve explicit captures
++    // and their parent styles before trying the compatibility fallback.
++    match scope {
++        "number" | "number.float" => push_scope_with_parents(&mut scopes, "constant.builtin"),
++        "variable" => push_scope_with_parents(&mut scopes, "variable.other.readwrite"),
++        _ => {}
++    }
++
+     scopes
+ }
+ 
+@@ -760,6 +769,30 @@ mod tests {
+     use super::*;
+     use crate::color::contrast_ratio;
+ 
++    #[test]
++    fn nu_capture_fallbacks_preserve_explicit_theme_styles() {
++        let mut theme = parse_vscode_theme("themes/mocha.json").unwrap();
++        assert_eq!(
++            theme.get_style("number"),
++            theme.get_style("constant.builtin")
++        );
++        assert_eq!(
++            theme.get_style("variable"),
++            theme.get_style("variable.other.readwrite")
++        );
++        let explicit = Style {
++            fg: Some(Color::Rgb { r: 1, g: 2, b: 3 }),
++            ..Style::default()
++        };
++        theme.token_styles.push(TokenStyle {
++            name: None,
++            scope: vec!["number".into(), "variable".into()],
++            style: explicit.clone(),
++        });
++        assert_eq!(theme.get_style("number.float"), Some(explicit.clone()));
++        assert_eq!(theme.get_style("variable"), Some(explicit));
++    }
++
+     #[test]
+     fn underline_style_is_backward_compatible_and_survives_selection() {
+         let legacy = r#"{"fg":null,"bg":null,"bold":false,"italic":false}"#;
+-- 
+2.54.0 (Apple Git-157)
+

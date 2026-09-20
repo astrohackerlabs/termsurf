@@ -1,0 +1,811 @@
+From a9c0290af5b4116fe16fbad1fbdedb89aa1702bb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 07:26:16 -0500
+Subject: [PATCH] Namespace RedVim configuration and storage
+
+---
+ README.md                                     |   6 +-
+ .../reference/configuration/default-config.md |   2 +-
+ default_config.toml                           |  12 +-
+ docs/DEBUGGING.md                             |   2 +-
+ docs/EXTERNAL_PLUGINS.md                      |   2 +-
+ docs/GETTING_STARTED.md                       |  10 +-
+ docs/LANGUAGES.md                             |   4 +-
+ plugins/unicode_demo.md                       |   4 +-
+ src/config.rs                                 |  32 +-
+ src/editor/diagnostics.rs                     |  39 ++
+ src/headless/mod.rs                           |   7 +-
+ src/lib.rs                                    |   2 +-
+ src/logger.rs                                 |   7 +
+ src/onboarding.rs                             |   8 +-
+ tests/agent_check.rs                          |   4 +-
+ tests/first_launch.rs                         |   4 +-
+ tests/redvim_identity.rs                      |   2 +-
+ tests/storage_paths.rs                        | 338 ++++++++++++++++++
+ 18 files changed, 440 insertions(+), 45 deletions(-)
+ create mode 100644 tests/storage_paths.rs
+
+diff --git a/README.md b/README.md
+index 3deb41a..10352ff 100644
+--- a/README.md
++++ b/README.md
+@@ -208,7 +208,7 @@ Red layers your settings over embedded defaults, so a configuration file can
+ contain only the values you want to change:
+ 
+ ```toml
+-# ~/.config/red/config.toml
++# ~/.config/astrohacker/redvim/config.toml
+ theme = "red.json"
+ scrolloff = 8
+ # Disable the automatic release panel or its optional GitHub refresh:
+@@ -224,8 +224,8 @@ smartcase = true
+ ```
+ 
+ The commented [`default_config.toml`](default_config.toml) documents every
+-setting that ships with Red. Custom themes go in `~/.config/red/themes/`, and
+-custom Husk plugins go in `~/.config/red/plugins/`. Run `red --runtime-files`
++setting that ships with Red. Custom themes go in `~/.config/astrohacker/redvim/themes/`, and
++custom Husk plugins go in `~/.config/astrohacker/redvim/plugins/`. Run `red --runtime-files`
+ to see every visible runtime asset and its source.
+ 
+ Add new highlighting, exact filenames, comment syntax, indentation, and language
+diff --git a/almanac/reference/configuration/default-config.md b/almanac/reference/configuration/default-config.md
+index ec255e5..dea3cdc 100644
+--- a/almanac/reference/configuration/default-config.md
++++ b/almanac/reference/configuration/default-config.md
+@@ -20,7 +20,7 @@ sources:
+ 
+ ## Location And Scope
+ 
+-The sample/default file says user configuration is read from `$XDG_CONFIG_HOME/red/config.toml` or `$HOME/.config/red/config.toml` [@defaults]. The code computes the same config directory, preferring a non-empty `XDG_CONFIG_HOME` and otherwise using `$HOME/.config/red` [@config]. Runtime paths such as logs, preferences, sessions, plugins, and themes are resolved below that directory unless a setting explicitly uses an absolute or expanded path [@config].
++The sample/default file says user configuration is read from `$XDG_CONFIG_HOME/astrohacker/redvim/config.toml` or `$HOME/.config/astrohacker/redvim/config.toml` [@defaults]. The code computes the same config directory, preferring a non-empty `XDG_CONFIG_HOME` and otherwise using `$HOME/.config/astrohacker/redvim` [@config]. Runtime paths such as logs, preferences, sessions, plugins, and themes are resolved below that directory unless a setting explicitly uses an absolute or expanded path [@config].
+ 
+ The top-level schema accepts keys for editor behavior, keymaps, theme, cursor, plugins, disabled plugins, plugin permissions, plugin config, logging, search, completion, signature help, picker, statusline, key hints, clipboard, LSP, formatting, language definitions, commenting, matchit, AI, diagnostics, and ASCII window borders [@config]. Unknown top-level fields are ignored with diagnostics during recoverable user loading rather than becoming part of the effective configuration [@config].
+ 
+diff --git a/default_config.toml b/default_config.toml
+index 885f75c..5717528 100644
+--- a/default_config.toml
++++ b/default_config.toml
+@@ -3,12 +3,12 @@
+ # The configuration file is a TOML file. The configuration file is read from
+ # the following locations:
+ #
+-# 1. $XDG_CONFIG_HOME/red/config.toml
+-# 2. $HOME/.config/red/config.toml
++# 1. $XDG_CONFIG_HOME/astrohacker/redvim/config.toml
++# 2. $HOME/.config/astrohacker/redvim/config.toml
+ # 
+ 
+ # Name of the VSCode theme to use. The theme file should be present in the
+-# themes directory: $XDG_CONFIG_HOME/red/themes or $HOME/.config/red/themes
++# themes directory: $XDG_CONFIG_HOME/astrohacker/redvim/themes or $HOME/.config/astrohacker/redvim/themes
+ theme = "red.json"
+ 
+ # The number of lines to scroll when using the mouse wheel
+@@ -54,7 +54,7 @@ fetch_release_notes = true
+ # Path to the log file. Relative paths are resolved from Red's config
+ # directory. If the log file is not present, Red will create it; if it is
+ # present, Red will append to it.
+-log_file = "red.log"
++log_file = "redvim.log"
+ 
+ # Built-in plugins are enabled through the [plugins] table below. Add plugin
+ # names here to disable defaults without copying or editing bundled plugin files.
+@@ -241,8 +241,8 @@ waiting = "steady_underscore"
+ # # Native libraries require `red language trust buildspec` first:
+ # # path = "~/.local/share/nvim/site/parser/buildspec.so"
+ # # symbol = "tree_sitter_buildspec"
+-# # highlights = ["~/.config/red/queries/buildspec/highlights.scm"]
+-# # textobjects = ["~/.config/red/queries/buildspec/textobjects.scm"]
++# # highlights = ["~/.config/astrohacker/redvim/queries/buildspec/highlights.scm"]
++# # textobjects = ["~/.config/astrohacker/redvim/queries/buildspec/textobjects.scm"]
+ #
+ # [languages.buildspec.lsp]
+ # command = "build-language-server"
+diff --git a/docs/DEBUGGING.md b/docs/DEBUGGING.md
+index 2715dbc..fae2298 100644
+--- a/docs/DEBUGGING.md
++++ b/docs/DEBUGGING.md
+@@ -8,7 +8,7 @@ Run `red --check-config` before debugging downstream behavior. It prints every r
+ 
+ Run `red --runtime-files` when a plugin or theme is absent or unexpectedly old. Resolution order is user configuration, `RED_RUNTIME`, then embedded assets. The listing marks shadowed sources, so a user copy or development runtime can be identified without guessing which bytes were loaded.
+ 
+-The default log is `red.log` in Red's configuration directory. Relative
++The default log is `redvim.log` in Red's configuration directory. Relative
+ `log_file` values resolve from that directory, while absolute and `~/...`
+ paths remain supported. Failure to open the configured path becomes a
+ configuration diagnostic and disables logging rather than preventing startup.
+diff --git a/docs/EXTERNAL_PLUGINS.md b/docs/EXTERNAL_PLUGINS.md
+index fcccbb6..d2d46e1 100644
+--- a/docs/EXTERNAL_PLUGINS.md
++++ b/docs/EXTERNAL_PLUGINS.md
+@@ -1,7 +1,7 @@
+ # External plugins
+ 
+ Red loads external plugins from isolated package directories under
+-`$XDG_CONFIG_HOME/red/plugins` (or the platform-equivalent Red configuration
++`$XDG_CONFIG_HOME/astrohacker/redvim/plugins` (or the platform-equivalent Red configuration
+ directory). A package contains a `red-plugin.toml` manifest and either a Husk
+ entrypoint, a native companion, or both.
+ 
+diff --git a/docs/GETTING_STARTED.md b/docs/GETTING_STARTED.md
+index 9de7da8..97826e6 100644
+--- a/docs/GETTING_STARTED.md
++++ b/docs/GETTING_STARTED.md
+@@ -37,7 +37,7 @@ Start or control it at any time:
+ :tutorial quit     # exit and restore your original editor layout
+ ```
+ 
+-A starter configuration at `~/.config/red/config.toml` remains optional. Press
++A starter configuration at `~/.config/astrohacker/redvim/config.toml` remains optional. Press
+ `c` on the welcome screen to create one without overwriting existing settings.
+ Embedded configuration, themes, and plugins work when the file is absent.
+ 
+@@ -183,7 +183,7 @@ Supported documents are formatted on save by default, and pasted ranges are
+ formatted when the active language server supports range formatting. Red
+ prefers an installed language-pack formatter for whole-document formatting and
+ otherwise uses LSP. Disable either behavior
+-in `~/.config/red/config.toml`:
++in `~/.config/astrohacker/redvim/config.toml`:
+ 
+ ```toml
+ [formatting]
+@@ -484,7 +484,7 @@ interaction model, commands, path boundaries, and failure behavior.
+ Red layers your configuration over embedded defaults:
+ 
+ ```toml
+-# ~/.config/red/config.toml
++# ~/.config/astrohacker/redvim/config.toml
+ theme = "red.json"
+ scrolloff = 8
+ 
+@@ -555,7 +555,7 @@ red --eject plugins/fidget.hk
+ red --eject themes/red.json
+ ```
+ 
+-Files in `~/.config/red/plugins/` and `~/.config/red/themes/` override embedded
++Files in `~/.config/astrohacker/redvim/plugins/` and `~/.config/astrohacker/redvim/themes/` override embedded
+ assets with the same filename. An ejected copy continues to shadow future
+ bundled updates until it is removed. Read the
+ [plugin system guide](PLUGIN_SYSTEM.md) for runtime details.
+@@ -576,7 +576,7 @@ Use `red --help` for the complete generated command-line reference.
+ 
+ ## Troubleshooting
+ 
+-Red logs to `red.log` in its configuration directory by default. Relative
++Red logs to `redvim.log` in its configuration directory by default. Relative
+ `log_file` values are resolved from that directory; absolute paths and `~/...`
+ paths are also supported.
+ 
+diff --git a/docs/LANGUAGES.md b/docs/LANGUAGES.md
+index c331b73..6a1dec4 100644
+--- a/docs/LANGUAGES.md
++++ b/docs/LANGUAGES.md
+@@ -12,7 +12,7 @@ this bundled language.
+ 
+ ## Add a language in your configuration
+ 
+-Add a table to `~/.config/red/config.toml`:
++Add a table to `~/.config/astrohacker/redvim/config.toml`:
+ 
+ ```toml
+ [languages.buildspec]
+@@ -100,7 +100,7 @@ symbol = "tree_sitter_css"
+ highlights = [
+   "~/.local/share/nvim/lazy/nvim-treesitter/runtime/queries/css/highlights.scm",
+ ]
+-textobjects = ["~/.config/red/queries/css/textobjects.scm"]
++textobjects = ["~/.config/astrohacker/redvim/queries/css/textobjects.scm"]
+ ```
+ 
+ Native grammar shared libraries execute arbitrary code inside the editor. Red
+diff --git a/plugins/unicode_demo.md b/plugins/unicode_demo.md
+index 8cac752..45aeb61 100644
+--- a/plugins/unicode_demo.md
++++ b/plugins/unicode_demo.md
+@@ -82,11 +82,11 @@ const displayCol = await red.getCursorDisplayColumn(); // 8
+ 
+ ## Installation
+ 
+-Add to your `~/.config/red/config.toml`:
++Add to your `~/.config/astrohacker/redvim/config.toml`:
+ 
+ ```toml
+ [plugins]
+-unicode_demo = "~/.config/red/plugins/unicode_demo.hk"
++unicode_demo = "~/.config/astrohacker/redvim/plugins/unicode_demo.hk"
+ ```
+ 
+ Then reload Red or run the `:reload-plugins` command.
+diff --git a/src/config.rs b/src/config.rs
+index eef6a38..b4878e9 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -1632,26 +1632,32 @@ pub fn rust_analyzer_initialization_options() -> Value {
+ }
+ 
+ impl Config {
+-    /// Returns Red's platform configuration directory.
++    /// Returns RedVim's namespaced configuration directory.
+     ///
+-    /// `XDG_CONFIG_HOME` takes precedence; otherwise Red uses
+-    /// `$HOME/.config/redvim`.
++    /// `XDG_CONFIG_HOME` takes precedence; otherwise RedVim uses
++    /// `$HOME/.config/astrohacker/redvim`.
+     pub fn config_dir() -> PathBuf {
++        Self::try_config_dir().expect("home directory must be available to locate RedVim config")
++    }
++
++    /// Best-effort lookup for logging before normal startup configuration.
++    pub(crate) fn try_config_dir() -> Option<PathBuf> {
+         if let Some(config_home) =
+             std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty())
+         {
+-            return PathBuf::from(config_home).join("redvim");
++            return Some(
++                PathBuf::from(config_home)
++                    .join("astrohacker")
++                    .join("redvim"),
++            );
+         }
+ 
+-        let home = std::env::var_os("HOME")
+-            .map(PathBuf::from)
+-            .or_else(|| {
+-                #[allow(deprecated)]
+-                std::env::home_dir()
+-            })
+-            .expect("home directory must be available to locate red config");
++        let home = std::env::var_os("HOME").map(PathBuf::from).or_else(|| {
++            #[allow(deprecated)]
++            std::env::home_dir()
++        })?;
+ 
+-        home.join(".config").join("redvim")
++        Some(home.join(".config").join("astrohacker").join("redvim"))
+     }
+ 
+     /// Resolves a configuration-relative path.
+@@ -4827,7 +4833,7 @@ max_buffer_words = 20
+         );
+         let permissions = config.plugin_permissions.get("project_search").unwrap();
+         assert_eq!(permissions.process, vec!["rg".to_string()]);
+-        assert_eq!(config.log_file.as_deref(), Some("red.log"));
++        assert_eq!(config.log_file.as_deref(), Some("redvim.log"));
+     }
+ 
+     #[test]
+diff --git a/src/editor/diagnostics.rs b/src/editor/diagnostics.rs
+index afa01c5..d533153 100644
+--- a/src/editor/diagnostics.rs
++++ b/src/editor/diagnostics.rs
+@@ -390,6 +390,45 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn namespaced_diagnostic_cache_child() {
++        if std::env::var_os("REDVIM_TEST_DIAGNOSTICS_CHILD").is_none() {
++            return;
++        }
++        let (_workspace, file, uri) = diagnostic_workspace("x\n");
++        let cache = crate::config::Config::path("cache/lsp-diagnostics");
++        let finding = diagnostic("namespaced cache probe");
++        let mut first = cached_editor(&file, "x\n", &cache);
++        push(&mut first, &uri, vec![finding.clone()]);
++        first.persist_diagnostic_cache(true);
++        let restarted = cached_editor(&file, "x\n", &cache);
++        assert_eq!(restarted.diagnostics[&uri], vec![finding]);
++        assert!(std::fs::read_dir(cache).unwrap().next().is_some());
++    }
++
++    #[test]
++    fn diagnostic_cache_uses_namespaced_config_root() {
++        let root = tempfile::tempdir().unwrap();
++        let output = std::process::Command::new(std::env::current_exe().unwrap())
++            .args(["namespaced_diagnostic_cache_child", "--nocapture"])
++            .env("REDVIM_TEST_DIAGNOSTICS_CHILD", "1")
++            .env("XDG_CONFIG_HOME", root.path())
++            .env("HOME", root.path())
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}\n{}",
++            String::from_utf8_lossy(&output.stdout),
++            String::from_utf8_lossy(&output.stderr)
++        );
++        assert!(root
++            .path()
++            .join("astrohacker/redvim/cache/lsp-diagnostics")
++            .is_dir());
++        assert!(!root.path().join("redvim").exists());
++    }
++
+     #[test]
+     fn cached_diagnostics_reject_changed_document_contents() {
+         let (root, file, uri) = diagnostic_workspace("before\n");
+diff --git a/src/headless/mod.rs b/src/headless/mod.rs
+index 79fe3d3..439b613 100644
+--- a/src/headless/mod.rs
++++ b/src/headless/mod.rs
+@@ -567,7 +567,12 @@ pub fn bind_session(directory: &Path, name: &str) -> anyhow::Result<BoundSession
+     if std::fs::symlink_metadata(&paths.pid).is_ok() {
+         std::fs::remove_file(&paths.pid)?;
+     }
+-    let listener = UnixListener::bind(&paths.socket)?;
++    let listener = UnixListener::bind(&paths.socket).map_err(|error| {
++        anyhow::anyhow!(
++            "failed to bind session socket {}: {error}",
++            paths.socket.display()
++        )
++    })?;
+     std::fs::set_permissions(&paths.socket, std::fs::Permissions::from_mode(0o600))?;
+     let token = uuid::Uuid::new_v4().to_string();
+     write_private_file(&paths.token, token.as_bytes())?;
+diff --git a/src/lib.rs b/src/lib.rs
+index 8fcdf59..b6b9b5a 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -86,7 +86,7 @@ macro_rules! log {
+     ($($arg:tt)*) => {
+         {
+             if let Some(logger) = $crate::LOGGER
+-                .get_or_init(|| $crate::Logger::try_new("red.log").ok())
++                .get_or_init($crate::Logger::try_default)
+                 .as_ref()
+             {
+                 let log_message = format!($($arg)*);
+diff --git a/src/logger.rs b/src/logger.rs
+index cd71aa0..672b792 100644
+--- a/src/logger.rs
++++ b/src/logger.rs
+@@ -52,6 +52,13 @@ pub struct Logger {
+ }
+ 
+ impl Logger {
++    /// Open the default sink without panicking or logging recursively on failure.
++    pub fn try_default() -> Option<Self> {
++        let root = crate::config::Config::try_config_dir()?;
++        std::fs::create_dir_all(&root).ok()?;
++        Self::try_new(root.join("redvim.log")).ok()
++    }
++
+     pub fn try_new(file: impl AsRef<Path>) -> std::io::Result<Self> {
+         let file = OpenOptions::new()
+             .create(true)
+diff --git a/src/onboarding.rs b/src/onboarding.rs
+index 4997bf0..2b16bff 100644
+--- a/src/onboarding.rs
++++ b/src/onboarding.rs
+@@ -1,6 +1,6 @@
+ //! First-run onboarding.
+ //!
+-//! When `~/.config/red/config.toml` is missing, [`run`] welcomes the user on
++//! When `~/.config/astrohacker/redvim/config.toml` is missing, [`run`] welcomes the user on
+ //! the plain terminal and offers to create a starter config. Defaults, themes,
+ //! and plugins are embedded in the binary so a fresh install can bootstrap
+ //! itself with no external files.
+@@ -246,7 +246,7 @@ mod tests {
+ 
+     #[test]
+     fn render_welcome_mentions_red_and_paths_and_prompt() {
+-        let dir = Path::new("/home/example/.config/red");
++        let dir = Path::new("/home/example/.config/astrohacker/redvim");
+         let banner = render_welcome(dir, false);
+ 
+         assert!(banner.to_lowercase().contains("red"));
+@@ -256,7 +256,7 @@ mod tests {
+ 
+     #[test]
+     fn render_welcome_omits_ansi_when_color_disabled() {
+-        let dir = Path::new("/home/example/.config/red");
++        let dir = Path::new("/home/example/.config/astrohacker/redvim");
+         let banner = render_welcome(dir, false);
+         assert!(
+             !banner.contains('\x1b'),
+@@ -266,7 +266,7 @@ mod tests {
+ 
+     #[test]
+     fn render_welcome_includes_ansi_when_color_enabled() {
+-        let dir = Path::new("/home/example/.config/red");
++        let dir = Path::new("/home/example/.config/astrohacker/redvim");
+         let banner = render_welcome(dir, true);
+         assert!(
+             banner.contains('\x1b'),
+diff --git a/tests/agent_check.rs b/tests/agent_check.rs
+index 3ad18e8..c1d9fd9 100644
+--- a/tests/agent_check.rs
++++ b/tests/agent_check.rs
+@@ -65,8 +65,8 @@ fn agent_check_does_not_initialize_unrelated_runtime_resources() {
+     let directory = tempfile::tempdir().unwrap();
+     let codex = fake_codex(directory.path(), "0.144.5");
+     let config = tempfile::tempdir().unwrap();
+-    let config_dir = config.path().join("redvim");
+-    fs::create_dir(&config_dir).unwrap();
++    let config_dir = config.path().join("astrohacker/redvim");
++    fs::create_dir_all(&config_dir).unwrap();
+     fs::write(
+         config_dir.join("config.toml"),
+         format!(
+diff --git a/tests/first_launch.rs b/tests/first_launch.rs
+index cd48457..ed31650 100644
+--- a/tests/first_launch.rs
++++ b/tests/first_launch.rs
+@@ -3,7 +3,7 @@ use std::process::Command;
+ #[test]
+ fn first_launch_creates_config_directory_before_opening_default_log() {
+     let config_home = tempfile::tempdir().unwrap();
+-    let config_dir = config_home.path().join("redvim");
++    let config_dir = config_home.path().join("astrohacker/redvim");
+ 
+     // A non-terminal run stops at raw-mode setup, after runtime config has loaded.
+     Command::new(env!("CARGO_BIN_EXE_redvim"))
+@@ -11,6 +11,6 @@ fn first_launch_creates_config_directory_before_opening_default_log() {
+         .output()
+         .unwrap();
+ 
+-    assert!(config_dir.join("red.log").is_file());
++    assert!(config_dir.join("redvim.log").is_file());
+     assert!(!config_dir.join("config.toml").exists());
+ }
+diff --git a/tests/redvim_identity.rs b/tests/redvim_identity.rs
+index 8d81bd7..84c0d51 100644
+--- a/tests/redvim_identity.rs
++++ b/tests/redvim_identity.rs
+@@ -4,7 +4,7 @@ use std::{fs, process::Command};
+ fn redvim_identity_and_configuration_are_independent_of_red() {
+     let root = tempfile::tempdir().unwrap();
+     fs::create_dir(root.path().join("red")).unwrap();
+-    fs::create_dir(root.path().join("redvim")).unwrap();
++    fs::create_dir_all(root.path().join("astrohacker/redvim")).unwrap();
+     let old = root.path().join("red/config.toml");
+     fs::write(&old, "this is deliberately invalid TOML").unwrap();
+     for (args, expected) in [
+diff --git a/tests/storage_paths.rs b/tests/storage_paths.rs
+new file mode 100644
+index 0000000..ab36d07
+--- /dev/null
++++ b/tests/storage_paths.rs
+@@ -0,0 +1,338 @@
++use std::{fs, path::Path, process::Command};
++
++fn command(home: &Path, xdg: Option<&Path>, cwd: &Path) -> Command {
++    let mut command = Command::new(env!("CARGO_BIN_EXE_redvim"));
++    command
++        .env("HOME", home)
++        .env_remove("XDG_CONFIG_HOME")
++        .env_remove("REDVIM_RUNTIME")
++        .env_remove("RED_RUNTIME")
++        .current_dir(cwd);
++    if let Some(xdg) = xdg {
++        command.env("XDG_CONFIG_HOME", xdg);
++    }
++    command
++}
++
++#[test]
++fn config_location_matrix_reads_only_the_namespaced_root() {
++    for mode in ["unset", "empty", "override", "spaces"] {
++        let temp = tempfile::tempdir().unwrap();
++        let home = temp.path().join("home");
++        let xdg = match mode {
++            "unset" => None,
++            "empty" => Some(Path::new("").to_path_buf()),
++            "override" => Some(temp.path().join("xdg")),
++            _ => Some(temp.path().join("xdg with spaces")),
++        };
++        let base = xdg
++            .as_ref()
++            .filter(|p| !p.as_os_str().is_empty())
++            .cloned()
++            .unwrap_or_else(|| home.join(".config"));
++        let root = base.join("astrohacker/redvim");
++        fs::create_dir_all(&root).unwrap();
++        for old in [
++            base.join("red"),
++            base.join("redvim"),
++            home.join(".config/redvim"),
++        ] {
++            fs::create_dir_all(&old).unwrap();
++            fs::write(old.join("config.toml"), "invalid = [").unwrap();
++        }
++        let config = root.join("config.toml");
++        fs::write(&config, "relative_line_numbers = true\n").unwrap();
++        let output = command(&home, xdg.as_deref(), temp.path())
++            .arg("--check-config")
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{mode}: {}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        fs::write(&config, "invalid = [").unwrap();
++        let output = command(&home, xdg.as_deref(), temp.path())
++            .arg("--check-config")
++            .output()
++            .unwrap();
++        assert!(!output.status.success(), "{mode}");
++        assert!(String::from_utf8_lossy(&output.stdout).contains(&config.display().to_string()));
++        fs::write(&config, "relative_line_numbers = true\n").unwrap();
++        // Loading a configured custom theme proves runtime overrides use this root too.
++        let output = command(&home, xdg.as_deref(), temp.path())
++            .args(["--eject", "themes/mocha.json"])
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        assert!(root.join("themes/mocha.json").is_file());
++        for old in [base.join("red"), base.join("redvim")] {
++            assert_eq!(
++                fs::read_to_string(old.join("config.toml")).unwrap(),
++                "invalid = ["
++            );
++            assert_eq!(fs::read_dir(old).unwrap().count(), 1);
++        }
++        assert!(!temp.path().join("red.log").exists());
++        assert!(!temp.path().join("redvim.log").exists());
++    }
++}
++
++// Run the actual macro in a child so its global OnceCell and environment are isolated.
++#[test]
++fn fallback_log_child() {
++    if std::env::var_os("REDVIM_TEST_LOG_CHILD").is_none() {
++        return;
++    }
++    red::log!("fallback storage probe");
++}
++
++#[test]
++fn fallback_log_is_namespaced_and_failure_is_nonfatal() {
++    for blocked in [false, true] {
++        let temp = tempfile::tempdir().unwrap();
++        let base = temp.path().join("config");
++        fs::create_dir(&base).unwrap();
++        if blocked {
++            fs::write(base.join("astrohacker"), "not a directory").unwrap();
++        }
++        let output = Command::new(std::env::current_exe().unwrap())
++            .args(["--exact", "fallback_log_child", "--nocapture"])
++            .env("REDVIM_TEST_LOG_CHILD", "1")
++            .env("XDG_CONFIG_HOME", &base)
++            .env("HOME", temp.path())
++            .current_dir(temp.path())
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        let log = base.join("astrohacker/redvim/redvim.log");
++        assert_eq!(log.exists(), !blocked);
++        if !blocked {
++            assert!(fs::read_to_string(log)
++                .unwrap()
++                .contains("fallback storage probe"));
++        }
++        assert!(!temp.path().join("red.log").exists());
++        assert!(!temp.path().join("redvim.log").exists());
++    }
++}
++
++#[tokio::test]
++async fn storage_components_child() {
++    if std::env::var_os("REDVIM_TEST_STORAGE_CHILD").is_none() {
++        return;
++    }
++    use red::{
++        config::Config,
++        plugin::package::{PluginId, PluginPackageManager},
++        preferences::PreferencesStore,
++    };
++    let root = Config::config_dir();
++    fs::create_dir_all(root.join("state/plugins")).unwrap();
++    fs::write(
++        root.join("state/plugins/session_restore.json"),
++        r#"{"latest":{"marker":"namespace"}}"#,
++    )
++    .unwrap();
++    let mut preferences = PreferencesStore::load(Config::path("preferences.json"));
++    assert_eq!(
++        preferences
++            .plugin_storage("session_restore", "latest")
++            .unwrap()["marker"],
++        "namespace"
++    );
++    preferences.record_search("namespace search").unwrap();
++    assert!(PreferencesStore::load(Config::path("preferences.json"))
++        .search_history()
++        .contains(&"namespace search".to_string()));
++
++    let package = root.join("fixture-package");
++    fs::create_dir(&package).unwrap();
++    fs::write(
++        package.join("red-plugin.toml"),
++        r#"
++schema_version = 1
++[plugin]
++id = "namespace-probe"
++name = "Namespace probe"
++version = "1.0.0"
++red_api = "*"
++[languages.probe]
++extensions = ["probe"]
++[languages.probe.grammar]
++builtin = "rust"
++"#,
++    )
++    .unwrap();
++    let manager = PluginPackageManager::new(&root);
++    manager.install_path(&package).await.unwrap();
++    assert_eq!(manager.list().unwrap()[0].id.as_str(), "namespace-probe");
++    assert!(root.join("plugins/namespace-probe").is_dir());
++    let data = manager.data_dir(&PluginId::parse("namespace-probe").unwrap());
++    fs::create_dir_all(&data).unwrap();
++    fs::write(data.join("value"), "persisted").unwrap();
++    assert_eq!(
++        fs::read_to_string(root.join("plugin-data/namespace-probe/value")).unwrap(),
++        "persisted"
++    );
++
++    // Trust and stage real bytes through the production loader; this deliberately
++    // invalid library must be quarantined after staging, never executed.
++    let grammar = root.join("probe.so");
++    fs::write(&grammar, b"not a shared library").unwrap();
++    let trust = red::language::GrammarTrustStore::new(&root);
++    let digest = trust.trust_path(&grammar).unwrap();
++    assert!(root.join("trusted-grammars.json").is_file());
++    let text = format!("[languages.external_probe]\nextensions = [\"probe2\"]\n[languages.external_probe.grammar]\npath = {:?}\nsymbol = \"tree_sitter_probe\"\n", grammar);
++    let config = root.join("probe.toml");
++    fs::write(&config, text).unwrap();
++    let mut loaded = Config::load_user_file(&config, &[]).unwrap();
++    red::language::finalize_language_configuration(&mut loaded, &root).unwrap();
++    assert!(!loaded.diagnostics.is_empty());
++    assert_eq!(
++        fs::read(root.join(format!("grammar-cache/{digest}.so"))).unwrap(),
++        b"not a shared library"
++    );
++    trust.revoke_path(&grammar).unwrap();
++}
++
++#[test]
++fn storage_components_use_the_resolved_root() {
++    let temp = tempfile::tempdir().unwrap();
++    let output = Command::new(std::env::current_exe().unwrap())
++        .args(["--exact", "storage_components_child", "--nocapture"])
++        .env("REDVIM_TEST_STORAGE_CHILD", "1")
++        .env("XDG_CONFIG_HOME", temp.path())
++        .env("HOME", temp.path())
++        .env_remove("REDVIM_RUNTIME")
++        .current_dir(temp.path())
++        .output()
++        .unwrap();
++    assert!(
++        output.status.success(),
++        "{}\n{}",
++        String::from_utf8_lossy(&output.stdout),
++        String::from_utf8_lossy(&output.stderr)
++    );
++    assert!(!temp.path().join("redvim").exists());
++    assert!(!temp.path().join("red").exists());
++}
++
++#[test]
++fn configured_log_paths_remain_explicit() {
++    for absolute in [false, true] {
++        let temp = tempfile::tempdir().unwrap();
++        let root = temp.path().join("astrohacker/redvim");
++        fs::create_dir_all(&root).unwrap();
++        let log = if absolute {
++            temp.path().join("chosen.log")
++        } else {
++            root.join("chosen.log")
++        };
++        let setting = if absolute {
++            log.clone()
++        } else {
++            "chosen.log".into()
++        };
++        fs::write(
++            root.join("config.toml"),
++            format!("log_file = {:?}\n", setting),
++        )
++        .unwrap();
++        let output = command(temp.path(), Some(temp.path()), temp.path())
++            .arg("--check-config")
++            .output()
++            .unwrap();
++        assert!(output.status.success());
++        assert!(log.is_file());
++        assert!(!root.join("redvim.log").exists());
++        // An unwritable sink is reported and disabled, without a fallback in CWD.
++        fs::remove_file(&log).unwrap();
++        fs::create_dir(&log).unwrap();
++        let output = command(temp.path(), Some(temp.path()), temp.path())
++            .arg("--check-config")
++            .output()
++            .unwrap();
++        assert!(!output.status.success());
++        assert!(String::from_utf8_lossy(&output.stdout).contains("CFG303"));
++        assert!(!temp.path().join("red.log").exists());
++    }
++}
++
++#[cfg(unix)]
++#[tokio::test]
++async fn detached_owner_uses_namespaced_ipc_and_cleans_up() {
++    use std::time::{Duration, Instant};
++    // macOS Unix sockets have a small path limit; avoid the long system TMPDIR.
++    let temp = tempfile::Builder::new()
++        .prefix("rv-")
++        .tempdir_in("/tmp")
++        .unwrap();
++    let root = temp.path().join("astrohacker/redvim");
++    fs::create_dir_all(&root).unwrap();
++    fs::write(root.join("config.toml"), "disable_ai = true\nfetch_release_notes = false\nshow_whats_new = false\n[lsp]\nenabled = false\n").unwrap();
++    struct Owner(std::process::Child);
++    impl Drop for Owner {
++        fn drop(&mut self) {
++            let _ = self.0.kill();
++            let _ = self.0.wait();
++        }
++    }
++    let mut owner = Owner(
++        command(temp.path(), Some(temp.path()), temp.path())
++            .args(["--core-session", "probe"])
++            .stdout(std::process::Stdio::null())
++            .stderr(std::process::Stdio::null())
++            .spawn()
++            .unwrap(),
++    );
++    let run = root.join("run");
++    let deadline = Instant::now() + Duration::from_secs(15);
++    while !run.join("probe.pid").exists() {
++        assert!(Instant::now() < deadline, "owner startup timed out");
++        assert!(owner.0.try_wait().unwrap().is_none(), "owner exited early");
++        tokio::time::sleep(Duration::from_millis(25)).await;
++    }
++    let client = red::headless::connect_session(&run, "probe", None, (80, 24))
++        .await
++        .unwrap();
++    assert!(run.join("probe.sock").exists());
++    assert!(run.join("probe.token").exists());
++    drop(client);
++    let stopped = command(temp.path(), Some(temp.path()), temp.path())
++        .args(["--stop", "probe"])
++        .output()
++        .unwrap();
++    assert!(
++        stopped.status.success(),
++        "{}",
++        String::from_utf8_lossy(&stopped.stderr)
++    );
++    while owner.0.try_wait().unwrap().is_none() {
++        assert!(Instant::now() < deadline, "owner shutdown timed out");
++        tokio::time::sleep(Duration::from_millis(25)).await;
++    }
++    for suffix in ["sock", "token", "pid"] {
++        assert!(!run.join(format!("probe.{suffix}")).exists());
++    }
++    assert!(root.join("redvim.log").exists());
++    assert!(root.join("sessions").is_dir());
++    assert!(!temp.path().join("redvim").exists());
++
++    let long = root.join("a".repeat(110)).join("run");
++    let error = match red::headless::bind_session(&long, "probe") {
++        Ok(_) => panic!("overlong socket path was accepted"),
++        Err(error) => error.to_string(),
++    };
++    assert!(error.contains("socket"), "{error}");
++    assert!(!long.join("probe.token").exists());
++    assert!(!long.join("probe.pid").exists());
++}
+-- 
+2.54.0 (Apple Git-157)
+

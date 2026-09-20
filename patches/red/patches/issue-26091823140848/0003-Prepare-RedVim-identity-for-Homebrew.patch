@@ -1,0 +1,517 @@
+From 3ac64564ea8809a0a2ee38c9b08cee9410f68c1f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 06:10:31 -0500
+Subject: [PATCH] Prepare RedVim identity for Homebrew
+
+Red lends its roots; Nu keeps its glow.
+A name and home let both editors grow.
+---
+ AGENTS.md                    | 10 +++++-----
+ Cargo.toml                   |  7 ++++++-
+ REDVIM_CHANGELOG.md          | 11 +++++++++++
+ release/redvim-campaign.toml |  5 +++++
+ src/assets.rs                | 26 +++++++++++++-------------
+ src/cli.rs                   |  8 ++++++--
+ src/config.rs                |  8 ++++----
+ src/main.rs                  | 13 +++++++++++--
+ src/ui/welcome.rs            |  9 ++++++---
+ src/whats_new.rs             | 14 +++++++-------
+ tests/agent_check.rs         |  8 ++++----
+ tests/first_launch.rs        |  4 ++--
+ tests/redvim_identity.rs     | 35 +++++++++++++++++++++++++++++++++++
+ tests/self_check.rs          |  6 +++---
+ 14 files changed, 118 insertions(+), 46 deletions(-)
+ create mode 100644 REDVIM_CHANGELOG.md
+ create mode 100644 release/redvim-campaign.toml
+ create mode 100644 tests/redvim_identity.rs
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 47f879d..640c7dd 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,9 +1,9 @@
+ # AGENTS.md — Red fork for RedVim
+ 
+ This is Astrohacker's ignored product fork of `codersauce/red`, the source
+-baseline for RedVim. The executable is still named `red` 0.7.0. Nushell's
++baseline for RedVim. The executable is `redvim` 0.7.0, with independent RedVim configuration. Nushell's
+ parser and highlighting queries are bundled; see `docs/NUSHELL.md` for pinned
+-provenance. RedVim branding and publication are not implemented.
++provenance. The shared-tap publisher is human-operated; installed qualification is pending.
+ 
+ Astrohacker repository guidance and the issues-and-experiments workflow govern
+ this checkout. Read the monorepo's `patches/AGENTS.md`, `patches/red/AGENTS.md`
+@@ -22,9 +22,9 @@ Run Cargo inside this fork's workspace, not the monorepo workspace:
+ 
+ ```nu
+ cd forks/red
+-cargo build --locked --release --bin red
+-./target/release/red --version
+-./target/release/red --help
++cargo build --locked --release --bin redvim
++./target/release/redvim --version
++./target/release/redvim --help
+ ```
+ 
+ Use a Rust toolchain supporting the workspace's Rust 2024 crates and native
+diff --git a/Cargo.toml b/Cargo.toml
+index b5ba98c..fef9a1e 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -2,9 +2,14 @@
+ name = "red"
+ version = "0.7.0"
+ edition = "2021"
+-default-run = "red"
++default-run = "redvim"
++autobins = false
+ # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+ 
++[[bin]]
++name = "redvim"
++path = "src/main.rs"
++
+ [workspace]
+ members = [
+     ".",
+diff --git a/REDVIM_CHANGELOG.md b/REDVIM_CHANGELOG.md
+new file mode 100644
+index 0000000..9036d95
+--- /dev/null
++++ b/REDVIM_CHANGELOG.md
+@@ -0,0 +1,11 @@
++# RedVim changelog
++
++## [0.7.0]
++
++### Features
++
++- First Astrohacker RedVim release, based on Red 0.7.0.
++- Built-in Nushell parsing and highlighting; no grammar installation or trust step.
++- Independent `redvim` command and configuration directory.
++
++Upstream history and attribution remain in CHANGELOG.md and LICENSE.
+diff --git a/release/redvim-campaign.toml b/release/redvim-campaign.toml
+new file mode 100644
+index 0000000..7c98942
+--- /dev/null
++++ b/release/redvim-campaign.toml
+@@ -0,0 +1,5 @@
++version = "0.7.0"
++
++[[stories]]
++title = "Edit Nushell with bundled syntax highlighting"
++channels = ["in_app"]
+diff --git a/src/assets.rs b/src/assets.rs
+index 6ab0888..e4896b0 100644
+--- a/src/assets.rs
++++ b/src/assets.rs
+@@ -1,6 +1,6 @@
+ //! Resolution and extraction of Red's embedded, development, and user runtime assets.
+ //!
+-//! Plugins and themes resolve in the order user configuration, `RED_RUNTIME`, then
++//! Plugins and themes resolve in the order user configuration, `REDVIM_RUNTIME`, then
+ //! embedded assets. Listing reports shadowed sources, while ejection copies a resolved
+ //! non-user asset into the user directory for customization. All public lookup paths are
+ //! relative asset specifiers; accepting parent traversal would let a runtime operation
+@@ -23,7 +23,7 @@ static THEMES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/themes");
+ static PLUGINS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/plugins");
+ 
+ const BUNDLED_PLUGIN_SCHEME: &str = "red-bundled";
+-const STARTER_CONFIG_HEADER: &str = "# Red user config.\n# Defaults are built into this version of red.\n# Uncomment settings below to override them.\n# Uncomment the matching table header, such as [keys.normal], with any setting inside it.\n\n";
++const STARTER_CONFIG_HEADER: &str = "# RedVim user config.\n# Defaults are built into this version of RedVim.\n# Uncomment settings below to override them.\n# Uncomment the matching table header, such as [keys.normal], with any setting inside it.\n\n";
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+ /// Category of runtime file resolved by the asset system.
+@@ -92,7 +92,7 @@ impl RuntimeAssetKind {
+ pub enum RuntimeAssetSource {
+     /// User configuration directory; highest precedence.
+     User,
+-    /// Development directory selected by `RED_RUNTIME`.
++    /// Development directory selected by `REDVIM_RUNTIME`.
+     Runtime,
+     /// File compiled into the Red binary; lowest precedence.
+     Embedded,
+@@ -367,7 +367,7 @@ pub fn format_runtime_files(config_dir: &Path) -> anyhow::Result<String> {
+         out.push('\n');
+     }
+ 
+-    out.push_str("Resolution order: user config, $RED_RUNTIME, embedded.\n");
++    out.push_str("Resolution order: user config, $REDVIM_RUNTIME, embedded.\n");
+     out.push_str(
+         "Use `red --eject plugins/<file>` or `red --eject themes/<file>` to copy an asset into your config directory.\n",
+     );
+@@ -390,7 +390,7 @@ pub fn eject_runtime_asset(asset: &str, config_dir: &Path, force: bool) -> anyho
+ 
+     let source = resolve_non_user_runtime_asset(kind, &file, config_dir).ok_or_else(|| {
+         anyhow::anyhow!(
+-            "runtime asset `{}/{}` was not found in $RED_RUNTIME or embedded assets",
++            "runtime asset `{}/{}` was not found in $REDVIM_RUNTIME or embedded assets",
+             kind.dir_name(),
+             file
+         )
+@@ -514,7 +514,7 @@ fn parse_asset_path(asset: &str) -> anyhow::Result<(RuntimeAssetKind, String)> {
+ }
+ 
+ fn runtime_dir() -> Option<PathBuf> {
+-    env::var_os("RED_RUNTIME")
++    env::var_os("REDVIM_RUNTIME")
+         .filter(|value| !value.is_empty())
+         .map(PathBuf::from)
+ }
+@@ -615,8 +615,8 @@ mod tests {
+     impl RedRuntimeGuard<'_> {
+         fn set(path: &Path) -> Self {
+             let guard = ENV_LOCK.lock().unwrap();
+-            let previous = env::var_os("RED_RUNTIME");
+-            env::set_var("RED_RUNTIME", path);
++            let previous = env::var_os("REDVIM_RUNTIME");
++            env::set_var("REDVIM_RUNTIME", path);
+             Self {
+                 _guard: guard,
+                 previous,
+@@ -625,8 +625,8 @@ mod tests {
+ 
+         fn unset() -> Self {
+             let guard = ENV_LOCK.lock().unwrap();
+-            let previous = env::var_os("RED_RUNTIME");
+-            env::remove_var("RED_RUNTIME");
++            let previous = env::var_os("REDVIM_RUNTIME");
++            env::remove_var("REDVIM_RUNTIME");
+             Self {
+                 _guard: guard,
+                 previous,
+@@ -637,9 +637,9 @@ mod tests {
+     impl Drop for RedRuntimeGuard<'_> {
+         fn drop(&mut self) {
+             if let Some(previous) = &self.previous {
+-                env::set_var("RED_RUNTIME", previous);
++                env::set_var("REDVIM_RUNTIME", previous);
+             } else {
+-                env::remove_var("RED_RUNTIME");
++                env::remove_var("REDVIM_RUNTIME");
+             }
+         }
+     }
+@@ -749,7 +749,7 @@ mod tests {
+ 
+         assert!(files.contains("Runtime plugins:"));
+         assert!(files.contains("Runtime themes:"));
+-        assert!(files.contains("Resolution order: user config, $RED_RUNTIME, embedded."));
++        assert!(files.contains("Resolution order: user config, $REDVIM_RUNTIME, embedded."));
+         let line = files
+             .lines()
+             .find(|line| line.contains("theme_browser.hk") && line.contains("user"))
+diff --git a/src/cli.rs b/src/cli.rs
+index 0b8ddba..a443d28 100644
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -10,7 +10,11 @@ use std::path::PathBuf;
+ use clap::{Args as ClapArgs, Parser, Subcommand};
+ 
+ #[derive(Debug, Parser)]
+-#[command(version)]
++#[command(
++    name = "redvim",
++    version,
++    about = "RedVim — Astrohacker's modal editor, based on Red"
++)]
+ pub struct Args {
+     /// Non-interactive Red utilities.
+     #[command(subcommand)]
+@@ -24,7 +28,7 @@ pub struct Args {
+     #[clap(short = 'c', long = "config-override", value_name = "TOML")]
+     pub config_overrides: Vec<String>,
+ 
+-    /// List runtime files from user config, $RED_RUNTIME, and embedded assets.
++    /// List runtime files from user config, $REDVIM_RUNTIME, and embedded assets.
+     #[clap(long = "runtime-files")]
+     pub runtime_files: bool,
+ 
+diff --git a/src/config.rs b/src/config.rs
+index 869ad56..eef6a38 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -1635,12 +1635,12 @@ impl Config {
+     /// Returns Red's platform configuration directory.
+     ///
+     /// `XDG_CONFIG_HOME` takes precedence; otherwise Red uses
+-    /// `$HOME/.config/red`.
++    /// `$HOME/.config/redvim`.
+     pub fn config_dir() -> PathBuf {
+         if let Some(config_home) =
+             std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty())
+         {
+-            return PathBuf::from(config_home).join("red");
++            return PathBuf::from(config_home).join("redvim");
+         }
+ 
+         let home = std::env::var_os("HOME")
+@@ -1651,7 +1651,7 @@ impl Config {
+             })
+             .expect("home directory must be available to locate red config");
+ 
+-        home.join(".config").join("red")
++        home.join(".config").join("redvim")
+     }
+ 
+     /// Resolves a configuration-relative path.
+@@ -3613,7 +3613,7 @@ color = false
+     #[test]
+     fn persist_copilot_config_creates_and_reloads_user_setting() {
+         let directory = tempfile::tempdir().unwrap();
+-        let path = directory.path().join("red/config.toml");
++        let path = directory.path().join("redvim/config.toml");
+         for enabled in [true, false] {
+             Config::persist_copilot_enabled(&path, enabled).unwrap();
+             assert_eq!(
+diff --git a/src/main.rs b/src/main.rs
+index ba5bf1d..ebc562f 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -118,7 +118,16 @@ async fn run() -> anyhow::Result<()> {
+     if args.self_check {
+         let report = run_self_check().await?;
+         println!("{}", report.format());
+-        println!("red self-check ok");
++        let theme = red::theme::parse_vscode_theme("themes/mocha.json")?;
++        let mut highlighter = red::highlighter::Highlighter::new(&theme)?;
++        let fixture = include_str!("queries/highlights/nu-smoke.nu");
++        anyhow::ensure!(
++            highlighter.language_id_for_source(Some("example.nu"), fixture) == Some("nu")
++                && !highlighter.highlight("nu", fixture)?.is_empty(),
++            "bundled Nushell highlighting failed"
++        );
++        println!("language nu: bundled highlighting ok");
++        println!("redvim self-check ok");
+         return Ok(());
+     }
+ 
+@@ -602,7 +611,7 @@ async fn wait_for_detached_owner(session: &str, owner_pid: u32) -> anyhow::Resul
+             }
+             tokio::time::sleep(Duration::from_millis(25)).await;
+         }
+-        anyhow::bail!("detached owner did not create its socket; run red --self-check")
++        anyhow::bail!("detached owner did not create its socket; run redvim --self-check")
+     }
+     #[cfg(not(unix))]
+     {
+diff --git a/src/ui/welcome.rs b/src/ui/welcome.rs
+index b574c43..a2e1fa3 100644
+--- a/src/ui/welcome.rs
++++ b/src/ui/welcome.rs
+@@ -61,7 +61,10 @@ impl WelcomePanel {
+         let theme = editor.theme.clone();
+         let style = theme.ui_style.dialog.clone();
+         let dialog = Dialog::new(
+-            Some(format!("WELCOME TO RED · v{}", env!("CARGO_PKG_VERSION"))),
++            Some(format!(
++                "WELCOME TO REDVIM · v{}",
++                env!("CARGO_PKG_VERSION")
++            )),
+             x,
+             y,
+             width,
+@@ -140,7 +143,7 @@ impl WelcomePanel {
+ 
+     fn draw_brand(&self, buffer: &mut RenderBuffer, row: usize) {
+         let palette = splash::palette(&self.theme);
+-        let mark = "red";
++        let mark = "RedVim";
+         let width = display_width(mark) + 2;
+         let x = self.dialog.x + 1 + self.dialog.width.saturating_sub(width) / 2;
+         let y = self.dialog.y + 1 + row;
+@@ -758,7 +761,7 @@ mod tests {
+ 
+         panel.draw(&mut buffer).unwrap();
+         let rendered = buffer.dump(false).replace('·', " ");
+-        assert!(rendered.contains("WELCOME TO RED"));
++        assert!(rendered.contains("WELCOME TO REDVIM"));
+         assert!(rendered.contains("guided tour"));
+         assert!(rendered.contains("What’s new"));
+         assert!(rendered.contains("agent that knows your editor"));
+diff --git a/src/whats_new.rs b/src/whats_new.rs
+index 526f606..2a881ee 100644
+--- a/src/whats_new.rs
++++ b/src/whats_new.rs
+@@ -11,9 +11,9 @@ use regex::Regex;
+ use semver::Version;
+ use serde::Deserialize;
+ 
+-const EMBEDDED_CHANGELOG: &str = include_str!("../CHANGELOG.md");
+-const EMBEDDED_RELEASE_CAMPAIGN: &str = include_str!("../release/campaign.toml");
+-const REPOSITORY: &str = "codersauce/red";
++const EMBEDDED_CHANGELOG: &str = include_str!("../REDVIM_CHANGELOG.md");
++const EMBEDDED_RELEASE_CAMPAIGN: &str = include_str!("../release/redvim-campaign.toml");
++const REPOSITORY: &str = "astrohackerlabs/redvim";
+ const MAX_RELEASE_NOTES_BYTES: usize = 128 * 1024;
+ const RELEASE_REQUEST_TIMEOUT: Duration = Duration::from_secs(4);
+ const MAX_HIGHLIGHTS_PER_SECTION: usize = 5;
+@@ -89,7 +89,7 @@ impl ReleaseNotes {
+             .collect::<Vec<_>>();
+         let release_url = format!("https://github.com/{REPOSITORY}/releases/tag/v{version}");
+         let markdown = if sections.is_empty() {
+-            format!("## Red v{version}\n\n[Read the release notes on GitHub]({release_url}).")
++            format!("## RedVim v{version}\n\n[Read the release notes on GitHub]({release_url}).")
+         } else {
+             sections.join("\n\n")
+         };
+@@ -321,7 +321,7 @@ fn trailing_release_sections(markdown: &str) -> String {
+ mod tests {
+     use super::*;
+ 
+-    const CHANGELOG: &str = "# Changelog\n\n## [0.5.0](https://example.test/0.5)\n\n### Features\n\n- **editor:** New thing ([#2](https://github.com/codersauce/red/issues/2)) ([abcdef0](https://github.com/codersauce/red/commit/abcdef0123456789))\n\n### Bug Fixes\n\n- Fix old thing\n\n## [0.4.0](https://example.test/0.4)\n\n### Features\n\n- Previous thing\n\n## [0.3.0](https://example.test/0.3)\n\n### Features\n\n- Old thing\n";
++    const CHANGELOG: &str = "# Changelog\n\n## [0.5.0](https://example.test/0.5)\n\n### Features\n\n- **editor:** New thing ([#2](https://github.com/astrohackerlabs/redvim/issues/2)) ([abcdef0](https://github.com/astrohackerlabs/redvim/commit/abcdef0123456789))\n\n### Bug Fixes\n\n- Fix old thing\n\n## [0.4.0](https://example.test/0.4)\n\n### Features\n\n- Previous thing\n\n## [0.3.0](https://example.test/0.3)\n\n### Features\n\n- Old thing\n";
+ 
+     #[test]
+     fn bundles_only_the_installed_version_for_a_first_launch() {
+@@ -352,7 +352,7 @@ mod tests {
+     fn unavailable_embedded_versions_still_offer_a_release_link() {
+         let notes = ReleaseNotes::from_changelog(CHANGELOG, "0.9.0", None);
+ 
+-        assert!(notes.markdown.contains("Red v0.9.0"));
++        assert!(notes.markdown.contains("RedVim v0.9.0"));
+         assert!(notes.markdown.contains("releases/tag/v0.9.0"));
+     }
+ 
+@@ -398,7 +398,7 @@ mod tests {
+         let payload = serde_json::json!({
+             "tag_name": "v0.5.0",
+             "body": "## What's Changed\n\n### Features\n\n- Published improvement by @contributor in #42\n\n## Contributors\n\n- @contributor in #42 (first-time contributor)\n\n## Installation\n\nDo not show this.",
+-            "html_url": "https://github.com/codersauce/red/releases/tag/v0.5.0",
++            "html_url": "https://github.com/astrohackerlabs/redvim/releases/tag/v0.5.0",
+             "published_at": "2026-08-13T21:03:28Z",
+             "draft": false
+         });
+diff --git a/tests/agent_check.rs b/tests/agent_check.rs
+index 7c4a57b..3ad18e8 100644
+--- a/tests/agent_check.rs
++++ b/tests/agent_check.rs
+@@ -20,7 +20,7 @@ fn fake_codex(directory: &std::path::Path, version: &str) -> std::path::PathBuf
+ fn direct_codex_check_reports_a_compatible_cli_as_ready() {
+     let directory = tempfile::tempdir().unwrap();
+     let codex = fake_codex(directory.path(), "0.144.5");
+-    let output = Command::new(env!("CARGO_BIN_EXE_red"))
++    let output = Command::new(env!("CARGO_BIN_EXE_redvim"))
+         .args([
+             "--agent-check",
+             "--strict",
+@@ -41,7 +41,7 @@ fn direct_codex_check_reports_a_compatible_cli_as_ready() {
+ fn direct_codex_check_rejects_an_old_cli() {
+     let directory = tempfile::tempdir().unwrap();
+     let codex = fake_codex(directory.path(), "0.100.0");
+-    let output = Command::new(env!("CARGO_BIN_EXE_red"))
++    let output = Command::new(env!("CARGO_BIN_EXE_redvim"))
+         .args([
+             "--agent-check",
+             "--strict",
+@@ -65,7 +65,7 @@ fn agent_check_does_not_initialize_unrelated_runtime_resources() {
+     let directory = tempfile::tempdir().unwrap();
+     let codex = fake_codex(directory.path(), "0.144.5");
+     let config = tempfile::tempdir().unwrap();
+-    let config_dir = config.path().join("red");
++    let config_dir = config.path().join("redvim");
+     fs::create_dir(&config_dir).unwrap();
+     fs::write(
+         config_dir.join("config.toml"),
+@@ -76,7 +76,7 @@ fn agent_check_does_not_initialize_unrelated_runtime_resources() {
+     )
+     .unwrap();
+ 
+-    let output = Command::new(env!("CARGO_BIN_EXE_red"))
++    let output = Command::new(env!("CARGO_BIN_EXE_redvim"))
+         .args([
+             "--agent-check",
+             "--strict",
+diff --git a/tests/first_launch.rs b/tests/first_launch.rs
+index f3d5561..cd48457 100644
+--- a/tests/first_launch.rs
++++ b/tests/first_launch.rs
+@@ -3,10 +3,10 @@ use std::process::Command;
+ #[test]
+ fn first_launch_creates_config_directory_before_opening_default_log() {
+     let config_home = tempfile::tempdir().unwrap();
+-    let config_dir = config_home.path().join("red");
++    let config_dir = config_home.path().join("redvim");
+ 
+     // A non-terminal run stops at raw-mode setup, after runtime config has loaded.
+-    Command::new(env!("CARGO_BIN_EXE_red"))
++    Command::new(env!("CARGO_BIN_EXE_redvim"))
+         .env("XDG_CONFIG_HOME", config_home.path())
+         .output()
+         .unwrap();
+diff --git a/tests/redvim_identity.rs b/tests/redvim_identity.rs
+new file mode 100644
+index 0000000..66d83e0
+--- /dev/null
++++ b/tests/redvim_identity.rs
+@@ -0,0 +1,35 @@
++use std::{fs, process::Command};
++
++#[test]
++fn redvim_identity_and_configuration_are_independent_of_red() {
++    let root = tempfile::tempdir().unwrap();
++    fs::create_dir(root.path().join("red")).unwrap();
++    fs::create_dir(root.path().join("redvim")).unwrap();
++    let old = root.path().join("red/config.toml");
++    fs::write(&old, "this is deliberately invalid TOML").unwrap();
++    for (args, expected) in [
++        (vec!["--version"], "redvim 0.7.0"),
++        (vec!["--help"], "Usage: redvim"),
++        (vec!["--check-config"], "config ok"),
++        (vec!["--self-check"], "language nu: bundled highlighting ok"),
++    ] {
++        let output = Command::new(env!("CARGO_BIN_EXE_redvim"))
++            .args(args)
++            .env("XDG_CONFIG_HOME", root.path())
++            .env("HOME", root.path())
++            .env("RED_RUNTIME", root.path().join("missing-runtime"))
++            .env_remove("REDVIM_RUNTIME")
++            .output()
++            .unwrap();
++        assert!(
++            output.status.success(),
++            "{}",
++            String::from_utf8_lossy(&output.stderr)
++        );
++        assert!(String::from_utf8_lossy(&output.stdout).contains(expected));
++    }
++    assert_eq!(
++        fs::read_to_string(old).unwrap(),
++        "this is deliberately invalid TOML"
++    );
++}
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index b1b9a00..62fe211 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -4,7 +4,7 @@ use std::{
+ };
+ 
+ fn self_check_command(config: &Path) -> Command {
+-    let mut command = Command::new(env!("CARGO_BIN_EXE_red"));
++    let mut command = Command::new(env!("CARGO_BIN_EXE_redvim"));
+     configure_self_check(&mut command, config);
+     command
+ }
+@@ -38,7 +38,7 @@ fn self_check_succeeds_with_a_small_main_stack() {
+             "ulimit -s 1024 && exec \"$@\"",
+             "red-self-check-stack",
+         ])
+-        .arg(env!("CARGO_BIN_EXE_red"));
++        .arg(env!("CARGO_BIN_EXE_redvim"));
+     configure_self_check(&mut command, config.path());
+     assert_self_check_report(command.output().unwrap());
+ }
+@@ -57,7 +57,7 @@ fn assert_self_check_report(output: Output) {
+     );
+ 
+     let lines = stdout.lines().collect::<Vec<_>>();
+-    assert_eq!(lines.last(), Some(&"red self-check ok"), "{stdout}");
++    assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     let plugins = lines
+         .iter()
+         .filter_map(|line| line.strip_prefix("plugin "))
+-- 
+2.54.0 (Apple Git-157)
+

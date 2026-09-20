@@ -224,15 +224,15 @@ where
         match arg.as_ref() {
             "--version" => {
                 println!(
-                    "Astrohacker Chromium Engine {}",
+                    "Roamari Chromium Engine {}",
                     env!("ASTROHACKER_CLI_VERSION")
                 );
                 return true;
             }
             "--help" | "-h" => {
                 print!(
-                    "Astrohacker Chromium Engine — Chromium support helper for Astrohacker TermSurf\n\n\
-Usage: ah-chromiumd [OPTIONS]\n\n\
+                    "Roamari Chromium Engine — Chromium support helper for Roamari\n\n\
+Usage: roamari-chromiumd [OPTIONS]\n\n\
 Options:\n      --ipc-socket=<PATH>       Connect to an Astrohacker TermSurf IPC socket\n      --listen-socket=<PATH>    Listen for browser IPC clients\n      --user-data-dir=<PATH>    Browser profile data directory\n      --browser-name=<NAME>     Browser identity to register\n      --render-surface-service=<NAME>  Accept the optional host render service\n      --incognito               Use an incognito browser context\n      --termsurf-warmup         Warm runtime dependencies and exit\n  -h, --help                    Print help\n      --version                 Print version\n"
                 );
                 return true;

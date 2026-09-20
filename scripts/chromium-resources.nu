@@ -47,7 +47,7 @@ export def copy-chromium-runtime-resources [
 ] {
   mkdir $destination
 
-  let helper = ($destination | path join "ah-chromiumd")
+  let helper = ($destination | path join "roamari-chromiumd")
   if (is-f $helper) {
     do {
       ^install_name_tool -delete_rpath $chromium_out $helper
