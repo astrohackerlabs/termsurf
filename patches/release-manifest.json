@@ -7,14 +7,14 @@
       "checkout": "forks/ghostty",
       "upstream": "https://github.com/ghostty-org/ghostty.git",
       "base": "246f702876b924a1cb7cade1e99274d1470302fc",
-      "branch": "issue-26101009137900-exp5-ghostty-main",
-      "expected_head": "7b42a3fc4f2aadcb4c166cb9b2b1456f00c06635",
-      "expected_tree": "db5de2eaa39db69d31a54d9ee3e00f87c275d97b",
+      "branch": "issue-26101009137900-exp7-termsurf-cli",
+      "expected_head": "6b7ab2b1e6114eff4ec58c11a03548ca9cbf0d0c",
+      "expected_tree": "d342de715761a8993936384575f5c7fe7daa7be5",
       "patch_directories": [
         "patches/ghostty/patches/issue-26101009137900-exp5"
       ],
-      "patch_count": 45,
-      "archive_sha256": "a4bcef0639284b60c700194ca458bb7a67ce1033f3ddef3f85e5561f1602aa0e",
+      "patch_count": 46,
+      "archive_sha256": "30eabbef427c602d9acbbe52a0316d2aa218a82d604701989f090efef40c264f",
       "allowed_untracked": []
     },
     {

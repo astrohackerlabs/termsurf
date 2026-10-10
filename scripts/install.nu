@@ -93,9 +93,9 @@ def install-chromiumd [rust_dir: string, chromium_out: string, chromiumd_install
 
 def install-ahterm [ahterm_release_app: string, applications_dir: string, lsregister: string] {
   let app_src = $ahterm_release_app
-  let app = ($applications_dir | path join "Astrohacker Terminal.app")
+  let app = ($applications_dir | path join "Astrohacker TermSurf.app")
 
-  if not (is-x ($app_src | path join "Contents/MacOS/ahterm")) {
+  if not (is-x ($app_src | path join "Contents/MacOS/termsurf")) {
     print $"Error: Release app not found at ($app_src)"
     print "Run: scripts/build.nu ahterm --release"
     exit 1
@@ -137,7 +137,7 @@ def --wrapped main [...args: string] {
   let rust_dir = $repo_dir
   let chromium_out = ($repo_dir | path join "forks/chromium/src/out/Default")
   let lsregister = "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister"
-  let ahterm_release_app = ($repo_dir | path join "forks/ghostty/macos/build/Release/Astrohacker Terminal.app")
+  let ahterm_release_app = ($repo_dir | path join "forks/ghostty/macos/build/Release/Astrohacker TermSurf.app")
   let applications_dir = ($env.TERMSURF_APPLICATIONS_DIR? | default "/Applications")
   let chromiumd_install_dir = ($env.ASTROHACKER_CHROMIUM_INSTALL_DIR? | default "/opt/homebrew/opt/roamari-chromiumd")
 
@@ -159,7 +159,7 @@ def --wrapped main [...args: string] {
     exit 1
   }
 
-  if $component == "ahterm" and not (is-x ($ahterm_release_app | path join "Contents/MacOS/ahterm")) {
+  if $component == "ahterm" and not (is-x ($ahterm_release_app | path join "Contents/MacOS/termsurf")) {
     print $"Error: Release app not found at ($ahterm_release_app)"
     print "Run: scripts/build.nu ahterm --release"
     exit 1

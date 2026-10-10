@@ -67,7 +67,8 @@ returns ordered hashes, HEAD/tree and a proposed manifest entry.
 By default export creates a new `patches/<name>/patches/issue-<id>/` directory
 and refuses an existing one. A later experiment in the same issue uses
 `--append`: a delta whose new files are numbered after the last one, allowed only
-when that directory is the last selected archive directory. A series rebased
+when that directory (or the issue's rebased `issue-<id>-exp<n>/`) is the last
+selected archive directory. A series rebased
 onto a new upstream base uses `--base <commit>` with `--from` equal to it. That
 writes `issue-<id>/`, or `issue-<id>-exp<n>/` when the issue directory exists,
 and proposes the new base. Every mode replays the series in a scratch clone,

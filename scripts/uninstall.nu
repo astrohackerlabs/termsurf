@@ -69,7 +69,7 @@ def uninstall-chromiumd [chromiumd_install_dir: string] {
 }
 
 def uninstall-ahterm [applications_dir: string] {
-  let app = ($applications_dir | path join "Astrohacker Terminal.app")
+  let app = ($applications_dir | path join "Astrohacker TermSurf.app")
 
   print "==> Uninstalling Astrohacker Terminal..."
   ^rm -rf $app

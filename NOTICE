@@ -15,7 +15,7 @@ Package legal layout (Homebrew / release tarball):
 
 <!-- legal-manifest
 # kind|id|section|license
-wrapper|ahterm|ghostty|MIT
+wrapper|termsurf|ghostty|MIT
 wrapper|ahcalc|first-party|MIT
 wrapper|ahebx|first-party|MIT
 wrapper|ahnexus|first-party|MIT
@@ -54,7 +54,7 @@ runtime components under their respective licenses as used by Bun at build
 time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
-## ghostty — ahterm
+## ghostty — termsurf
 
 Ghostty (ghostboard / forks/ghostty lineage)
 https://github.com/ghostty-org/ghostty

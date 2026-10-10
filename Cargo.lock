@@ -45,7 +45,7 @@ dependencies = [
 
 [[package]]
 name = "ahnexus"
-version = "0.3.30"
+version = "0.3.31"
 dependencies = [
  "axum 0.8.9",
  "clap",

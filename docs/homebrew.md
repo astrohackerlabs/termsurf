@@ -30,7 +30,7 @@ and roamari as a cask dependency (browser + Chromium). The app lands in
 Released PATH names (machine-readable for gates):
 
 <!-- released-wrappers -->
-ahterm
+termsurf
 ahcalc
 ahebx
 ahnexus
@@ -47,7 +47,7 @@ ahnexus
 
 | Command | Role |
 | --- | --- |
-| `ahterm` | Astrohacker TermSurf (app executable + PATH launcher) |
+| `termsurf` | Astrohacker TermSurf (app executable + PATH launcher; named `ahterm` through 0.3.30) |
 | `nutorch` | NuTorch shell, supplied by the separate Homebrew dependency |
 | `roamari` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
@@ -116,11 +116,11 @@ require `sudo` (helpers are Homebrew `artifact`s).
 ## Installed layout
 
 - `Astrohacker TermSurf.app` → `/Applications/Astrohacker TermSurf.app`
-  (executable `Contents/MacOS/ahterm`)
+  (executable `Contents/MacOS/termsurf`)
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `ahterm`, `roamari`, `ahcalc`, `ahebx`,
+- PATH: `termsurf`, `roamari`, `ahcalc`, `ahebx`,
   `ahnexus`, engine helpers
 - Shell dependency: `/opt/homebrew/bin/nutorch`. With no explicit `command`,
   TermSurf selects that path (then `/usr/local/bin/nutorch`), even from a GUI
@@ -145,7 +145,7 @@ Asset name: `astrohacker-<version>-aarch64-apple-darwin.tar.gz`
 
 Top-level contents:
 
-- `Astrohacker TermSurf.app/` (with `Contents/MacOS/ahterm` and
+- `Astrohacker TermSurf.app/` (with `Contents/MacOS/termsurf` and
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/`
@@ -264,7 +264,7 @@ and credential discovery. After the operator types the exact confirmation, it:
    version (`ahnexus`), refreshes their `Cargo.lock`
    files, commits that bump on private `main` when needed, and pushes it so
    the monorepo stays aligned with `origin/main`. This step never rewrites
-   anything under `forks/` (fork trees are out of scope; `ahterm` still gets
+   anything under `forks/` (fork trees are out of scope; `termsurf` still gets
    the release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
@@ -358,7 +358,7 @@ normal operator interface.
    (not version/sha) if needed so the tap is clean for publish.
 
 3. **Full release build** (`scripts/build.nu termsurf` builds only what the
-   archive ships: ahcalc, ahebx, ahnexus, ahterm; preserve all valid
+   archive ships: ahcalc, ahebx, ahnexus, termsurf; preserve all valid
    incremental build outputs):
 
    ```sh
@@ -378,13 +378,13 @@ normal operator interface.
      compile-time stamps match the cask and the post-build tree stays clean.
      Do not leave those packages stuck at a placeholder such as `0.1.0` across
      releases. Do not rewrite package versions under `forks/`.
-   - `TERMSURF_VERSION=<version>` is the `ahterm` app/helper version input.
-     `ahterm` is the only shipped wrapper that uses the terminal helper/action
-     convention: `ahterm +version` and `ahterm +help`.
+   - `TERMSURF_VERSION=<version>` is the `termsurf` app/helper version input.
+     `termsurf` is the only shipped wrapper that uses the terminal helper/action
+     convention: `termsurf +version` and `termsurf +help`.
    - `ASTROHACKER_VERSION=<version>` is the release version input for Rust
      product/helper binaries (first-party crate versions are also aligned to
      the same release).
-   - Every shipped non-`ahterm` wrapper must support `--version` and `--help`.
+   - Every shipped non-`termsurf` wrapper must support `--version` and `--help`.
      The first `--version` line must use the same `<version>`:
 
      | Wrapper | Expected first line |

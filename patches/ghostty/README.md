@@ -24,7 +24,27 @@ the same issue and `--base <commit>` for a rebased series; see `ah patch help`.
 Older pin recipes below are historical reconstruction context; the manifest
 and these commands select current inputs.
 
-## Active Pin (Issue 26101009137900 Exp 5 Ghostty `main` tip)
+## Active Pin (Issue 26101009137900 Exp 7 `termsurf` CLI)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `246f702876b924a1cb7cade1e99274d1470302fc` (unchanged
+  from Exp 5)
+- **Product branch:** `issue-26101009137900-exp7-termsurf-cli`
+- **Product HEAD:** `6b7ab2b1e6114eff4ec58c11a03548ca9cbf0d0c`
+- **Product tree:** `d342de715761a8993936384575f5c7fe7daa7be5`
+- **Issue archives:** `issue-26101009137900-exp5/`, now **46** files; patch 0046
+  "Rename the CLI from ahterm to termsurf" appended with
+  `ah patch export --append`.
+- **Patches:** **46** total. 0046 names the app executable `termsurf`
+  (`EXECUTABLE_NAME`, test hosts), and makes the CLI's usage text and the
+  shell-integration ssh wrappers run `termsurf`.
+- **Archive SHA-256:** `30eabbef427c602d9acbbe52a0316d2aa218a82d604701989f090efef40c264f`
+- **Toolchain:** Zig selected from `build.zig.zon` (0.16.0 via `zig@0.16`).
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Tests:** full `zig build test` (Zig + Xcode) exit 0: 3956 pass, 25 skip.
+- **Verification:** `ah patch check ghostty`; `ah fork check ghostty`.
+
+## Prior Active Pin (Issue 26101009137900 Exp 5 Ghostty `main` tip)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `246f702876b924a1cb7cade1e99274d1470302fc` (2026-10-09,

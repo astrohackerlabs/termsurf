@@ -20,8 +20,8 @@ script locals. Agents and humans should add new names only under this scheme.
 **Do not** introduce process environment variables named `AHT_*`, `AHE_*`,
 `AHW_*`, or retired codenames (`ROAMIUM`, `SURFARI`, `GIRLBAT`, `GHOSTBOARD`).
 
-Script-local bash variables may use `AHTERM_*` to match shipped binary
-`ahterm` (they are not process env).
+Script-local variables may keep `AHTERM_*`, after the CLI's former name
+`ahterm`, now `termsurf` (they are not process env).
 
 ## Protocol (keep `TERMSURF_*`)
 

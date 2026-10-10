@@ -153,7 +153,7 @@ fetching source (this repo does not vendor Chromium).
    | Fork | Checkout path | Docs |
    | --- | --- | --- |
    | Chromium (shipped engine) | `forks/chromium/src` | [`patches/chromium/README.md`](patches/chromium/README.md) |
-   | Ghostty (host / `ahterm`) | `forks/ghostty` | [`patches/ghostty/README.md`](patches/ghostty/README.md) |
+   | Ghostty (host / `termsurf`) | `forks/ghostty` | [`patches/ghostty/README.md`](patches/ghostty/README.md) |
    | Nushell | `forks/nushell` | [`patches/nushell/README.md`](patches/nushell/README.md) |
    | Reedline | `forks/reedline` | [`patches/reedline/README.md`](patches/reedline/README.md) |
 
@@ -203,7 +203,7 @@ Release-style local build (still requires reconstructed forks):
 scripts/build.nu termsurf --release
 ```
 
-The host app bundle (when Ghostty/`ahterm` succeeds) is written to:
+The host app bundle (when the Ghostty/`ahterm` build component succeeds) is written to:
 
 ```text
 forks/ghostty/macos/build/Release/Astrohacker TermSurf.app

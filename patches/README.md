@@ -42,7 +42,7 @@ proven equivalent to the complete selected series for a delta. The issue must
 be open and the experiment unfinished. Export reconstructs the proposed series
 in a scratch clone, verifies its tree and ordered identities, and creates a new
 `patches/<fork>/patches/issue-<id>/` directory. `--append` extends that issue
-directory when it is the last selected one, and `--base <commit>` exports a
+directory, or its rebased `issue-<id>-exp<n>/`, when it is the last selected one, and `--base <commit>` exports a
 series rebased onto a new upstream base (see `ah patch help`). Existing archive
 bytes are never rewritten. Do not delete historical archives to bypass a refusal.
 

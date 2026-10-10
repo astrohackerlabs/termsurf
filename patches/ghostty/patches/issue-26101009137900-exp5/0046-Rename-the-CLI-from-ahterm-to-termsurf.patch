@@ -1,0 +1,504 @@
+From 6b7ab2b1e6114eff4ec58c11a03548ca9cbf0d0c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 10 Oct 2026 07:04:44 -0500
+Subject: [PATCH] Rename the CLI from ahterm to termsurf
+
+Name the app executable termsurf, so the CLI Homebrew links onto PATH
+is termsurf. The CLI's own usage text and the shell-integration ssh
+wrappers now run termsurf, which also fixes the wrappers, which pointed
+at a ghostboard executable the bundle does not contain.
+---
+ macos/Ghostty.xcodeproj/project.pbxproj       | 12 +++++-----
+ macos/Sources/App/main.swift                  |  4 ++--
+ src/build/GhosttyXcodebuild.zig               |  2 +-
+ src/cli/README.md                             |  2 +-
+ src/cli/explain_config.zig                    | 18 +++++++--------
+ src/cli/ghostty.zig                           |  4 ++--
+ src/cli/help.zig                              |  2 +-
+ src/cli/new_window.zig                        |  4 ++--
+ src/cli/show_config.zig                       |  2 +-
+ src/cli/ssh.zig                               | 22 +++++++++----------
+ src/cli/ssh_cache.zig                         | 18 +++++++--------
+ src/main_ghostty.zig                          |  4 ++--
+ src/protobuf/termsurf.pb-c.h                  |  2 +-
+ src/shell-integration/bash/ghostty.bash       |  4 ++--
+ .../elvish/lib/ghostty-integration.elv        |  6 ++---
+ .../ghostty-shell-integration.fish            |  4 ++--
+ .../nushell/vendor/autoload/ghostty.nu        |  6 ++---
+ src/shell-integration/zsh/ghostty-integration |  4 ++--
+ 18 files changed, 60 insertions(+), 60 deletions(-)
+
+diff --git a/macos/Ghostty.xcodeproj/project.pbxproj b/macos/Ghostty.xcodeproj/project.pbxproj
+index 42a7a7fe80461fdbebc4333b2642f431de65c44e..87444ed735b746720fb2936f1050481eaaf108e6 100644
+--- a/macos/Ghostty.xcodeproj/project.pbxproj
++++ b/macos/Ghostty.xcodeproj/project.pbxproj
+@@ -549,7 +549,7 @@
+ 				DEVELOPMENT_TEAM = "";
+ 				ENABLE_HARDENED_RUNTIME = YES;
+ 				ENABLE_PREVIEWS = YES;
+-				EXECUTABLE_NAME = ahterm;
++				EXECUTABLE_NAME = termsurf;
+ 				GCC_OPTIMIZATION_LEVEL = fast;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = "Ghostty-Info.plist";
+@@ -765,7 +765,7 @@
+ 				SWIFT_EMIT_LOC_STRINGS = NO;
+ 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+ 				SWIFT_VERSION = 5.0;
+-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ahterm";
++				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
+ 			};
+ 			name = Debug;
+ 		};
+@@ -788,7 +788,7 @@
+ 				SWIFT_EMIT_LOC_STRINGS = NO;
+ 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+ 				SWIFT_VERSION = 5.0;
+-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ahterm";
++				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
+ 			};
+ 			name = Release;
+ 		};
+@@ -811,7 +811,7 @@
+ 				SWIFT_EMIT_LOC_STRINGS = NO;
+ 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+ 				SWIFT_VERSION = 5.0;
+-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ahterm";
++				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Astrohacker TermSurf.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/termsurf";
+ 			};
+ 			name = ReleaseLocal;
+ 		};
+@@ -949,7 +949,7 @@
+ 				DEVELOPMENT_TEAM = "";
+ 				ENABLE_HARDENED_RUNTIME = YES;
+ 				ENABLE_PREVIEWS = YES;
+-				EXECUTABLE_NAME = ahterm;
++				EXECUTABLE_NAME = termsurf;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = "Ghostty-Info.plist";
+ 				INFOPLIST_KEY_CFBundleDisplayName = "Astrohacker TermSurf";
+@@ -1004,7 +1004,7 @@
+ 				DEVELOPMENT_TEAM = "";
+ 				ENABLE_HARDENED_RUNTIME = YES;
+ 				ENABLE_PREVIEWS = YES;
+-				EXECUTABLE_NAME = ahterm;
++				EXECUTABLE_NAME = termsurf;
+ 				GCC_OPTIMIZATION_LEVEL = fast;
+ 				GENERATE_INFOPLIST_FILE = YES;
+ 				INFOPLIST_FILE = "Ghostty-Info.plist";
+diff --git a/macos/Sources/App/main.swift b/macos/Sources/App/main.swift
+index f9f34f9095723ebe4cfecbe2a19a5a117e496b10..0986b1995a295a95e292eea06ec4304b1b51cdf6 100644
+--- a/macos/Sources/App/main.swift
++++ b/macos/Sources/App/main.swift
+@@ -16,7 +16,7 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
+             "Astrohacker TermSurf failed to initialize! If you're executing Astrohacker TermSurf from the command line\n" +
+             "then this is usually because an invalid action or multiple actions were specified.\n" +
+             "Actions start with the `+` character.\n\n" +
+-            "View all available actions by running `ghostboard +help`.\n")
++            "View all available actions by running `termsurf +help`.\n")
+         exit(1)
+ 
+     case .app:
+@@ -27,7 +27,7 @@ if ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) != GHOSTTY_SUCCE
+ }
+ 
+ // This will run the CLI action and exit if one was specified. A CLI
+-// action is a command starting with a `+`, such as `ghostboard +boo`.
++// action is a command starting with a `+`, such as `termsurf +boo`.
+ ghostty_cli_try_action()
+ 
+ _ = NSApplicationMain(CommandLine.argc, CommandLine.unsafeArgv)
+diff --git a/src/build/GhosttyXcodebuild.zig b/src/build/GhosttyXcodebuild.zig
+index e803acdda5fb20f51bcb83105bf68f7138991672..c6d39c85281508945f7dbf59bb2ea187bf4dec32 100644
+--- a/src/build/GhosttyXcodebuild.zig
++++ b/src/build/GhosttyXcodebuild.zig
+@@ -143,7 +143,7 @@ pub fn init(
+         open.has_side_effects = true;
+         open.cwd = b.path("");
+         open.addArgs(&.{b.fmt(
+-            "{s}/Contents/MacOS/ghostboard",
++            "{s}/Contents/MacOS/termsurf",
+             .{app_path},
+         )});
+ 
+diff --git a/src/cli/README.md b/src/cli/README.md
+index 343f1a183ce9e2a87bdac616c19d7e4981255ef9..4bf5da1ccc1eaf6caf22959adbc99daba8502aac 100644
+--- a/src/cli/README.md
++++ b/src/cli/README.md
+@@ -10,4 +10,4 @@ For user documentation, see the main README or [ghostty.org](https://ghostty.org
+ 
+ Each cli action is defined in it's own file. Documentation for each action is defined
+ in the doc comment associated with the `run` function. For example the `run` function
+-in `list_keybinds.zig` contains the help text for `ghostboard +list-keybinds`.
++in `list_keybinds.zig` contains the help text for `termsurf +list-keybinds`.
+diff --git a/src/cli/explain_config.zig b/src/cli/explain_config.zig
+index 04c6470593483ae34d9106e82d62fd48e1d56fd1..c3dd8fe8718811d4f4655f64622f2a0011332050 100644
+--- a/src/cli/explain_config.zig
++++ b/src/cli/explain_config.zig
+@@ -12,12 +12,12 @@ const global = @import("../global.zig");
+ pub const Options = struct {
+     /// The config option to explain. For example:
+     ///
+-    ///   ghostboard +explain-config --option=font-size
++    ///   termsurf +explain-config --option=font-size
+     option: ?[]const u8 = null,
+ 
+     /// The keybind action to explain. For example:
+     ///
+-    ///   ghostboard +explain-config --keybind=copy_to_clipboard
++    ///   termsurf +explain-config --keybind=copy_to_clipboard
+     keybind: ?[]const u8 = null,
+ 
+     pub fn deinit(self: Options) void {
+@@ -36,10 +36,10 @@ pub const Options = struct {
+ ///
+ /// Examples:
+ ///
+-///   ghostboard +explain-config font-size
+-///   ghostboard +explain-config copy_to_clipboard
+-///   ghostboard +explain-config --option=font-size
+-///   ghostboard +explain-config --keybind=copy_to_clipboard
++///   termsurf +explain-config font-size
++///   termsurf +explain-config copy_to_clipboard
++///   termsurf +explain-config --option=font-size
++///   termsurf +explain-config --keybind=copy_to_clipboard
+ ///
+ /// Flags:
+ ///
+@@ -79,9 +79,9 @@ pub fn run(alloc: Allocator) !u8 {
+         var stderr: std.Io.File = .stderr();
+         var buffer: [4096]u8 = undefined;
+         var stderr_writer = stderr.writer(global.io(), &buffer);
+-        try stderr_writer.interface.writeAll("Usage: ghostboard +explain-config <option>\n");
+-        try stderr_writer.interface.writeAll("       ghostboard +explain-config --option=<option>\n");
+-        try stderr_writer.interface.writeAll("       ghostboard +explain-config --keybind=<action>\n");
++        try stderr_writer.interface.writeAll("Usage: termsurf +explain-config <option>\n");
++        try stderr_writer.interface.writeAll("       termsurf +explain-config --option=<option>\n");
++        try stderr_writer.interface.writeAll("       termsurf +explain-config --keybind=<action>\n");
+         try stderr_writer.end();
+         return 1;
+     };
+diff --git a/src/cli/ghostty.zig b/src/cli/ghostty.zig
+index 2f7e3c5e504e4234470bb72dfd2e7c986b97ff0f..3aef23c0baeb48df377ecb978986ccfbf228bd80 100644
+--- a/src/cli/ghostty.zig
++++ b/src/cli/ghostty.zig
+@@ -89,9 +89,9 @@ pub const Action = enum {
+     pub fn detectSpecialCase(arg: []const u8) ?SpecialCase(Action) {
+         // If we see a "-e" and we haven't seen a command yet, then
+         // we are done looking for commands. This special case enables
+-        // `ghostboard -e ghostboard +command`. If we've seen a command we
++        // `termsurf -e termsurf +command`. If we've seen a command we
+         // still want to keep looking because
+-        // `ghostboard +command -e +command` is invalid.
++        // `termsurf +command -e +command` is invalid.
+         if (std.mem.eql(u8, arg, "-e")) return .abort_if_no_action;
+ 
+         // Special case, --version always outputs the version no
+diff --git a/src/cli/help.zig b/src/cli/help.zig
+index 297fee6024a46048b6b0b8911004df07414fa9b7..1013b1e845d8cfed7ddeec74f7709f342cbc68b7 100644
+--- a/src/cli/help.zig
++++ b/src/cli/help.zig
+@@ -35,7 +35,7 @@ pub fn run(alloc: Allocator) !u8 {
+     var stdout_writer = std.Io.File.stdout().writer(global.io(), &buffer);
+     const stdout = &stdout_writer.interface;
+     try stdout.writeAll(
+-        \\Usage: ghostboard [+action] [options]
++        \\Usage: termsurf [+action] [options]
+         \\
+         \\Run Astrohacker TermSurf or a specific helper action.
+         \\
+diff --git a/src/cli/new_window.zig b/src/cli/new_window.zig
+index 633a9c838337a64f0fde85ed00c5297eeba573d3..5f2e863f3820713511c09dd22903fcfc12f82d63 100644
+--- a/src/cli/new_window.zig
++++ b/src/cli/new_window.zig
+@@ -127,12 +127,12 @@ pub const Options = struct {
+ ///
+ /// If `--working-directory` is found on the command line and is a relative
+ /// path (i.e. doesn't start with `/`) it will be resolved to an absolute path
+-/// relative to the current working directory that the `ghostboard +new-window`
++/// relative to the current working directory that the `termsurf +new-window`
+ /// command is run from. `~/` prefixes will also be expanded to the user's home
+ /// directory.
+ ///
+ /// If `--working-directory` is _not_ found on the command line, the working
+-/// directory that `ghostboard +new-window` is run from will be passed to Ghostty.
++/// directory that `termsurf +new-window` is run from will be passed to Ghostty.
+ ///
+ /// GTK uses an application ID to identify instances of applications. If Ghostty
+ /// is compiled with release optimizations, the default application ID will be
+diff --git a/src/cli/show_config.zig b/src/cli/show_config.zig
+index 98feb99f0a1256af2b21b598beca5614d6c60e1c..7c700063b103699d33c572e837c8b75f4dcdc36a 100644
+--- a/src/cli/show_config.zig
++++ b/src/cli/show_config.zig
+@@ -41,7 +41,7 @@ pub const Options = struct {
+ /// using the default configuration this will output nothing.
+ ///
+ /// If you are a new user and want to see all available options with
+-/// documentation, run `ghostboard +show-config --default --docs`.
++/// documentation, run `termsurf +show-config --default --docs`.
+ ///
+ /// The output is not in any specific order, but the order should be consistent
+ /// between runs. The output is not guaranteed to be exactly match the input
+diff --git a/src/cli/ssh.zig b/src/cli/ssh.zig
+index fb9f3f45be9f6910ea24813b2726749a001c01fa..ea2e43228a1f572c28984daf9f368b7864f40c20 100644
+--- a/src/cli/ssh.zig
++++ b/src/cli/ssh.zig
+@@ -13,7 +13,7 @@ const global = @import("../global.zig");
+ const log = std.log.scoped(.ssh);
+ 
+ const usage =
+-    \\Usage: ghostboard +ssh [flags] [--] <ssh args...>
++    \\Usage: termsurf +ssh [flags] [--] <ssh args...>
+     \\
+     \\Flags:
+     \\  --forward-env[=bool]  Enable TERM / SendEnv forwarding. Default: true.
+@@ -112,10 +112,10 @@ pub const Options = struct {
+ /// `shell-integration-features` includes `ssh-env` or `ssh-terminfo`,
+ /// each shell defines an `ssh` function that runs:
+ ///
+-///     ghostboard +ssh <flags> -- "$@"
++///     termsurf +ssh <flags> -- "$@"
+ ///
+-/// You can also run `ghostboard +ssh` directly, or alias it yourself (e.g.
+-/// `alias ssh='ghostboard +ssh --'`) if you prefer not to use the shell
++/// You can also run `termsurf +ssh` directly, or alias it yourself (e.g.
++/// `alias ssh='termsurf +ssh --'`) if you prefer not to use the shell
+ /// integration.
+ ///
+ /// `+ssh` performs up to two pieces of setup before launching `ssh`:
+@@ -131,7 +131,7 @@ pub const Options = struct {
+ ///      given destination, installs Ghostty's embedded terminfo entry on the
+ ///      remote host using `ssh tic -x -` over a shared `ControlMaster`
+ ///      connection. Successful installs are cached
+-///      (see `ghostboard +ssh-cache`) so subsequent connections skip this
++///      (see `termsurf +ssh-cache`) so subsequent connections skip this
+ ///      step. When terminfo is successfully installed or already cached,
+ ///      `TERM` is set to `xterm-ghostty` instead of `xterm-256color`.
+ ///
+@@ -151,7 +151,7 @@ pub const Options = struct {
+ ///     When `false`, both the cache read (skip-if-installed) and the
+ ///     cache write (record-on-success) are bypassed, and every
+ ///     connection performs the install. To one-shot reinstall a single
+-///     host while keeping the cache in use, prefer `ghostboard +ssh-cache
++///     host while keeping the cache in use, prefer `termsurf +ssh-cache
+ ///     --remove=<host>` followed by a normal connection.
+ ///
+ ///   * `--ssh=<path>`: Path to the `ssh` binary to execute. Default: the
+@@ -163,19 +163,19 @@ pub const Options = struct {
+ /// Examples:
+ ///
+ ///     # Basic invocation using defaults:
+-///     ghostboard +ssh user@example.com
++///     termsurf +ssh user@example.com
+ ///
+ ///     # Forward Ghostty env vars but skip the terminfo install:
+-///     ghostboard +ssh --terminfo=false user@example.com
++///     termsurf +ssh --terminfo=false user@example.com
+ ///
+ ///     # `ssh` flags (short-form `-p`, etc.) pass through unchanged:
+-///     ghostboard +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
++///     termsurf +ssh -p 2222 -i ~/.ssh/id_ed25519 user@example.com
+ ///
+ ///     # Use `--` explicitly if your ssh args might collide with our flags:
+-///     ghostboard +ssh -- --some-rare-ssh-arg user@example.com
++///     termsurf +ssh -- --some-rare-ssh-arg user@example.com
+ ///
+ /// Pass `--verbose` to see what `+ssh` is doing. For cache inspection
+-/// and management, see `ghostboard +ssh-cache`.
++/// and management, see `termsurf +ssh-cache`.
+ ///
+ /// Available since: 1.4.0
+ pub fn run(alloc_gpa: Allocator) !u8 {
+diff --git a/src/cli/ssh_cache.zig b/src/cli/ssh_cache.zig
+index 57cbfe699360dcd0281a5cc6111b3693b9a940e3..139a4333b21736f274bd52a858b17f9290b4f1fd 100644
+--- a/src/cli/ssh_cache.zig
++++ b/src/cli/ssh_cache.zig
+@@ -54,14 +54,14 @@ pub const Options = struct {
+ ///
+ /// Examples:
+ ///
+-///     ghostboard +ssh-cache                           # List all cached destinations
+-///     ghostboard +ssh-cache user@example.com          # Show that destination
+-///     ghostboard +ssh-cache example.com               # Show all users on that host
+-///     ghostboard +ssh-cache user@example.com:2222     # Show that destination on port 2222
+-///     ghostboard +ssh-cache --add=user@example.com    # Manually add a destination
+-///     ghostboard +ssh-cache --remove=user@example.com # Remove a destination
+-///     ghostboard +ssh-cache --prune=30d               # Remove entries older than 30 days
+-///     ghostboard +ssh-cache --clear                   # Clear entire cache
++///     termsurf +ssh-cache                           # List all cached destinations
++///     termsurf +ssh-cache user@example.com          # Show that destination
++///     termsurf +ssh-cache example.com               # Show all users on that host
++///     termsurf +ssh-cache user@example.com:2222     # Show that destination on port 2222
++///     termsurf +ssh-cache --add=user@example.com    # Manually add a destination
++///     termsurf +ssh-cache --remove=user@example.com # Remove a destination
++///     termsurf +ssh-cache --prune=30d               # Remove entries older than 30 days
++///     termsurf +ssh-cache --clear                   # Clear entire cache
+ pub fn run(alloc_gpa: Allocator) !u8 {
+     var arena = std.heap.ArenaAllocator.init(alloc_gpa);
+     defer arena.deinit();
+@@ -95,7 +95,7 @@ pub fn run(alloc_gpa: Allocator) !u8 {
+             if (is_host_flag) {
+                 try stderr.print(
+                     "Warning: --host is deprecated; pass the destination " ++
+-                        "directly, e.g. `ghostboard +ssh-cache {s}`.\n",
++                        "directly, e.g. `termsurf +ssh-cache {s}`.\n",
+                     .{arg["--host=".len..]},
+                 );
+             }
+diff --git a/src/main_ghostty.zig b/src/main_ghostty.zig
+index 8440ee0c38a3e262c6d73bd71dd93c8e866ae3e8..f552bc2dac87b2489d09ed7d90baf48fd38a4ab9 100644
+--- a/src/main_ghostty.zig
++++ b/src/main_ghostty.zig
+@@ -47,7 +47,7 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
+             error.InvalidAction => try stderr.print(
+                 "Error: unknown CLI action specified. CLI actions are specified with\n" ++
+                     "the '+' character.\n\n" ++
+-                    "All valid CLI actions can be listed with `ghostboard +help`\n",
++                    "All valid CLI actions can be listed with `termsurf +help`\n",
+                 .{},
+             ),
+ 
+@@ -78,7 +78,7 @@ pub fn main(minimal: std.process.Init.Minimal) !MainReturn {
+         var buffer: [2048]u8 = undefined;
+         var stdout_writer = std.fs.File.stdout().writer(&buffer);
+         const stdout = &stdout_writer.interface;
+-        try stdout.print("Usage: ghostboard +<action> [flags]\n\n", .{});
++        try stdout.print("Usage: termsurf +<action> [flags]\n\n", .{});
+         try stdout.print(
+             \\This is the Astrohacker TermSurf helper CLI that accompanies the graphical Astrohacker TermSurf app.
+             \\To launch the terminal directly, please launch the graphical app
+diff --git a/src/protobuf/termsurf.pb-c.h b/src/protobuf/termsurf.pb-c.h
+index 0a75540c9f00506385fd236773d718d17686cb9e..282beaf2a2c68338a87b36c7dcbc55272fcb9cb1 100644
+--- a/src/protobuf/termsurf.pb-c.h
++++ b/src/protobuf/termsurf.pb-c.h
+@@ -166,7 +166,7 @@ struct  Termsurf__TermSurfMessage
+     Termsurf__ExternalFileDrop *external_file_drop;
+     Termsurf__FileChooserReply *file_chooser_reply;
+     /*
+-     * Host-mediated file chooser (engine parks listener; ahterm owns NSOpenPanel)
++     * Host-mediated file chooser (engine parks listener; termsurf owns NSOpenPanel)
+      */
+     Termsurf__FileChooserRequest *file_chooser_request;
+     /*
+diff --git a/src/shell-integration/bash/ghostty.bash b/src/shell-integration/bash/ghostty.bash
+index 8236c79486aec9a892467e96e158f73e18a8bc7b..65d75940cd7743c5fbe6fe342902aed8d0884eed 100644
+--- a/src/shell-integration/bash/ghostty.bash
++++ b/src/shell-integration/bash/ghostty.bash
+@@ -116,7 +116,7 @@ fi
+ 
+ # SSH Integration
+ #
+-# Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
++# Wrap `ssh` with `termsurf +ssh` and translate the shell-integration
+ # feature flags into command options.
+ if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
+   function ssh() {
+@@ -124,7 +124,7 @@ if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
+     flags=()
+     [[ "$GHOSTTY_SHELL_FEATURES" != *ssh-env* ]] && flags+=(--forward-env=false)
+     [[ "$GHOSTTY_SHELL_FEATURES" != *ssh-terminfo* ]] && flags+=(--terminfo=false)
+-    "$GHOSTTY_BIN_DIR/ghostboard" +ssh "${flags[@]}" -- "$@"
++    "$GHOSTTY_BIN_DIR/termsurf" +ssh "${flags[@]}" -- "$@"
+   }
+ fi
+ 
+diff --git a/src/shell-integration/elvish/lib/ghostty-integration.elv b/src/shell-integration/elvish/lib/ghostty-integration.elv
+index f5ea96c0bcb240ddd5605533d217147a222528e7..c531f364d8467a81af8a0fcc32f5cccd9614da97 100644
+--- a/src/shell-integration/elvish/lib/ghostty-integration.elv
++++ b/src/shell-integration/elvish/lib/ghostty-integration.elv
+@@ -78,10 +78,10 @@
+ 
+   # SSH Integration
+   #
+-  # Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
++  # Wrap `ssh` with `termsurf +ssh` and translate the shell-integration
+   # feature flags into command options.
+   fn ssh-integration {|@args|
+-    var ghostboard = $E:GHOSTTY_BIN_DIR/"ghostboard"
++    var termsurf = $E:GHOSTTY_BIN_DIR/"termsurf"
+     var flags = []
+     if (not (has-value $features ssh-env)) {
+       set flags = (conj $flags --forward-env=false)
+@@ -89,7 +89,7 @@
+     if (not (has-value $features ssh-terminfo)) {
+       set flags = (conj $flags --terminfo=false)
+     }
+-    $ghostboard +ssh $@flags -- $@args
++    $termsurf +ssh $@flags -- $@args
+   }
+ 
+   defer {
+diff --git a/src/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish b/src/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+index 20fc7c5beaf1c2fd26773bc82b553e6a90f9548f..45cb58a4421b4bbfb7b03951121bf45f56f35ad2 100644
+--- a/src/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
++++ b/src/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish
+@@ -121,7 +121,7 @@ function __ghostty_setup --on-event fish_prompt -d "Setup ghostty integration"
+ 
+     # SSH Integration
+     #
+-    # Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
++    # Wrap `ssh` with `termsurf +ssh` and translate the shell-integration
+     # feature flags into command options.
+     set -l features (string split ',' -- "$GHOSTTY_SHELL_FEATURES")
+     if contains ssh-env $features; or contains ssh-terminfo $features
+@@ -130,7 +130,7 @@ function __ghostty_setup --on-event fish_prompt -d "Setup ghostty integration"
+             set -l flags
+             contains ssh-env $features; or set -a flags --forward-env=false
+             contains ssh-terminfo $features; or set -a flags --terminfo=false
+-            "$GHOSTTY_BIN_DIR/ghostboard" +ssh $flags -- $argv
++            "$GHOSTTY_BIN_DIR/termsurf" +ssh $flags -- $argv
+         end
+     end
+ 
+diff --git a/src/shell-integration/nushell/vendor/autoload/ghostty.nu b/src/shell-integration/nushell/vendor/autoload/ghostty.nu
+index 4e01d34daf05e83c982aed4e1c12bf540d316a57..f430eedd262fb8088ecc167a227c191720e1f0c1 100644
+--- a/src/shell-integration/nushell/vendor/autoload/ghostty.nu
++++ b/src/shell-integration/nushell/vendor/autoload/ghostty.nu
+@@ -4,7 +4,7 @@ export module ghostty {
+     $feature in ($env.GHOSTTY_SHELL_FEATURES | default "" | split row ',')
+   }
+ 
+-  # Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
++  # Wrap `ssh` with `termsurf +ssh` and translate the shell-integration
+   # feature flags into command options.
+   @complete external
+   export def --wrapped ssh [...args] {
+@@ -13,7 +13,7 @@ export module ghostty {
+       return
+     }
+ 
+-    let ghostboard = ($env.GHOSTTY_BIN_DIR? | default "") | path join "ghostboard"
++    let termsurf = ($env.GHOSTTY_BIN_DIR? | default "") | path join "termsurf"
+     mut flags = []
+     if not (has_feature "ssh-env") {
+       $flags = ($flags ++ ["--forward-env=false"])
+@@ -21,7 +21,7 @@ export module ghostty {
+     if not (has_feature "ssh-terminfo") {
+       $flags = ($flags ++ ["--terminfo=false"])
+     }
+-    ^$ghostboard "+ssh" ...$flags "--" ...$args
++    ^$termsurf "+ssh" ...$flags "--" ...$args
+   }
+ 
+   # Wrap `sudo` to preserve Ghostty's TERMINFO environment variable
+diff --git a/src/shell-integration/zsh/ghostty-integration b/src/shell-integration/zsh/ghostty-integration
+index 112e483dcc2aed54b32bca035efe6f3061b7ac11..9dcbbeb3d257a7b7ea637a3832156f5abf3f1679 100644
+--- a/src/shell-integration/zsh/ghostty-integration
++++ b/src/shell-integration/zsh/ghostty-integration
+@@ -312,14 +312,14 @@ _ghostty_deferred_init() {
+ 
+     # SSH Integration
+     #
+-    # Wrap `ssh` with `ghostboard +ssh` and translate the shell-integration
++    # Wrap `ssh` with `termsurf +ssh` and translate the shell-integration
+     # feature flags into command options.
+     if [[ "$GHOSTTY_SHELL_FEATURES" == *ssh-* ]]; then
+       function ssh() {
+         local flags=()
+         [[ "$GHOSTTY_SHELL_FEATURES" != *ssh-env* ]] && flags+=(--forward-env=false)
+         [[ "$GHOSTTY_SHELL_FEATURES" != *ssh-terminfo* ]] && flags+=(--terminfo=false)
+-        "$GHOSTTY_BIN_DIR/ghostboard" +ssh $flags -- "$@"
++        "$GHOSTTY_BIN_DIR/termsurf" +ssh $flags -- "$@"
+       }
+     fi
+ 
