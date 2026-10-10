@@ -79,6 +79,9 @@ NuTorch owns `NUTORCH_*` shell state. `NUTORCH_MODE` is the interactive mode
 The old `SHANNON_MODE` is no longer consumed by the product shell. This is mode
 state for the prompt/dispatcher, not an AI execution or model configuration.
 `NUTORCH_TEST_*` names are isolated regression-fixture variables only.
+`NUTORCH_TEST_OPENSSL` selects an explicit OpenSSL 3 executable for NuTorch TLS
+tests. Without it, tests check PATH and standard Homebrew `openssl@3` paths.
+An invalid explicit selection fails; no tool is installed automatically.
 NuTorch reports its Cargo workspace version; `ASTROHACKER_VERSION` does not
 override it.
 
@@ -117,6 +120,21 @@ and `TERMSURF_VERSION` cannot override it.
 | `TERMPLOT_ALLOW_TTY_STDIN` | Allow interactive stdin JSON input |
 | `TERMPLOT_VERBOSE` / `TERMPLOT_DEBUG` | Diagnostic output |
 | `TERMPLOT_BUN` / `TERMPLOT_SHOT_SETTLE_MS` | Development screenshot helper only |
+
+## Astrohacker agents
+
+`@astrohacker/agents` (`code/astrohacker/ts/agents`) does not read provider keys
+from the process environment. Its keys live in one encrypted dotenvx file,
+`code/astrohacker/ts/agents/.env.dev`, with the private key in the ignored
+`.env.keys` beside it. The variable names inside that file are:
+
+| Variable | Role |
+| --- | --- |
+| `ANTHROPIC_API_KEY` | Anthropic key for agent text (provider `anthropic`) |
+| `OPENAI_API_KEY` | OpenAI key for agent text (provider `openai`) |
+| `XAI_API_KEY` | xAI key for agent text (provider `xai`) |
+
+See `code/astrohacker/ts/agents/AGENTS.md` ("Keys") to add a key.
 
 ## Engine path overrides
 

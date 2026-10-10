@@ -1,0 +1,141 @@
+From 88567486064adfcacfec1b6e75c753a3f5b29b46 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 30 Sep 2026 07:44:32 -0500
+Subject: [PATCH] Rescan the file list when it opens
+
+Opening NeoTree lists every expanded directory, so files added or
+removed while the list was closed show up without Shift+R.
+---
+ plugins/neotree.hk    |   3 +-
+ src/plugin/runtime.rs | 104 ++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 105 insertions(+), 2 deletions(-)
+
+diff --git a/plugins/neotree.hk b/plugins/neotree.hk
+index 86854c0af689144c4d3c8be9970adaae65388cd9..2ef02cc3923e1ddb16d27b4d6a01fbe59d481b7e 100644
+--- a/plugins/neotree.hk
++++ b/plugins/neotree.hk
+@@ -322,8 +322,7 @@ fn show_panel(focus: bool) {
+ 
+     red::state_patch(NeoTreeState { cwd_request: red::request("GetConfig", cwd_loaded, "cwd") });
+     red::state_patch(NeoTreeState { windows_request: red::request("GetWindows", windows_loaded) });
+-    request_directory(".");
+-    request_git_status();
++    reload_visible_tree();
+ }
+ 
+ #[red::on("editor:panes_restore")]
+diff --git a/src/plugin/runtime.rs b/src/plugin/runtime.rs
+index c359d96adda851177c3005942a9c58c2d401f0b0..f44d798da84689b9f135e22e233430a04337b10b 100644
+--- a/src/plugin/runtime.rs
++++ b/src/plugin/runtime.rs
+@@ -16876,6 +16876,110 @@ mod tests {
+         assert_ne!(state(&runtime)["git_request"], 0);
+     }
+ 
++    #[tokio::test]
++    async fn neotree_reloads_expanded_directories_when_reopened() {
++        drain_requests();
++        let mut runtime = Runtime::new();
++        runtime
++            .load_plugin("neotree", include_str!("../../plugins/neotree.hk"))
++            .await
++            .unwrap();
++        runtime.execute_command("NeoTree").await.unwrap();
++
++        let root_directory_request_id = loop {
++            match ACTION_DISPATCHER.recv_request() {
++                PluginRequest::ListDirectory { path, request_id } if path == "." => {
++                    break request_id
++                }
++                PluginRequest::GetGitStatus { .. }
++                | PluginRequest::GetConfig { .. }
++                | PluginRequest::GetWindows { .. }
++                | PluginRequest::CreatePanel { .. }
++                | PluginRequest::UpdatePanel { .. }
++                | PluginRequest::FocusPanel { .. } => {}
++                _ => panic!("unexpected plugin request before the root listing"),
++            }
++        };
++        match ACTION_DISPATCHER.recv_request() {
++            PluginRequest::GetGitStatus { path, .. } => assert_eq!(path, "."),
++            _ => panic!("open should request git status once"),
++        }
++        runtime
++            .resolve_request(
++                root_directory_request_id,
++                json!({
++                    "path": ".",
++                    "entries": [
++                        { "name": "src", "path": "./src", "kind": "directory" }
++                    ],
++                    "error": null
++                }),
++            )
++            .await
++            .unwrap();
++        let root_rows = loop {
++            match ACTION_DISPATCHER.recv_request() {
++                PluginRequest::UpdatePanel { rows, .. } => break rows,
++                PluginRequest::WatchDirectory { path, .. } => assert_eq!(path, "."),
++                _ => panic!("unexpected plugin request after the root listing"),
++            }
++        };
++        let directory_row = serde_json::to_value(
++            root_rows
++                .iter()
++                .find(|row| row.id == "./src")
++                .expect("src row"),
++        )
++        .unwrap();
++        runtime
++            .notify(
++                "panel:event:neotree",
++                json!({"action": "activate", "row": directory_row}),
++            )
++            .await
++            .unwrap();
++        let src_directory_request_id = loop {
++            match ACTION_DISPATCHER.recv_request() {
++                PluginRequest::ListDirectory { path, request_id } if path == "./src" => {
++                    break request_id
++                }
++                PluginRequest::UpdatePanel { .. } => {}
++                _ => panic!("unexpected plugin request while expanding src"),
++            }
++        };
++        runtime
++            .resolve_request(
++                src_directory_request_id,
++                json!({
++                    "path": "./src",
++                    "entries": [
++                        { "name": "main.rs", "path": "./src/main.rs", "kind": "file" }
++                    ],
++                    "error": null
++                }),
++            )
++            .await
++            .unwrap();
++        drain_requests();
++
++        runtime.execute_command("NeoTree").await.unwrap();
++        drain_requests();
++        runtime.execute_command("NeoTree").await.unwrap();
++
++        let mut directories = Vec::new();
++        let mut git_status = 0;
++        while let Some(request) = ACTION_DISPATCHER.try_recv_request() {
++            match request {
++                PluginRequest::ListDirectory { path, .. } => directories.push(path),
++                PluginRequest::GetGitStatus { .. } => git_status += 1,
++                _ => {}
++            }
++        }
++        directories.sort();
++        assert_eq!(directories, vec![".".to_string(), "./src".to_string()]);
++        assert_eq!(git_status, 1);
++    }
++
+     #[tokio::test]
+     async fn neotree_discards_late_results_after_close_and_reopen() {
+         let mut runtime = Runtime::new();

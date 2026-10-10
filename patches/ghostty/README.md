@@ -24,7 +24,27 @@ the same issue and `--base <commit>` for a rebased series; see `ah patch help`.
 Older pin recipes below are historical reconstruction context; the manifest
 and these commands select current inputs.
 
-## Active Pin (Issue 26101009137900 Exp 7 `termsurf` CLI)
+## Active Pin (Issue 26100922189878 Exp 1 number pad keys)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `246f702876b924a1cb7cade1e99274d1470302fc` (unchanged
+  from Issue 26101009137900 Exp 5)
+- **Product branch:** `issue-26100922189878-exp1-numpad-keys`
+- **Product HEAD:** `f1e34f126763da96e3f920e354efac62f2fc7f5b`
+- **Product tree:** `68dfc6b71ce8b8d166e953df6ab89eb3edde123a`
+- **Issue archives:** `issue-26101009137900-exp5/` (46 files) and the new
+  `issue-26100922189878/` (1 file), a delta exported with
+  `ah patch export --from 6b7ab2b1e`.
+- **Patches:** **47** total. 0001 in `issue-26100922189878/` maps the number
+  pad keys to the Windows key codes that desktop Chromium uses, so the
+  TermSurf key forwarder sends them to browser panes.
+- **Archive SHA-256:** `8001979028dd400bf0878f73fe3ff2b7b1dcfc40aaf79020c229838b6fa3cad8`
+- **Toolchain:** Zig selected from `build.zig.zon` (0.16.0 via `zig@0.16`).
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Build:** `scripts/build.nu ahterm --release` succeeds.
+- **Verification:** `ah patch check ghostty`; `ah fork check ghostty`.
+
+## Prior Active Pin (Issue 26101009137900 Exp 7 `termsurf` CLI)
 
 - **Upstream policy:** latest commit on **`main`** (via series base)
 - **Upstream base:** `246f702876b924a1cb7cade1e99274d1470302fc` (unchanged

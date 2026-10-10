@@ -77,9 +77,22 @@ via `ah deploy quikopen-com`. The opener app remains `code/quikopen/ts/quik` on 
 The astrohacker-com product catalog includes its image viewer card. Umami is not part of
 the current site.
 
+Discalc's one-page research-log site is `code/discalc/ts/discalc-com`, a React
+Router SPA using shared UI. `bun run dev:discalc-com` / `ah dev discalc-com` binds
+127.0.0.1:3526. Local HTTPS is `https://discalc.test`. It is hosted on Cloudflare Pages
+(project `discalc`) via `ah deploy discalc-com`. The production domain is to be
+`https://discalc.com`, with discretecalculus.com redirecting there; DNS is on Cloudflare.
+
+OpenSPV is a BCH wallet at `code/openspv/ts/openspv-com` (Issue 26100812550120): React
+Router, Express, oRPC at `/api/v1` and a local MySQL database `openspv` (`setup:local`).
+`ah dev openspv-com` binds 127.0.0.1:3528, with Vite HMR on 3529. Local HTTPS is
+`https://openspv.test`. It is not deployed yet.
+
 - `ahebx` is the TermSurf EBX1 pool client; `ebxmine` is the EBX2 validating
   mine; `earthbucks-com` is the pool/app.
-- astrohacker-com exposes oRPC `/api`; earthbucks-com exposes tRPC `/trpc`.
+- astrohacker-com exposes oRPC `/api`; earthbucks-com exposes the EarthBucks
+  v1 oRPC API at `/api/v1`. Its tRPC `/trpc` API was removed in Issue
+  26100317465696.
   kpnode/kpcom/ahkey source is archived off HEAD.
 - ahnexus is a Vite SPA backed by Rust `ahnexus`; Nexus wire code stays in
   Rust. Other React apps use React Router framework mode as configured.
@@ -150,7 +163,17 @@ package guidance.
 
 Run Cargo workspace checks from the monorepo root, except for the nested
 workspaces above. Bun scripts are authoritative in root and package manifests;
-Prettier is installed per workspace. Root `format`, `format:check`, `lint`,
+Oxfmt 0.72.0 is installed per workspace through its npm package; Node.js
+^20.19.0 or >=22.12.0 is required, including bundled HTML formatting. Markdown
+uses Oxfmt's native formatter.
+`code/oxfmt.config.mjs` owns shared style, with per-app configs for Tailwind
+stylesheets and `cn`/`cva`. Scripts pass configs explicitly. Existing
+`.prettierignore` files remain active Oxfmt exclusions. Do not enable import,
+package.json or JSDoc sorting or add new file types without an explicit change.
+Scripts use one Oxfmt thread per process because Bun already runs workspace
+packages concurrently. Root `format` skips packages without a write script; `format:check` still checks
+every package. The `.ts.txt` fixtures use `scripts/format-typescript-fixture.nu`.
+Root `format`, `format:check`, `lint`,
 `lint:fix`, and `typecheck` first check/fix the shared code-level tooling,
 then fan out to the corresponding workspace scripts. `code/tsconfig.json`
 owns the shared TypeScript configs; it inherits the same strict base.

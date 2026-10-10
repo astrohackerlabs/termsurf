@@ -1,0 +1,195 @@
+From 3e1c44d2578a4eda654343a31610a3db5087dc57 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 30 Sep 2026 08:39:55 -0500
+Subject: [PATCH] Leave the release panel closed on startup
+
+Startup no longer opens What's new unless show_whats_new is true.
+:whats-new and :changelog still open the panel.
+---
+ README.md                                     | 13 +++--
+ .../reference/configuration/default-config.md |  2 +-
+ default_config.toml                           |  5 +-
+ src/config.rs                                 |  4 +-
+ src/editor.rs                                 | 52 ++++++++++++++++++-
+ 5 files changed, 63 insertions(+), 13 deletions(-)
+
+diff --git a/README.md b/README.md
+index 10352ff1e88c52e5c45aae1328be496bd2e1ac7c..05f1af910b87b432ca0d51cbdaa5b203a5576432 100644
+--- a/README.md
++++ b/README.md
+@@ -197,10 +197,10 @@ The current release includes:
+ See the [latest release notes](https://github.com/codersauce/red/releases/latest)
+ or the [complete changelog](CHANGELOG.md) for details.
+ 
+-After installing a new version, Red opens a themed **What’s new** panel once.
+-Reopen it whenever you like with `:whats-new`, `:changelog`, or the command
+-palette. Release notes are bundled for offline use and refreshed from the exact
+-matching GitHub release in the background.
++Startup does not open the **What’s new** panel. Open it with `:whats-new`,
++`:changelog`, or the command palette. Set `show_whats_new = true` to show it
++once after a version you have not seen. Release notes are bundled for offline
++use and refreshed from the exact matching GitHub release when the panel opens.
+ 
+ ## Configuration
+ 
+@@ -211,9 +211,8 @@ contain only the values you want to change:
+ # ~/.config/astrohacker/redvim/config.toml
+ theme = "red.json"
+ scrolloff = 8
+-# Disable the automatic release panel or its optional GitHub refresh:
+-# show_whats_new = false
+-# fetch_release_notes = false
++# Show the release panel once for a version that has not been seen:
++# show_whats_new = true
+ 
+ [search]
+ ignorecase = true
+diff --git a/almanac/reference/configuration/default-config.md b/almanac/reference/configuration/default-config.md
+index dea3cdcffe18577d45929de5ccece7843bd13c47..611ac91c01ab38f92327c976b34c7294c0089f1c 100644
+--- a/almanac/reference/configuration/default-config.md
++++ b/almanac/reference/configuration/default-config.md
+@@ -38,7 +38,7 @@ The top-level schema accepts keys for editor behavior, keymaps, theme, cursor, p
+ | `sidescroll` | `1` | Horizontal scroll step when wrapping is off [@defaults]. |
+ | `sidescrolloff` | `0` | Preferred visible columns beside the cursor [@defaults]. |
+ | `splash` | `true` | Show the startup splash when Red opens without file arguments [@defaults]. |
+-| `show_whats_new` | `true` | Present a themed release announcement once after a newly installed version starts interactively [@defaults] [@config]. |
++| `show_whats_new` | `false` | Leave the release panel closed on startup unless the user sets it true [@defaults] [@config]. |
+ | `fetch_release_notes` | `true` | Refresh bundled release notes from GitHub without blocking editor startup [@defaults] [@config]. |
+ | `persist_inline_history` | `true` | Keep inline questions and answers in local editor recovery snapshots [@defaults] [@config]. |
+ | `log_file` | `"red.log"` | Default log file name under the config directory [@defaults]. |
+diff --git a/default_config.toml b/default_config.toml
+index 1187f658ddafe513ab5a9696e551ad20b56d5fef..183a8a425bc7e7cce0d1bdf447d801521334525a 100644
+--- a/default_config.toml
++++ b/default_config.toml
+@@ -45,8 +45,9 @@ sidescrolloff = 0
+ # disappears on the first edit, file open, or window split.
+ splash = true
+ 
+-# Present a themed release announcement once after installing a new version.
+-show_whats_new = true
++# Startup leaves the What’s new panel closed. Set this to true to show it
++# once for a version that has not been seen.
++show_whats_new = false
+ 
+ # Refresh bundled release notes from GitHub without delaying editor startup.
+ fetch_release_notes = true
+diff --git a/src/config.rs b/src/config.rs
+index 6cf62639fa599b81aeeefca625cefca61381e305..6a5220aa2211ae5ba0f9b09070375d5e4e04f7b5 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -247,7 +247,7 @@ pub struct Config {
+     /// Defaults to on.
+     pub splash: Option<bool>,
+     /// Announce each newly installed Red release once after interactive startup.
+-    /// Defaults to on.
++    /// Defaults to off.
+     #[serde(default)]
+     pub show_whats_new: Option<bool>,
+     /// Refresh bundled release notes from the matching published GitHub release.
+@@ -4650,7 +4650,7 @@ groups = [["\\bif\\b", "\\belse\\b", "\\bendif\\b"]]
+     fn default_config_maps_command_palette_entrypoints_and_enables_key_hints() {
+         let config: Config = toml::from_str(include_str!("../default_config.toml")).unwrap();
+ 
+-        assert_eq!(config.show_whats_new, Some(true));
++        assert_eq!(config.show_whats_new, Some(false));
+         assert_eq!(config.fetch_release_notes, Some(true));
+         assert_eq!(config.persist_inline_history, Some(true));
+         assert_eq!(config.wrap_window_navigation, Some(true));
+diff --git a/src/editor.rs b/src/editor.rs
+index e4996bb38b39b1d9fd0efab4c06a0d91a2ada06f..1ac29e79a1fe388e0cb5c8b0a5bfefaaf2e30786 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -5186,7 +5186,7 @@ impl Editor {
+         let session_manager = session_manager::SessionManager::new();
+         let agent_manager = agent_manager::AgentManager::new();
+         let whats_new_startup_pending = preferences.is_persistent()
+-            && config.show_whats_new.unwrap_or(true)
++            && config.show_whats_new.unwrap_or(false)
+             && preferences.last_seen_version() != Some(env!("CARGO_PKG_VERSION"));
+ 
+         Ok(Editor {
+@@ -35616,6 +35616,7 @@ builtin = "rust"
+         let path = directory.join("preferences.json");
+         let preferences = PreferencesStore::load(&path);
+         let config = Config {
++            show_whats_new: Some(true),
+             fetch_release_notes: Some(false),
+             ..Config::default()
+         };
+@@ -35645,6 +35646,7 @@ builtin = "rust"
+         );
+ 
+         let config = Config {
++            show_whats_new: Some(true),
+             fetch_release_notes: Some(false),
+             ..Config::default()
+         };
+@@ -35670,6 +35672,7 @@ builtin = "rust"
+         let path = directory.join("preferences.json");
+         let preferences = PreferencesStore::load(&path);
+         let config = Config {
++            show_whats_new: Some(true),
+             fetch_release_notes: Some(false),
+             ..Config::default()
+         };
+@@ -35716,6 +35719,7 @@ builtin = "rust"
+         let path = directory.join("preferences.json");
+         let preferences = PreferencesStore::load(&path);
+         let config = Config {
++            show_whats_new: Some(true),
+             fetch_release_notes: Some(false),
+             ..Config::default()
+         };
+@@ -35766,6 +35770,52 @@ builtin = "rust"
+         fs::remove_dir_all(directory).ok();
+     }
+ 
++    #[test]
++    fn shipped_default_keeps_the_release_panel_closed() {
++        let directory = std::env::temp_dir().join(format!(
++            "red-whats-new-default-off-{}",
++            uuid::Uuid::new_v4()
++        ));
++        let path = directory.join("preferences.json");
++        let preferences = PreferencesStore::load(&path);
++        let mut config: Config = toml::from_str(include_str!("../default_config.toml")).unwrap();
++        assert_eq!(config.show_whats_new, Some(false));
++        config.fetch_release_notes = Some(false);
++        let lsp = Box::new(crate::lsp::LspManager::new(config.lsp.clone()));
++        let mut editor = Editor::with_size_and_preferences(
++            lsp,
++            90,
++            24,
++            config,
++            Theme::default(),
++            vec![Buffer::new(None, String::new())],
++            preferences,
++        )
++        .unwrap();
++
++        assert!(!editor.prepare_startup_whats_new());
++
++        let enabled_preferences =
++            PreferencesStore::load(directory.join("enabled-preferences.json"));
++        let mut enabled: Config = toml::from_str(include_str!("../default_config.toml")).unwrap();
++        enabled.show_whats_new = Some(true);
++        enabled.fetch_release_notes = Some(false);
++        let lsp = Box::new(crate::lsp::LspManager::new(enabled.lsp.clone()));
++        let mut enabled_editor = Editor::with_size_and_preferences(
++            lsp,
++            90,
++            24,
++            enabled,
++            Theme::default(),
++            vec![Buffer::new(None, String::new())],
++            enabled_preferences,
++        )
++        .unwrap();
++
++        assert!(enabled_editor.prepare_startup_whats_new());
++        fs::remove_dir_all(directory).ok();
++    }
++
+     #[tokio::test]
+     async fn statusline_layout_panel_opens_previews_and_cancels_without_quitting() {
+         let mut editor = test_editor(80, 16);

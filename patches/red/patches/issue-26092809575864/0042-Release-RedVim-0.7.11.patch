@@ -1,0 +1,66 @@
+From 43c80303624df114978c042d6ee50c67f83a99ee Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 28 Sep 2026 05:42:31 -0500
+Subject: [PATCH] Release RedVim 0.7.11
+
+---
+ Cargo.lock                   | 2 +-
+ Cargo.toml                   | 2 +-
+ REDVIM_CHANGELOG.md          | 6 ++++++
+ release/redvim-campaign.toml | 2 +-
+ 4 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 2011805..4d832ab 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2312,7 +2312,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "red"
+-version = "0.7.10"
++version = "0.7.11"
+ dependencies = [
+  "anyhow",
+  "arboard",
+diff --git a/Cargo.toml b/Cargo.toml
+index b4fe725..51b9bc2 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,6 +1,6 @@
+ [package]
+ name = "red"
+-version = "0.7.10"
++version = "0.7.11"
+ edition = "2021"
+ default-run = "redvim"
+ autobins = false
+diff --git a/REDVIM_CHANGELOG.md b/REDVIM_CHANGELOG.md
+index a534859..5de83ec 100644
+--- a/REDVIM_CHANGELOG.md
++++ b/REDVIM_CHANGELOG.md
+@@ -1,5 +1,11 @@
+ # RedVim changelog
+ 
++## [0.7.11]
++
++### Maintenance
++
++- Publish the pinned RedVim source as version 0.7.11, retaining bundled Nushell support.
++
+ ## [0.7.10]
+ 
+ ### Maintenance
+diff --git a/release/redvim-campaign.toml b/release/redvim-campaign.toml
+index 611d6d5..26bce36 100644
+--- a/release/redvim-campaign.toml
++++ b/release/redvim-campaign.toml
+@@ -1,4 +1,4 @@
+-version = "0.7.10"
++version = "0.7.11"
+ 
+ [[stories]]
+ title = "Edit Nushell with bundled syntax highlighting"
+-- 
+2.54.0 (Apple Git-157)
+

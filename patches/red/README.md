@@ -16,14 +16,43 @@ TermSurf and NuTorch do not prepare or package this fork.
 | Default branch observed | `main`, 2026-09-18 23:25:07 UTC |
 | Base | `9e0952767d35d5b8dddd3fa3bb90087938692c52` |
 | Base tree | `40bc8a92d19f9b9fd10145d6cc002a3a04de2fd9` |
-| Product branch | `issue-26092609387958-exp1-bundle-typst` |
-| Product HEAD | `be5a4b86c656b26194715682e1fa841b0737a7f3` |
-| Product tree | `ab21b68d29ebd69ef9b87f226a36c570874025e8` |
+| Product branch | `issue-26093013295774-exp1-default-the-release-panel-off` |
+| Product HEAD | `aec754fffe5f13b8f83812369b54967fa6d0ef6c` |
+| Product tree | `ce49f13cdb843cd298b995e2ececcc1d779a759e` |
 | Checkout | `forks/red` |
-| Package / executable | internal Rust package `red` / `redvim` 0.7.9 |
+| Package / executable | internal Rust package `red` / `redvim` 0.7.13 |
 | License | Upstream `LICENSE`, MIT, copyright 2024 Felipe Coury; preserved unchanged |
-| Product commits / patch count | 36 / 36 |
-| Archive SHA-256 | `646c129e772b0757bbbf042656ddd1e93d278429301dd59a46d8b61ab1251593` |
+| Product commits / patch count | 46 / 46 |
+| Archive SHA-256 | `f0ac77fc42d6fd5bbb8a870e4edd5169d166502cee6f7ce9a3623e480ec17254` |
+
+Issue 26092809575864 Experiment 1 appends
+`patches/issue-26092809575864/0001-Keep-formatting-and-navigation-alive-without-LSP.patch`.
+It adds Prettier defaults from the built-in 3.9.9 filename matrix, independent of
+syntax grammars, and nonfatal LSP handling for actions, startup, background work
+and document synchronization. Failed definition requests release pending
+navigation. A second, test-only patch adds missing-tool and invalid-formatter-input
+coverage: `0002-Cover-missing-tools-and-rejected-formatter-input.patch`, SHA-256
+`79ec334a48597e96d2fd2a583f15860cd9a9666f40141eff8e1f53412450b99f`.
+The 41-patch series independently reconstructs the recorded tree at replay HEAD
+`8ab5b3bdc110fcdb98e5d7283554de4938d46d06`.
+Patch SHA-256: `cf7748e5f319479c0ee212a25044058b97d7639c9e080c9a1726255a9c7527dd`.
+This remains a local 0.7.10 candidate; human experiment acceptance and any later
+publication are separate.
+
+Issue 26092711590255 Experiment 1 appends
+`patches/issue-26092711590255/0001-Default-Markdown-formatting-to-Prettier.patch`.
+It embeds the requested 80-column Markdown formatter settings and preserves
+language-pack capabilities beneath explicit user definitions. Focused checks
+exercise real Prettier, undo/save behavior and configuration precedence.
+Patch SHA-256: `0ea9ebf14e9f4ce59a9ff75c79033c54c70f826a25c932b254499a618f3bd827`.
+The initial export reconstructed 37 patches. A second patch updates reload-test
+expectations for the newly configured Markdown entry:
+`0002-Account-for-Markdown-defaults-when-reloading-languag.patch`, SHA-256
+`542f5390c039ca70802fbcd63bac04a15b96238a55489f72a742458a7592d194`.
+Independent replay of all 38 patches produced tree
+`e4f32d7ce79d8fcd1b760ff7eb32ce72f1c91e53`, matching the final tested tip.
+Version remains 0.7.9 for local qualification; the publisher will select and
+archive the release version. Publication and installed acceptance remain pending.
 
 Issue 26092609387958 Experiment 1 appends
 `patches/issue-26092609387958/0001-Bundle-pinned-Typst-syntax-support.patch`.
@@ -168,8 +197,8 @@ if ($destination | path exists) { error make {msg: 'Destination already exists'}
 let base = '9e0952767d35d5b8dddd3fa3bb90087938692c52'
 git clone --origin upstream https://github.com/codersauce/red.git $destination
 git -C $destination fetch upstream $base
-git -C $destination switch -c issue-26092311060249-exp1-color-each-heading-level $base
 let manifest = (open patches/release-manifest.json | get forks | where name == red | first)
+git -C $destination switch -c $manifest.branch $base
 let series = ($manifest.patch_directories | each {|dir| glob ($root | path join $dir '*.patch') | sort } | flatten)
 git -C $destination am ...$series
 
@@ -354,3 +383,33 @@ is not a new publication. Ryan accepted the running editor.
 Release 0.7.8 appends `patches/red/patches/issue-26092311060249/0034-Release-RedVim-0.7.8.patch`; patch SHA-256 `293aa6b77d762d68a11131da32831abdd5800314aa7d53b9036fd79c81b05526`.
 
 Release 0.7.9 appends `patches/red/patches/issue-26092609387958/0036-Release-RedVim-0.7.9.patch`; patch SHA-256 `69b35069078372119b80279daba4e612d8a48620965171f36a18c9ff386a212f`.
+
+Release 0.7.10 appends `patches/red/patches/issue-26092711590255/0039-Release-RedVim-0.7.10.patch`; patch SHA-256 `0d5e7cdfda9d91b130b99da7f2a20cbc9ceafcea2f21e8943486f31b740da936`.
+
+Release 0.7.11 appends `patches/red/patches/issue-26092809575864/0042-Release-RedVim-0.7.11.patch`; patch SHA-256 `bedccf045af285b45718021640197c58d8a8757dec4d6625a943a08a2914cbb1`.
+
+Issue 26093012262975 Experiment 1 appends
+`patches/issue-26093012262975/0001-Rescan-the-file-list-when-it-opens.patch`.
+Opening the file list scans every expanded directory, so files added or
+removed while the list was closed show up without Shift+R. Patch SHA-256
+`e1afe27e89668d010baa8069e81d02aca7ba809264ead6be8cc5020119f1a65c`;
+stable patch ID `3d1bf80c4f03d5a9c961b95e6050317316203a7d`.
+`ah patch export` reconstructed all 43 patches to tree
+`bd32e0412d2d89c473ceee3ef6893fb7e50b9c1c` at fork HEAD
+`88567486064adfcacfec1b6e75c753a3f5b29b46`. Source remains 0.7.11; this pin
+is not a new publication. Ryan accepted the running editor.
+
+Release 0.7.12 appends `patches/red/patches/issue-26093012262975/0044-Release-RedVim-0.7.12.patch`; patch SHA-256 `2ff6cd5dbaf09bbc2dc5b79830a411bb730c075aeb1b522e49e2cf5912eac8b1`.
+
+Issue 26093013295774 Experiment 1 appends
+`patches/issue-26093013295774/0001-Leave-the-release-panel-closed-on-startup.patch`.
+Startup leaves the What's new panel closed unless `show_whats_new` is true.
+`:whats-new` and `:changelog` still open it. Patch SHA-256
+`4ee0d615d9603d90b73b0837a5a8bc9be938c6589b95903c82a930e382a9e667`;
+stable patch ID `2e451dab822b5e11ffa6ca84f0baeaa7e184e1db`.
+`ah patch export` reconstructed all 45 patches to tree
+`1cb36e6ea0c6517e349394039b9cf7e236d628d8` at fork HEAD
+`3e1c44d2578a4eda654343a31610a3db5087dc57`. Source remains 0.7.12; this pin
+is not a new publication. Ryan accepted the startup look on 2026-09-30.
+
+Release 0.7.13 appends `patches/red/patches/issue-26093013295774/0046-Release-RedVim-0.7.13.patch`; patch SHA-256 `175fc90c8dc142c7285b796ac99079a12dc0f4a5451cae702c1b7ed80a687de2`.

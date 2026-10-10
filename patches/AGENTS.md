@@ -41,11 +41,14 @@ immutable unless a new issue deliberately revives the engine.
 
 From the monorepo checkout, import `use scripts/ah.nu *`. Use `ah fork ls`,
 `ah fork status [name]`, `ah fork check [name]`, `ah patch ls <name>` and
-`ah patch check <name>` for discovery and verification. The manifest defines
-the active ordered series; archive date or issue number does not select it.
-Patch checks need no clone. Status distinguishes actual commit identity from
-equivalent replayed patches and trees; readiness also requires cleanliness,
-the selected branch and pinned nested checkouts.
+`ah patch check <name>` for discovery and verification. `ah fork outdated [name]`
+reports which pinned bases are behind the upstream latest named by each
+entry's `update` policy (`branch`, `tag` or `electron-stable`); set that policy
+when adding a fork, and keep it matching how the base is actually chosen.
+The manifest defines the active ordered series; archive date or issue number
+does not select it. Patch checks need no clone. Status distinguishes actual
+commit identity from equivalent replayed patches and trees; readiness also
+requires cleanliness, the selected branch and pinned nested checkouts.
 
 Preview with `ah fork prepare <name> --dry-run`, then run
 `ah fork prepare <name>` to reconstruct and activate the selected series.

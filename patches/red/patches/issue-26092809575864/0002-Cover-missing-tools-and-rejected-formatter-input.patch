@@ -1,0 +1,125 @@
+From 0f2db61389214002bcca20fe4047520a927766fd Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 28 Sep 2026 05:36:25 -0500
+Subject: [PATCH] Cover missing tools and rejected formatter input
+
+---
+ src/editor.rs | 102 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 102 insertions(+)
+
+diff --git a/src/editor.rs b/src/editor.rs
+index 10d3b1d..e4996bb 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -42899,6 +42899,108 @@ builtin = "rust"
+         }
+     }
+ 
++    #[tokio::test]
++    async fn missing_lsp_executable_keeps_definition_lookup_nonfatal() {
++        let root = tempfile::tempdir().unwrap();
++        let mut config = Config::default();
++        config.lsp.servers.get_mut("typescript").unwrap().command = root
++            .path()
++            .join("absent-language-server")
++            .to_string_lossy()
++            .into_owned();
++        let lsp = Box::new(crate::lsp::LspManager::new(config.lsp.clone()));
++        let mut editor = Editor::with_size(
++            lsp,
++            80,
++            24,
++            config,
++            Theme::default(),
++            vec![Buffer::new(
++                Some(root.path().join("file.ts").to_string_lossy().into_owned()),
++                "const x = 1;\n".into(),
++            )],
++        )
++        .unwrap();
++        editor.test_disable_terminal_output();
++        for _ in 0..2 {
++            editor
++                .test_execute_production_action(Action::GoToDefinition)
++                .await
++                .unwrap();
++            assert!(editor.pending_definition_requests.is_empty());
++            assert!(editor
++                .last_error
++                .as_deref()
++                .unwrap()
++                .contains("No language server"));
++        }
++    }
++
++    #[tokio::test]
++    #[ignore = "requires installed Prettier; run explicitly during qualification"]
++    async fn prettier_failure_and_missing_formatter_preserve_unsaved_contents() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("invalid.ts");
++        std::fs::write(&path, "// disk contents\n").unwrap();
++        let mut config = Config::default();
++        config.lsp.enabled = false;
++        config.formatting.provider = FormattingProvider::External;
++        let lsp = Box::new(crate::lsp::LspManager::new(config.lsp.clone()));
++        let mut editor = Editor::with_size(
++            lsp,
++            80,
++            24,
++            config,
++            Theme::default(),
++            vec![Buffer::new(
++                Some(path.to_string_lossy().into_owned()),
++                "// disk contents\n".into(),
++            )],
++        )
++        .unwrap();
++        editor.test_disable_terminal_output();
++        editor.current_buffer_mut().insert_str(0, 0, "const = ;\n");
++        let before = editor.current_buffer().contents();
++        editor
++            .test_execute_production_action(Action::FormatDocument)
++            .await
++            .unwrap();
++        assert!(editor
++            .last_error
++            .as_deref()
++            .unwrap()
++            .contains("SyntaxError"));
++        assert_eq!(editor.current_buffer().contents(), before);
++        assert!(editor.current_buffer().is_dirty());
++        editor.config.languages.insert(
++            "typescript".into(),
++            crate::config::LanguageConfig {
++                formatter: Some(LanguageFormatterConfig {
++                    name: "Missing formatter".into(),
++                    command: root
++                        .path()
++                        .join("absent-formatter")
++                        .to_string_lossy()
++                        .into_owned(),
++                    ..Default::default()
++                }),
++                ..Default::default()
++            },
++        );
++        editor
++            .test_execute_production_action(Action::FormatDocument)
++            .await
++            .unwrap();
++        assert!(editor
++            .last_error
++            .as_deref()
++            .unwrap()
++            .contains("not installed"));
++        assert_eq!(editor.current_buffer().contents(), before);
++        assert!(editor.current_buffer().is_dirty());
++        assert_eq!(std::fs::read_to_string(path).unwrap(), "// disk contents\n");
++    }
++
+     #[tokio::test]
+     async fn closed_lsp_transport_is_nonfatal_for_navigation_editing_and_save() {
+         let root = tempfile::tempdir().unwrap();
+-- 
+2.54.0 (Apple Git-157)
+

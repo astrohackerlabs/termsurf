@@ -1,0 +1,1100 @@
+From c709f01984f340cb0ed99c57d5b85a2be03de1b7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 28 Sep 2026 05:29:46 -0500
+Subject: [PATCH] Keep formatting and navigation alive without LSP
+
+---
+ default_config.toml         |   4 +
+ src/editor.rs               | 421 ++++++++++++++++++++++++++++++++----
+ src/formatter.rs            |  98 +++++++++
+ src/prettier-languages.json | 377 ++++++++++++++++++++++++++++++++
+ tests/editing.rs            |  18 +-
+ 5 files changed, 866 insertions(+), 52 deletions(-)
+ create mode 100644 src/prettier-languages.json
+
+diff --git a/default_config.toml b/default_config.toml
+index 344efa9260fc09ab5ab380ef9093be6732a1b8f7..1187f658ddafe513ab5a9696e551ad20b56d5fef 100644
+--- a/default_config.toml
++++ b/default_config.toml
+@@ -224,6 +224,10 @@ waiting = "steady_underscore"
+ # language_id = "javascript"
+ # file_extensions = ["js", "mjs", "cjs"]
+ 
++# Prettier is the fallback external formatter for its built-in supported filenames
++# and extensions, including TypeScript/TSX, JavaScript/JSX, JSON, CSS, HTML, Vue,
++# YAML, GraphQL, Handlebars and Markdown/MDX (no syntax grammar required).
++# Explicit language formatters take precedence. Code uses project Prettier options.
+ # Markdown formatting is available out of the box with Homebrew's Prettier.
+ # Override this table in config.toml to choose different arguments or a tool.
+ [languages.markdown.formatter]
+diff --git a/src/editor.rs b/src/editor.rs
+index 28e0fa143913236c8190fc251b7ae51eeaf8accb..10d3b1dac2d0f2bbe96f6b59501f840c5e8ccc2d 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -3919,7 +3919,7 @@ impl DetachedEditorCore {
+             .await?;
+         editor.restore_agent_plugin_state(&mut runtime).await?;
+         editor.notify_pane_restore_intents(&mut runtime).await?;
+-        editor.ensure_current_buffer_lsp_opened().await?;
++        editor.open_current_lsp_nonfatal().await?;
+         let mut render_buffer = RenderBuffer::new(
+             editor.size.0 as usize,
+             editor.size.1 as usize,
+@@ -10209,7 +10209,7 @@ impl Editor {
+             self.size.1 as usize,
+             &Style::default(),
+         );
+-        self.ensure_current_buffer_lsp_opened().await?;
++        self.open_current_lsp_nonfatal().await?;
+         let (columns, rows) = terminal::size()?;
+         self.resize_terminal_surface(columns, rows, &mut buffer);
+         self.prepare_startup_welcome();
+@@ -10536,6 +10536,25 @@ impl Editor {
+         &mut self,
+         buffer: &mut RenderBuffer,
+         runtime: &mut Runtime,
++    ) -> anyhow::Result<()> {
++        match self.service_background_inner(buffer, runtime).await {
++            Err(error) if error.downcast_ref::<crate::lsp::LspError>().is_some() => {
++                self.report_lsp_failure(&error);
++                self.render(buffer)
++            }
++            result => result,
++        }
++    }
++
++    fn report_lsp_failure(&mut self, error: &anyhow::Error) {
++        log!("[lsp] operation failed: {error:#}");
++        self.set_routine_warning(Some(format!("Language server unavailable: {error}")));
++    }
++
++    async fn service_background_inner(
++        &mut self,
++        buffer: &mut RenderBuffer,
++        runtime: &mut Runtime,
+     ) -> anyhow::Result<()> {
+         self.service_mouse_selection(buffer, runtime).await?;
+         self.service_open_file_changes(buffer, runtime).await?;
+@@ -11171,16 +11190,15 @@ impl Editor {
+                         &msg,
+                         InboundMessage::Notification(ParsedNotification::Progress(_))
+                     );
+-                    let completed_definition =
+-                        if method.as_deref() == Some("textDocument/definition") {
+-                            match &msg {
+-                                InboundMessage::Message(response) => Some(response.id),
+-                                InboundMessage::RequestError { id, .. } => Some(*id),
+-                                _ => None,
+-                            }
+-                        } else {
+-                            None
+-                        };
++                    // IDs are globally unique. Errors can arrive without method
++                    // metadata, including transport-generated request failures.
++                    let completed_definition = match &msg {
++                        InboundMessage::Message(response) => Some(response.id),
++                        InboundMessage::RequestError { id, .. } => Some(*id),
++                        InboundMessage::Error(error) => error.id,
++                        _ => None,
++                    }
++                    .filter(|id| self.pending_definition_requests.contains(id));
+                     if let Some(action) = self.handle_lsp_message(&msg, method) {
+                         // TODO: handle quit
+                         let generation_before = self.render_generation;
+@@ -20219,8 +20237,17 @@ impl Editor {
+         buffer: &mut RenderBuffer,
+         runtime: &mut Runtime,
+     ) -> anyhow::Result<bool> {
+-        self.execute_with_tracking(action, buffer, runtime, true)
++        match self
++            .execute_with_tracking(action, buffer, runtime, true)
+             .await
++        {
++            Err(error) if error.downcast_ref::<crate::lsp::LspError>().is_some() => {
++                self.report_lsp_failure(&error);
++                self.render(buffer)?;
++                Ok(false)
++            }
++            result => result,
++        }
+     }
+ 
+     #[async_recursion::async_recursion]
+@@ -21930,7 +21957,12 @@ impl Editor {
+                         .lsp
+                         .goto_definition(&file, position.character, position.line)
+                         .await?;
+-                    self.pending_definition_requests.insert(request_id);
++                    if request_id > 0 {
++                        self.pending_definition_requests.insert(request_id);
++                    } else {
++                        self.set_routine_warning(Some("No language server is available for definition lookup; check the language-server configuration".into()));
++                        self.draw_commandline(buffer);
++                    }
+                 } else {
+                     self.set_routine_warning(Some("No definition found".to_string()));
+                     self.draw_commandline(buffer);
+@@ -25350,13 +25382,25 @@ impl Editor {
+         let file = self.buffer_manager[index].file.clone();
+         if self.config.lsp.enabled {
+             if let Some(file) = &file {
+-                self.ensure_buffer_lsp_opened(index).await?;
+-                let snapshot = self.buffer_manager[index].contents_snapshot();
+-                if let Some(change) = self.lsp_coordinator.pending_change(id, revision, snapshot) {
+-                    self.lsp.did_change_edits(file, change).await?;
+-                } else {
+-                    let contents = self.buffer_manager[index].contents();
+-                    self.lsp.did_change(file, contents).await?;
++                let result: anyhow::Result<()> = async {
++                    self.ensure_buffer_lsp_opened(index).await?;
++                    let snapshot = self.buffer_manager[index].contents_snapshot();
++                    if let Some(change) =
++                        self.lsp_coordinator.pending_change(id, revision, snapshot)
++                    {
++                        self.lsp.did_change_edits(file, change).await?;
++                    } else {
++                        let contents = self.buffer_manager[index].contents();
++                        self.lsp.did_change(file, contents).await?;
++                    }
++                    Ok(())
++                }
++                .await;
++                if let Err(error) = result {
++                    if error.downcast_ref::<crate::lsp::LspError>().is_none() {
++                        return Err(error);
++                    }
++                    self.report_lsp_failure(&error);
+                 }
+             }
+         }
+@@ -25578,6 +25622,16 @@ impl Editor {
+             .await
+     }
+ 
++    async fn open_current_lsp_nonfatal(&mut self) -> anyhow::Result<()> {
++        match self.ensure_current_buffer_lsp_opened().await {
++            Err(error) if error.downcast_ref::<crate::lsp::LspError>().is_some() => {
++                self.report_lsp_failure(&error);
++                Ok(())
++            }
++            result => result,
++        }
++    }
++
+     async fn ensure_buffer_lsp_opened(&mut self, buffer_index: usize) -> anyhow::Result<()> {
+         let Some(buffer) = self.buffer_manager.get(buffer_index) else {
+             return Ok(());
+@@ -30352,11 +30406,17 @@ impl Editor {
+             .highlighter
+             .language_id_for_file(Some(file))
+             .map(str::to_string)
+-            .or_else(|| self.current_language_id())?;
+-        self.config
+-            .languages
+-            .get(&language)
++            .or_else(|| self.current_language_id());
++        language
++            .as_ref()
++            .and_then(|language| self.config.languages.get(language))
+             .and_then(|definition| definition.formatter.as_ref())
++            .or_else(|| {
++                crate::formatter::prettier_language_id(file)
++                    .and_then(|language| self.config.languages.get(&language))
++                    .and_then(|definition| definition.formatter.as_ref())
++            })
++            .or_else(|| crate::formatter::prettier_default(file))
+     }
+ 
+     fn formatter_for_file(&self, file: &str) -> Option<LanguageFormatterConfig> {
+@@ -30563,13 +30623,7 @@ impl Editor {
+             self.ensure_current_buffer_lsp_opened().await
+         };
+         if let Err(error) = open_result {
+-            if matches!(
+-                error.downcast_ref::<crate::lsp::LspError>(),
+-                Some(
+-                    crate::lsp::LspError::ProtocolError(_)
+-                        | crate::lsp::LspError::RequestTimeout(_)
+-                )
+-            ) {
++            if error.downcast_ref::<crate::lsp::LspError>().is_some() {
+                 log!(
+                     "{}",
+                     json!({
+@@ -30604,10 +30658,7 @@ impl Editor {
+             .await;
+         let request_id = match request {
+             Ok(request_id) => request_id,
+-            Err(
+-                error @ (crate::lsp::LspError::ProtocolError(_)
+-                | crate::lsp::LspError::RequestTimeout(_)),
+-            ) => {
++            Err(error) => {
+                 let message = format!("format-on-save unavailable; saved unformatted: {error}");
+                 log!(
+                     "{}",
+@@ -30623,13 +30674,6 @@ impl Editor {
+                     warning: Some(message),
+                 });
+             }
+-            Err(error) => {
+-                if save_as.is_some() {
+-                    self.restore_lsp_format_save_identity(buffer_id, &pending.uri, previous_file)
+-                        .await;
+-                }
+-                return Err(error.into());
+-            }
+         };
+         if request_id == 0 {
+             return Ok(FormatOnSaveRequest::Save { warning: None });
+@@ -42756,6 +42800,297 @@ builtin = "rust"
+         }
+     }
+ 
++    #[tokio::test]
++    async fn rejected_lsp_initialization_keeps_navigation_editing_and_save_alive() {
++        use crate::lsp::{OutboundMessage, RealLspClient, ResponseError};
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("document.ts");
++        std::fs::write(&path, "const x=1;\n").unwrap();
++        let (requests, mut outgoing) = tokio::sync::mpsc::channel(64);
++        let (incoming, responses) = tokio::sync::mpsc::channel(64);
++        let server = crate::config::default_language_servers()
++            .remove("typescript")
++            .unwrap();
++        let mut client =
++            RealLspClient::with_test_channels(requests, responses, server, root.path().into());
++        client.initialize().await.unwrap();
++        let OutboundMessage::Request(init) = outgoing.recv().await.unwrap() else {
++            panic!("initialize")
++        };
++        let mut config = Config::default();
++        config.formatting.provider = FormattingProvider::Lsp;
++        let mut editor = Editor::with_size(
++            Box::new(client),
++            80,
++            24,
++            config,
++            Theme::default(),
++            vec![Buffer::new(
++                Some(path.to_string_lossy().into_owned()),
++                "const x=1;\n".into(),
++            )],
++        )
++        .unwrap();
++        editor.test_disable_terminal_output();
++        editor.current_buffer_mut().insert_str(0, 0, "// unsaved\n");
++        let before = editor.current_buffer().contents();
++        editor
++            .test_execute_production_action(Action::GoToDefinition)
++            .await
++            .unwrap();
++        incoming.send(InboundMessage::Error(ResponseError {
++            id: Some(init.id), code: -32603,
++            message: "TypeScript 7.0.2 provides no tsserver.js. No other valid TypeScript installation was found. Exiting.".into(),
++            data: None, request: None,
++        })).await.unwrap();
++        for _ in 0..3 {
++            editor.test_service_background().await.unwrap();
++        }
++        assert!(editor.pending_definition_requests.is_empty());
++        for action in [
++            Action::GoToDefinition,
++            Action::GoToDefinition,
++            Action::Hover,
++            Action::FormatDocument,
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++            assert!(editor
++                .last_error
++                .as_deref()
++                .unwrap()
++                .contains("tsserver.js"));
++            assert_eq!(editor.current_buffer().contents(), before);
++            assert!(editor.current_buffer().is_dirty());
++            assert!(editor.pending_definition_requests.is_empty());
++        }
++        editor
++            .test_execute_production_action(Action::InsertString("// still editing\n".into()))
++            .await
++            .unwrap();
++        assert_ne!(editor.current_buffer().contents(), before);
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), before);
++        editor
++            .test_execute_production_action(Action::Save)
++            .await
++            .unwrap();
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
++        assert!(!editor.current_buffer().is_dirty());
++    }
++
++    #[tokio::test]
++    async fn missing_lsp_does_not_queue_a_phantom_definition() {
++        let mut editor = test_editor(80, 24);
++        editor.current_buffer_mut().file = Some("/tmp/resilient-tooling.no-server".into());
++        for _ in 0..2 {
++            editor
++                .test_execute_production_action(Action::GoToDefinition)
++                .await
++                .unwrap();
++            assert!(editor.pending_definition_requests.is_empty());
++            assert!(editor
++                .last_error
++                .as_deref()
++                .unwrap()
++                .contains("No language server"));
++        }
++    }
++
++    #[tokio::test]
++    async fn closed_lsp_transport_is_nonfatal_for_navigation_editing_and_save() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("document.rs");
++        std::fs::write(&path, "original\n").unwrap();
++        let (mut editor, _responses, requests) = lsp_channel_test_editor(Buffer::new(
++            Some(path.to_string_lossy().into_owned()),
++            "original\n".into(),
++        ));
++        drop(requests);
++        editor
++            .test_execute_production_action(Action::GoToDefinition)
++            .await
++            .unwrap();
++        assert!(editor
++            .last_error
++            .as_deref()
++            .unwrap()
++            .contains("Channel error"));
++        assert!(editor.pending_definition_requests.is_empty());
++        editor
++            .test_execute_production_action(Action::InsertString("edit ".into()))
++            .await
++            .unwrap();
++        let edited = editor.current_buffer().contents();
++        assert!(editor.current_buffer().is_dirty());
++        editor
++            .test_execute_production_action(Action::Save)
++            .await
++            .unwrap();
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
++        assert!(!editor.current_buffer().is_dirty());
++    }
++
++    #[test]
++    fn explicit_formatter_overrides_prettier_even_without_a_syntax_grammar() {
++        let mut editor = test_editor(80, 24);
++        editor.config.languages.insert(
++            "mjml".into(),
++            crate::config::LanguageConfig {
++                formatter: Some(LanguageFormatterConfig {
++                    name: "Custom".into(),
++                    command: "custom".into(),
++                    ..Default::default()
++                }),
++                ..Default::default()
++            },
++        );
++        assert_eq!(
++            editor.formatter_for_file("file.mjml").unwrap().command,
++            "custom"
++        );
++        assert_eq!(
++            editor.formatter_for_file("file.ts").unwrap().command,
++            "prettier"
++        );
++        assert!(editor.formatter_for_file("file.typ").is_none());
++    }
++
++    #[tokio::test]
++    async fn definition_request_errors_and_timeouts_release_pending_navigation() {
++        for timeout in [false, true] {
++            let (mut editor, responses, mut requests) = lsp_channel_test_editor(Buffer::new(
++                Some("/tmp/navigation.rs".into()),
++                "fn main() {}\n".into(),
++            ));
++            editor
++                .test_execute_production_action(Action::GoToDefinition)
++                .await
++                .unwrap();
++            let id = *editor.pending_definition_requests.iter().next().unwrap();
++            while requests.try_recv().is_ok() {}
++            responses
++                .send(if timeout {
++                    InboundMessage::RequestError {
++                        id,
++                        error: crate::lsp::LspError::RequestTimeout(Duration::from_secs(30)),
++                    }
++                } else {
++                    InboundMessage::Error(crate::lsp::ResponseError {
++                        id: Some(id),
++                        code: -32603,
++                        message: "definition unavailable".into(),
++                        data: None,
++                        request: None,
++                    })
++                })
++                .await
++                .unwrap();
++            editor.test_service_background().await.unwrap();
++            assert!(editor.pending_definition_requests.is_empty());
++            assert_eq!(editor.current_buffer().contents(), "fn main() {}\n");
++        }
++    }
++
++    #[tokio::test]
++    #[ignore = "requires installed Prettier; run explicitly during qualification"]
++    async fn prettier_defaults_cover_builtin_families_through_editor_actions() {
++        let root = tempfile::tempdir().unwrap();
++        std::fs::write(
++            root.path().join(".prettierrc"),
++            r#"{"semi":false,"singleQuote":true}"#,
++        )
++        .unwrap();
++        let cases = [
++            ("ts", "const x:number=1", "const x: number = 1\n"),
++            ("mts", "const x:number=1", "const x: number = 1\n"),
++            ("cts", "const x:number=1", "const x: number = 1\n"),
++            ("tsx", "const x=<div/>", "const x = <div />\n"),
++            ("js", "const x=\"yes\"", "const x = 'yes'\n"),
++            ("jsx", "const x=<div/>", "const x = <div />\n"),
++            ("mjs", "const x=1", "const x = 1\n"),
++            ("cjs", "const x=1", "const x = 1\n"),
++            (
++                "js.flow",
++                "declare var x:number;",
++                "declare var x: number\n",
++            ),
++            ("json", "{\"x\":1}", "{ \"x\": 1 }\n"),
++            ("jsonc", "{\"x\":1}", "{ \"x\": 1 }\n"),
++            ("json5", "{x:1}", "{ x: 1 }\n"),
++            ("css", "a{color:red}", "a {\n  color: red;\n}\n"),
++            ("scss", "a{color:red}", "a {\n  color: red;\n}\n"),
++            ("less", "a{color:red}", "a {\n  color: red;\n}\n"),
++            ("html", "<div>hi</div>", "<div>hi</div>\n"),
++            ("component.html", "<div>{{x}}</div>", "<div>{{ x }}</div>\n"),
++            (
++                "vue",
++                "<template><div>hi</div></template>",
++                "<template><div>hi</div></template>\n",
++            ),
++            ("md", "# hi", "# hi\n"),
++            ("mdx", "# hi", "# hi\n"),
++            ("yaml", "x: [1,2]", "x: [1, 2]\n"),
++            ("graphql", "query{x}", "query {\n  x\n}\n"),
++            (
++                "hbs",
++                "<div  class=\"x\">{{x}}</div>",
++                "<div class='x'>{{x}}</div>",
++            ),
++            ("mjml", "<mjml></mjml>", "<mjml></mjml>\n"),
++        ];
++        for (extension, input, expected) in cases {
++            let path = root.path().join(format!("file with spaces.{extension}"));
++            std::fs::write(&path, "").unwrap();
++            let mut config = Config::default();
++            config.lsp.enabled = false;
++            let lsp = Box::new(crate::lsp::LspManager::new(config.lsp.clone()));
++            let mut editor = Editor::with_size(
++                lsp,
++                80,
++                24,
++                config,
++                Theme::default(),
++                vec![Buffer::new(
++                    Some(path.to_string_lossy().into_owned()),
++                    String::new(),
++                )],
++            )
++            .unwrap();
++            editor.test_disable_terminal_output();
++            editor.current_buffer_mut().insert_str(0, 0, input);
++            for _ in 0..2 {
++                editor
++                    .test_execute_production_action(Action::FormatDocument)
++                    .await
++                    .unwrap();
++                assert_eq!(
++                    editor.current_buffer().contents(),
++                    expected,
++                    "{extension}: {:?}",
++                    editor.last_error
++                );
++            }
++            assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
++            editor
++                .test_execute_production_action(Action::Undo)
++                .await
++                .unwrap();
++            assert_eq!(editor.current_buffer().contents(), input, "{extension}");
++            editor
++                .test_execute_production_action(Action::Save)
++                .await
++                .unwrap();
++            assert_eq!(
++                std::fs::read_to_string(&path).unwrap(),
++                expected,
++                "{extension}"
++            );
++        }
++    }
++
+     #[tokio::test]
+     async fn go_to_definition_warns_without_a_file_backed_buffer() {
+         let mut editor = test_editor(40, 10);
+diff --git a/src/formatter.rs b/src/formatter.rs
+index e5801bd93a4790e062939421e635851a941463ac..6aa6c815f7f5dacbf958a3176e904735ed87a2fa 100644
+--- a/src/formatter.rs
++++ b/src/formatter.rs
+@@ -23,6 +23,72 @@ const FORMAT_TIMEOUT: Duration = Duration::from_secs(30);
+ const MAX_FORMATTED_BYTES: usize = 16 * 1024 * 1024;
+ const MAX_ERROR_BYTES: usize = 64 * 1024;
+ 
++#[derive(serde::Deserialize)]
++struct PrettierLanguage {
++    name: String,
++    extensions: Vec<String>,
++    filenames: Option<Vec<String>>,
++}
++
++/// Snapshot of Prettier 3.9.9's built-in support-info, independent of syntax grammars.
++/// Let Prettier infer the parser and load project options from the actual filename.
++fn prettier_language(file: &str) -> Option<&'static PrettierLanguage> {
++    use std::sync::OnceLock;
++    static LANGUAGES: OnceLock<Vec<PrettierLanguage>> = OnceLock::new();
++    let filename = Path::new(file).file_name()?.to_str()?;
++    let languages = LANGUAGES.get_or_init(|| {
++        serde_json::from_str(include_str!("prettier-languages.json"))
++            .expect("embedded Prettier support matrix is valid")
++    });
++    languages.iter().find(|language| {
++        language
++            .filenames
++            .as_ref()
++            .is_some_and(|names| names.iter().any(|name| name == filename))
++            || language
++                .extensions
++                .iter()
++                .any(|extension| filename.ends_with(extension))
++    })
++}
++
++pub fn prettier_language_id(file: &str) -> Option<String> {
++    let name = &prettier_language(file)?.name;
++    Some(match name.as_str() {
++        "JSON with Comments" => "jsonc".into(),
++        "JSON.stringify" => "json".into(),
++        other => other.to_ascii_lowercase(),
++    })
++}
++
++pub fn prettier_default(file: &str) -> Option<&'static LanguageFormatterConfig> {
++    use std::sync::OnceLock;
++    static CODE: OnceLock<LanguageFormatterConfig> = OnceLock::new();
++    static MARKDOWN: OnceLock<LanguageFormatterConfig> = OnceLock::new();
++    let markdown = prettier_language(file)?.name == "Markdown";
++    let slot = if markdown { &MARKDOWN } else { &CODE };
++    Some(slot.get_or_init(|| LanguageFormatterConfig {
++        name: "Prettier".into(),
++        command: "prettier".into(),
++        args: if markdown {
++            [
++                "--stdin-filepath",
++                "{file}",
++                "--print-width",
++                "80",
++                "--prose-wrap",
++                "always",
++            ]
++            .map(String::from)
++            .to_vec()
++        } else {
++            ["--stdin-filepath", "{file}"].map(String::from).to_vec()
++        },
++        root_markers: ["package.json", ".git"].map(String::from).to_vec(),
++        ..Default::default()
++    }))
++}
++
+ #[derive(Debug)]
+ pub struct FormattedDocument {
+     pub name: String,
+@@ -223,6 +289,38 @@ pub async fn format_document(
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn prettier_filename_routing_covers_snapshot_without_claiming_other_languages() {
++        let languages: Vec<PrettierLanguage> =
++            serde_json::from_str(include_str!("prettier-languages.json")).unwrap();
++        for language in languages {
++            for extension in language.extensions {
++                assert!(
++                    prettier_default(&format!("/tmp/file{extension}")).is_some(),
++                    "{extension}"
++                );
++            }
++            for filename in language.filenames.unwrap_or_default() {
++                assert!(
++                    prettier_default(&format!("/tmp/{filename}")).is_some(),
++                    "{filename}"
++                );
++            }
++        }
++        for file in [
++            "main.rs",
++            "shell.nu",
++            "main.py",
++            "document.typ",
++            "component.svelte",
++            "file.unknown",
++        ] {
++            assert!(prettier_default(file).is_none(), "{file}");
++        }
++        assert_eq!(prettier_language_id("README").as_deref(), Some("markdown"));
++        assert_eq!(prettier_language_id("file.tsx").as_deref(), Some("tsx"));
++    }
++
+     #[test]
+     fn workspace_root_uses_nearest_marker() {
+         let temp = tempfile::tempdir().unwrap();
+diff --git a/src/prettier-languages.json b/src/prettier-languages.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..b6a4833d488f96ac6c63a200a5b28aa3ba333d81
+--- /dev/null
++++ b/src/prettier-languages.json
+@@ -0,0 +1,377 @@
++[
++  {
++    "name": "Angular",
++    "parsers": [
++      "angular"
++    ],
++    "extensions": [
++      ".component.html"
++    ],
++    "filenames": []
++  },
++  {
++    "name": "CSS",
++    "parsers": [
++      "css"
++    ],
++    "extensions": [
++      ".css",
++      ".wxss"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "Flow",
++    "parsers": [
++      "flow",
++      "babel-flow"
++    ],
++    "extensions": [
++      ".js.flow"
++    ],
++    "filenames": []
++  },
++  {
++    "name": "GraphQL",
++    "parsers": [
++      "graphql"
++    ],
++    "extensions": [
++      ".graphql",
++      ".gql",
++      ".graphqls"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "Handlebars",
++    "parsers": [
++      "glimmer"
++    ],
++    "extensions": [
++      ".handlebars",
++      ".hbs"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "HTML",
++    "parsers": [
++      "html"
++    ],
++    "extensions": [
++      ".html",
++      ".hta",
++      ".htm",
++      ".html.hl",
++      ".inc",
++      ".xht",
++      ".xhtml"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "JavaScript",
++    "parsers": [
++      "babel",
++      "acorn",
++      "espree",
++      "meriyah",
++      "babel-flow",
++      "babel-ts",
++      "flow",
++      "typescript"
++    ],
++    "extensions": [
++      ".js",
++      "._js",
++      ".bones",
++      ".cjs",
++      ".es",
++      ".es6",
++      ".gs",
++      ".jake",
++      ".javascript",
++      ".jsb",
++      ".jscad",
++      ".jsfl",
++      ".jslib",
++      ".jsm",
++      ".jspre",
++      ".jss",
++      ".mjs",
++      ".njs",
++      ".pac",
++      ".sjs",
++      ".ssjs",
++      ".xsjs",
++      ".xsjslib",
++      ".start.frag",
++      ".end.frag",
++      ".wxs"
++    ],
++    "filenames": [
++      "Jakefile",
++      "start.frag",
++      "end.frag"
++    ]
++  },
++  {
++    "name": "JSON",
++    "parsers": [
++      "json"
++    ],
++    "extensions": [
++      ".json",
++      ".4DForm",
++      ".4DProject",
++      ".avsc",
++      ".geojson",
++      ".gltf",
++      ".har",
++      ".ice",
++      ".JSON-tmLanguage",
++      ".json.example",
++      ".mcmeta",
++      ".sarif",
++      ".slnlaunch",
++      ".tact",
++      ".tfstate",
++      ".tfstate.backup",
++      ".topojson",
++      ".webapp",
++      ".webmanifest",
++      ".yy",
++      ".yyp"
++    ],
++    "filenames": [
++      ".all-contributorsrc",
++      ".arcconfig",
++      ".auto-changelog",
++      ".c8rc",
++      ".htmlhintrc",
++      ".imgbotconfig",
++      ".nycrc",
++      ".tern-config",
++      ".tern-project",
++      ".watchmanconfig",
++      ".babelrc",
++      ".jscsrc",
++      ".jshintrc",
++      ".jslintrc",
++      ".swcrc"
++    ]
++  },
++  {
++    "name": "JSON with Comments",
++    "parsers": [
++      "jsonc"
++    ],
++    "extensions": [
++      ".jsonc",
++      ".code-snippets",
++      ".code-workspace",
++      ".sublime-build",
++      ".sublime-color-scheme",
++      ".sublime-commands",
++      ".sublime-completions",
++      ".sublime-keymap",
++      ".sublime-macro",
++      ".sublime-menu",
++      ".sublime-mousemap",
++      ".sublime-project",
++      ".sublime-settings",
++      ".sublime-theme",
++      ".sublime-workspace",
++      ".sublime_metrics",
++      ".sublime_session"
++    ],
++    "filenames": []
++  },
++  {
++    "name": "JSON.stringify",
++    "parsers": [
++      "json-stringify"
++    ],
++    "extensions": [
++      ".importmap"
++    ],
++    "filenames": [
++      "package.json",
++      "package-lock.json",
++      "composer.json"
++    ]
++  },
++  {
++    "name": "JSON5",
++    "parsers": [
++      "json5"
++    ],
++    "extensions": [
++      ".json5"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "JSX",
++    "parsers": [
++      "babel",
++      "babel-flow",
++      "babel-ts",
++      "flow",
++      "typescript",
++      "espree",
++      "meriyah"
++    ],
++    "extensions": [
++      ".jsx"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "Less",
++    "parsers": [
++      "less"
++    ],
++    "extensions": [
++      ".less"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "Lightning Web Components",
++    "parsers": [
++      "lwc"
++    ],
++    "extensions": [],
++    "filenames": []
++  },
++  {
++    "name": "Markdown",
++    "parsers": [
++      "markdown"
++    ],
++    "extensions": [
++      ".md",
++      ".livemd",
++      ".markdown",
++      ".mdown",
++      ".mdwn",
++      ".mkd",
++      ".mkdn",
++      ".mkdown",
++      ".ronn",
++      ".scd",
++      ".workbook"
++    ],
++    "filenames": [
++      "contents.lr",
++      "README"
++    ]
++  },
++  {
++    "name": "MDX",
++    "parsers": [
++      "mdx"
++    ],
++    "extensions": [
++      ".mdx"
++    ],
++    "filenames": []
++  },
++  {
++    "name": "MJML",
++    "parsers": [
++      "mjml"
++    ],
++    "extensions": [
++      ".mjml"
++    ],
++    "filenames": []
++  },
++  {
++    "name": "PostCSS",
++    "parsers": [
++      "css"
++    ],
++    "extensions": [
++      ".pcss",
++      ".postcss"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "SCSS",
++    "parsers": [
++      "scss"
++    ],
++    "extensions": [
++      ".scss"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "TSX",
++    "parsers": [
++      "typescript",
++      "babel-ts"
++    ],
++    "extensions": [
++      ".tsx"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "TypeScript",
++    "parsers": [
++      "typescript",
++      "babel-ts"
++    ],
++    "extensions": [
++      ".ts",
++      ".cts",
++      ".mts"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "Vue",
++    "parsers": [
++      "vue"
++    ],
++    "extensions": [
++      ".vue"
++    ],
++    "filenames": null
++  },
++  {
++    "name": "YAML",
++    "parsers": [
++      "yaml"
++    ],
++    "extensions": [
++      ".yml",
++      ".mir",
++      ".reek",
++      ".rviz",
++      ".sublime-syntax",
++      ".syntax",
++      ".yaml",
++      ".yaml-tmlanguage",
++      ".yaml.sed",
++      ".yml.mysql"
++    ],
++    "filenames": [
++      ".clang-format",
++      ".clang-tidy",
++      ".clangd",
++      ".gemrc",
++      "CITATION.cff",
++      "glide.lock",
++      "pixi.lock",
++      ".prettierrc",
++      ".stylelintrc",
++      ".lintstagedrc"
++    ]
++  }
++]
+\ No newline at end of file
+diff --git a/tests/editing.rs b/tests/editing.rs
+index 79c4e5ee709e1e95671f3383c067196f342df080..99fd1d944aec2376edc7d626ab1f26b220b395a0 100644
+--- a/tests/editing.rs
++++ b/tests/editing.rs
+@@ -2715,7 +2715,7 @@ async fn substitute_preserves_unicode_marks_across_undo_and_redo() {
+ }
+ 
+ #[tokio::test]
+-async fn format_on_save_restores_save_as_identity_and_insert_transaction_after_sync_failure() {
++async fn format_on_save_preserves_save_as_and_insert_transaction_after_lsp_failure() {
+     let temp = tempfile::tempdir().unwrap();
+     let source = temp.path().join("source.rs");
+     let target = temp.path().join("target.py");
+@@ -2747,12 +2747,15 @@ async fn format_on_save_restores_save_as_identity_and_insert_transaction_after_s
+         .undo_history
+         .is_transaction_active());
+ 
+-    let error = editor
++    editor
+         .test_execute_production_action(Action::SaveAs(target_file.clone()))
+         .await
+-        .unwrap_err();
++        .unwrap();
+ 
+-    assert!(error.to_string().contains("injected didOpen failure"));
++    assert!(editor
++        .test_last_error()
++        .unwrap()
++        .contains("injected didOpen failure"));
+     assert!(editor.test_is_insert());
+     assert!(editor
+         .test_current_buffer()
+@@ -2760,18 +2763,15 @@ async fn format_on_save_restores_save_as_identity_and_insert_transaction_after_s
+         .is_transaction_active());
+     assert_eq!(
+         editor.test_current_buffer().file.as_deref(),
+-        Some(source_file.as_str())
++        Some(target_file.as_str())
+     );
+     assert_eq!(editor.test_current_buffer().contents(), "unsaved source\n");
+     assert_eq!(fs::read_to_string(&source).unwrap(), "disk source\n");
+-    assert!(!target.exists());
++    assert_eq!(fs::read_to_string(&target).unwrap(), "unsaved source\n");
+     let events = events.lock().unwrap();
+     assert!(events
+         .iter()
+         .any(|event| matches!(event, LspEvent::DidOpen(file) if file == &target_file)));
+-    assert!(events
+-        .iter()
+-        .any(|event| matches!(event, LspEvent::DidOpen(file) if file == &source_file)));
+ }
+ 
+ #[cfg(unix)]

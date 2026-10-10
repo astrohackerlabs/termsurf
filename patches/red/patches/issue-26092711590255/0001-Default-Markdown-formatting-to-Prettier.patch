@@ -1,0 +1,368 @@
+From 0df6d540851ba15fb252ae30f9d0629e1c02e4d7 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 27 Sep 2026 07:10:05 -0500
+Subject: [PATCH] Default Markdown formatting to Prettier
+
+---
+ default_config.toml                   |  8 +++
+ src/config.rs                         | 76 +++++++++++++++++++++++--
+ src/editor.rs                         | 78 +++++++++++++++++++++++++
+ src/language.rs                       | 82 +++++++++++++++++++++++++++
+ src/main.rs                           |  5 --
+ tests/fixtures/markdown-formatting.md |  6 ++
+ 6 files changed, 244 insertions(+), 11 deletions(-)
+ create mode 100644 tests/fixtures/markdown-formatting.md
+
+diff --git a/default_config.toml b/default_config.toml
+index c9e2864104055e459a4de6ce9979e9ce8dc5d240..344efa9260fc09ab5ab380ef9093be6732a1b8f7 100644
+--- a/default_config.toml
++++ b/default_config.toml
+@@ -224,6 +224,14 @@ waiting = "steady_underscore"
+ # language_id = "javascript"
+ # file_extensions = ["js", "mjs", "cjs"]
+ 
++# Markdown formatting is available out of the box with Homebrew's Prettier.
++# Override this table in config.toml to choose different arguments or a tool.
++[languages.markdown.formatter]
++name = "Prettier"
++command = "prettier"
++args = ["--stdin-filepath", "{file}", "--print-width", "80", "--prose-wrap", "always"]
++root_markers = ["package.json", ".git"]
++
+ # Unified language definitions can configure syntax, exact filenames, comments,
+ # indentation, trusted Tree-sitter grammars, and LSP from one table. Exact
+ # filenames are case-sensitive; file extensions are case-insensitive.
+diff --git a/src/config.rs b/src/config.rs
+index 0c846badbd3dc1337d18ad56e80918790ec4dc08..6cf62639fa599b81aeeefca625cefca61381e305 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -136,7 +136,7 @@ impl LoadedConfig {
+     /// Returns legacy server definitions explicitly supplied by the user or CLI.
+     #[must_use]
+     pub fn explicit_language_server_names(&self) -> HashSet<String> {
+-        self.explicit_names_at_path("lsp", "servers")
++        self.explicit_names_at_path(&["lsp", "servers"])
+             .into_iter()
+             .filter(|name| self.config.lsp.servers.contains_key(name))
+             .collect()
+@@ -145,10 +145,16 @@ impl LoadedConfig {
+     /// Returns legacy comment templates explicitly supplied by the user or CLI.
+     #[must_use]
+     pub fn explicit_comment_language_names(&self) -> HashSet<String> {
+-        self.explicit_names_at_path("commenting", "languages")
++        self.explicit_names_at_path(&["commenting", "languages"])
+     }
+ 
+-    fn explicit_names_at_path(&self, section: &str, entries: &str) -> HashSet<String> {
++    /// Returns language definitions explicitly supplied by the user or CLI.
++    #[must_use]
++    pub fn explicit_language_names(&self) -> HashSet<String> {
++        self.explicit_names_at_path(&["languages"])
++    }
++
++    fn explicit_names_at_path(&self, path: &[&str]) -> HashSet<String> {
+         let mut names = HashSet::new();
+         for source in std::iter::once(self.source_text.as_str())
+             .chain(self.override_fragments.iter().map(String::as_str))
+@@ -156,9 +162,9 @@ impl LoadedConfig {
+             let Ok(value) = source.parse::<toml::Value>() else {
+                 continue;
+             };
+-            if let Some(table) = value
+-                .get(section)
+-                .and_then(|section| section.get(entries))
++            if let Some(table) = path
++                .iter()
++                .try_fold(&value, |value, key| value.get(*key))
+                 .and_then(toml::Value::as_table)
+             {
+                 names.extend(table.keys().cloned());
+@@ -5172,6 +5178,64 @@ workspace_name = "frontend"
+         }
+     }
+ 
++    #[test]
++    fn markdown_prettier_defaults_and_user_overrides() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("config.toml");
++        let fresh = Config::load_user_file(&path, &[]).unwrap();
++        assert!(fresh.is_clean());
++        assert!(!path.exists());
++        let expected = fresh.config.languages["markdown"]
++            .formatter
++            .clone()
++            .unwrap();
++        assert_eq!(expected.command, "prettier");
++        assert_eq!(expected.name, "Prettier");
++        assert_eq!(
++            expected.args,
++            [
++                "--stdin-filepath",
++                "{file}",
++                "--print-width",
++                "80",
++                "--prose-wrap",
++                "always"
++            ]
++        );
++        assert_eq!(expected.root_markers, ["package.json", ".git"]);
++        assert!(fresh.config.formatting.on_save);
++        assert_eq!(fresh.config.formatting.provider, FormattingProvider::Auto);
++        let theme_only = Config::load_user_toml("scrolloff = 9", &path, &[]).unwrap();
++        assert!(theme_only.is_clean());
++        assert_eq!(
++            theme_only.config.languages["markdown"].formatter.as_ref(),
++            Some(&expected)
++        );
++        let source = r#"
++[formatting]
++on_save = false
++provider = "lsp"
++[languages.markdown.formatter]
++name = "Custom Prettier"
++command = "custom-prettier"
++args = ["--parser", "markdown"]
++"#;
++        std::fs::write(&path, source).unwrap();
++        for _ in 0..2 {
++            let loaded = Config::load_user_file(&path, &[]).unwrap();
++            assert!(loaded.is_clean(), "{:?}", loaded.diagnostics);
++            let formatter = loaded.config.languages["markdown"]
++                .formatter
++                .as_ref()
++                .unwrap();
++            assert_eq!(formatter.command, "custom-prettier");
++            assert_eq!(formatter.args, ["--parser", "markdown"]);
++            assert!(!loaded.config.formatting.on_save);
++            assert_eq!(loaded.config.formatting.provider, FormattingProvider::Lsp);
++        }
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
++    }
++
+     #[test]
+     fn formatting_config_accepts_external_language_formatter() {
+         let config: Config = toml::from_str(
+diff --git a/src/editor.rs b/src/editor.rs
+index b82281624e5edaa8201f2d11986a365ecdbd0183..0e7e31df1a108fdeeb333a1fe5cbcaa33771e15a 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -43075,6 +43075,84 @@ builtin = "rust"
+         assert!(!editor.current_buffer().is_dirty());
+     }
+ 
++    #[cfg(unix)]
++    #[tokio::test]
++    #[ignore = "requires an installed Prettier; run explicitly during release qualification"]
++    async fn markdown_prettier_formats_unsaved_buffer_and_save_with_embedded_defaults() {
++        let root = tempfile::tempdir().unwrap();
++        let path = root.path().join("document with spaces.md");
++        let input = include_str!("../tests/fixtures/markdown-formatting.md");
++        std::fs::write(&path, "").unwrap();
++        // Conflicting project settings must not override the requested CLI policy.
++        std::fs::write(
++            root.path().join(".prettierrc"),
++            r#"{"printWidth":120,"proseWrap":"never"}"#,
++        )
++        .unwrap();
++        let mut loaded = Config::load_user_file(&root.path().join("config.toml"), &[]).unwrap();
++        crate::language::finalize_language_configuration(&mut loaded, root.path()).unwrap();
++        assert!(loaded.is_clean(), "{:?}", loaded.diagnostics);
++        loaded.config.lsp.enabled = false;
++        let formatter = loaded.config.languages["markdown"]
++            .formatter
++            .as_ref()
++            .unwrap();
++        assert!(
++            crate::formatter::is_available(formatter, &path),
++            "Prettier is required for this qualification test"
++        );
++        let expected = crate::formatter::format_document(formatter, &path, input)
++            .await
++            .unwrap()
++            .unwrap()
++            .contents;
++        assert_ne!(input, expected);
++        assert!(expected.lines().all(|line| line.chars().count() <= 80));
++        assert_eq!(
++            input.split_whitespace().collect::<Vec<_>>(),
++            expected.split_whitespace().collect::<Vec<_>>()
++        );
++        let lsp = Box::new(crate::lsp::LspManager::new(loaded.config.lsp.clone()));
++        let buffer = Buffer::new(Some(path.to_string_lossy().into_owned()), String::new());
++        let mut editor =
++            Editor::with_size(lsp, 80, 24, loaded.config, Theme::default(), vec![buffer]).unwrap();
++        editor.test_disable_terminal_output();
++        editor.current_buffer_mut().insert_str(0, 0, input);
++        editor
++            .test_execute_production_action(Action::FormatDocument)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), expected);
++        assert_eq!(
++            editor.last_error.as_deref(),
++            Some("formatted with Prettier")
++        );
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
++        editor
++            .test_execute_production_action(Action::FormatDocument)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), expected);
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), input);
++        editor.config.formatting.on_save = false;
++        editor
++            .test_execute_production_action(Action::Save)
++            .await
++            .unwrap();
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), input);
++        editor.config.formatting.on_save = true;
++        editor
++            .test_execute_production_action(Action::Save)
++            .await
++            .unwrap();
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), expected);
++        assert_eq!(editor.current_buffer().contents(), expected);
++    }
++
+     #[cfg(unix)]
+     #[tokio::test]
+     async fn external_formatter_is_undoable_and_runs_before_save_by_default() {
+diff --git a/src/language.rs b/src/language.rs
+index f13239f3a540948b51e2247355b690c7f23811ff..fef47ee644484b3425b1ed36755b9f099a82698c 100644
+--- a/src/language.rs
++++ b/src/language.rs
+@@ -81,6 +81,17 @@ pub fn merge_package_languages(
+ pub fn finalize_language_configuration(loaded: &mut LoadedConfig, config_dir: &Path) -> Result<()> {
+     let explicit_servers = loaded.explicit_language_server_names();
+     let explicit_comments = loaded.explicit_comment_language_names();
++    let explicit_languages = loaded.explicit_language_names();
++    // Defaults must not masquerade as explicit user definitions and block packs.
++    let mut defaults = std::collections::HashMap::new();
++    loaded.config.languages.retain(|id, definition| {
++        if explicit_languages.contains(id) {
++            true
++        } else {
++            defaults.insert(id.clone(), definition.clone());
++            false
++        }
++    });
+     let manager = PluginPackageManager::new(config_dir);
+     for package in manager
+         .list()?
+@@ -90,6 +101,12 @@ pub fn finalize_language_configuration(loaded: &mut LoadedConfig, config_dir: &P
+         let manifest = PluginPackageManifest::load(&package.package_root)?;
+         merge_package_languages(&mut loaded.config, &manifest, &package.package_root);
+     }
++    for (id, default) in defaults {
++        let definition = loaded.config.languages.entry(id).or_insert(default.clone());
++        if definition.formatter.is_none() {
++            definition.formatter = default.formatter;
++        }
++    }
+ 
+     let mut accepted = std::collections::HashMap::new();
+     let mut registry = LanguageRegistry::bundled();
+@@ -389,6 +406,71 @@ fn inspect_native_grammar(path: &Path) -> Result<(PathBuf, String)> {
+ mod tests {
+     use super::*;
+ 
++    #[tokio::test]
++    async fn markdown_prettier_defaults_do_not_shadow_language_packs() {
++        let root = tempfile::tempdir().unwrap();
++        let package = tempfile::tempdir().unwrap();
++        fs::write(
++            package.path().join("red-plugin.toml"),
++            format!(
++                r#"
++schema_version = 1
++[plugin]
++id = "markdown-tools"
++name = "Markdown tools"
++version = "1.0.0"
++red_api = "^{}"
++[languages.markdown]
++extensions = ["md", "markdown", "mdown"]
++indent_width = 4
++"#,
++                crate::plugin::RED_HOST_API_VERSION
++            ),
++        )
++        .unwrap();
++        let installed = PluginPackageManager::new(root.path())
++            .install_path(package.path())
++            .await
++            .unwrap();
++        let path = root.path().join("config.toml");
++        let mut loaded = Config::load_user_toml("", &path, &[]).unwrap();
++        finalize_language_configuration(&mut loaded, root.path()).unwrap();
++        assert!(loaded.is_clean(), "{:?}", loaded.diagnostics);
++        assert_eq!(loaded.config.languages["markdown"].indent_width, Some(4));
++        assert_eq!(
++            loaded.config.languages["markdown"]
++                .formatter
++                .as_ref()
++                .unwrap()
++                .command,
++            "prettier"
++        );
++        for overrides in [false, true] {
++            let source = "[languages.markdown]\nindent_width = 3";
++            let mut loaded = if overrides {
++                Config::load_user_toml("", &path, &[source.to_string()]).unwrap()
++            } else {
++                Config::load_user_toml(source, &path, &[]).unwrap()
++            };
++            finalize_language_configuration(&mut loaded, root.path()).unwrap();
++            assert_eq!(loaded.config.languages["markdown"].indent_width, Some(3));
++        }
++        let manifest = installed.package_root.join("red-plugin.toml");
++        let mut source = fs::read_to_string(&manifest).unwrap();
++        source.push_str("\n[languages.markdown.formatter]\nname = \"Pack formatter\"\ncommand = \"pack-format\"\n");
++        fs::write(&manifest, source).unwrap();
++        let mut loaded = Config::load_user_toml("", &path, &[]).unwrap();
++        finalize_language_configuration(&mut loaded, root.path()).unwrap();
++        assert_eq!(
++            loaded.config.languages["markdown"]
++                .formatter
++                .as_ref()
++                .unwrap()
++                .command,
++            "pack-format"
++        );
++    }
++
+     #[test]
+     fn empty_language_lsp_commands_are_quarantined_without_rejecting_valid_languages() {
+         for command in ["", "   "] {
+diff --git a/src/main.rs b/src/main.rs
+index 962202e672ee4d01c57eae26ecdbe9e10b449a2a..0c45bd5eda838d204d293790fa69890813554d16 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1084,11 +1084,6 @@ fn finalize_runtime_config(
+     {
+         let manifest = red::plugin::package::PluginPackageManifest::load(&installed.package_root)?;
+         apply_plugin_default_keymaps(&mut loaded.config.keys, &manifest.keymaps);
+-        red::language::merge_package_languages(
+-            &mut loaded.config,
+-            &manifest,
+-            &installed.package_root,
+-        );
+         let Some(entrypoint) = manifest.husk_entry(&installed.package_root) else {
+             continue;
+         };
+diff --git a/tests/fixtures/markdown-formatting.md b/tests/fixtures/markdown-formatting.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..67e5b80df312cd69c65d82860694525b3c3f2509
+--- /dev/null
++++ b/tests/fixtures/markdown-formatting.md
+@@ -0,0 +1,6 @@
++# Formatting fixture
++
++This ordinary Markdown paragraph deliberately runs beyond eighty columns so the default formatter must split it into readable lines while preserving the words, the café, and the intent of the original document.
++
++- first item
++- second item with **bold** text

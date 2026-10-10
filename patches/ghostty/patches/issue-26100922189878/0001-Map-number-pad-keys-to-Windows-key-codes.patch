@@ -1,0 +1,58 @@
+From f1e34f126763da96e3f920e354efac62f2fc7f5b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 10 Oct 2026 12:13:02 -0500
+Subject: [PATCH] Map number pad keys to Windows key codes
+
+The TermSurf key forwarder dropped the number pad symbol keys: they had
+no Windows key code, so they never reached a browser pane. Add the codes
+that desktop Chromium uses on macOS (VK_DECIMAL, VK_MULTIPLY, VK_ADD,
+VK_CLEAR, VK_DIVIDE, VK_SUBTRACT, and VK_OEM_PLUS for keypad "="), and
+send the number pad digits as VK_NUMPAD0-9 so pages see Numpad codes.
+
+Issue 26100922189878, Experiment 1.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../Surface View/SurfaceView_AppKit.swift     | 29 ++++++++++++-------
+ 1 file changed, 19 insertions(+), 10 deletions(-)
+
+diff --git a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift
+index 34b6985c63648f230b65285d59976dabc69f9ecf..c032e9548311c76d441171e0bf9bb964930a5429 100644
+--- a/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
++++ b/macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift	
+@@ -2907,16 +2907,25 @@ extension Ghostty {
+       case 0x1A: return 0x37
+       case 0x1C: return 0x38
+       case 0x19: return 0x39
+-      case 0x52: return 0x30
+-      case 0x53: return 0x31
+-      case 0x54: return 0x32
+-      case 0x55: return 0x33
+-      case 0x56: return 0x34
+-      case 0x57: return 0x35
+-      case 0x58: return 0x36
+-      case 0x59: return 0x37
+-      case 0x5B: return 0x38
+-      case 0x5C: return 0x39
++      // Number pad: the codes desktop Chromium uses on macOS
++      // (keyboard_code_conversion_mac.mm). Keypad "=" is VK_OEM_PLUS there.
++      case 0x52: return 0x60
++      case 0x53: return 0x61
++      case 0x54: return 0x62
++      case 0x55: return 0x63
++      case 0x56: return 0x64
++      case 0x57: return 0x65
++      case 0x58: return 0x66
++      case 0x59: return 0x67
++      case 0x5B: return 0x68
++      case 0x5C: return 0x69
++      case 0x41: return 0x6E
++      case 0x43: return 0x6A
++      case 0x45: return 0x6B
++      case 0x47: return 0x0C
++      case 0x4B: return 0x6F
++      case 0x4E: return 0x6D
++      case 0x51: return 0xBB
+       case 0x24, 0x4C: return 0x0D
+       case 0x30: return 0x09
+       case 0x33: return 0x08

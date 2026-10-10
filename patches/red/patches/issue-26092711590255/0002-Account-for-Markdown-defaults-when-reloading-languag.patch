@@ -1,0 +1,35 @@
+From cafb4f592d3b79d2a1930fcdb43cf178186d6b16 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 27 Sep 2026 07:13:29 -0500
+Subject: [PATCH] Account for Markdown defaults when reloading languages
+
+---
+ src/editor.rs | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/src/editor.rs b/src/editor.rs
+index 0e7e31d..28e0fa1 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -34465,7 +34465,8 @@ builtin = "rust"
+         let contents = editor.buffer_manager[0].contents();
+         editor.set_language_reload_source(config_path, Vec::new());
+ 
+-        assert_eq!(editor.reload_languages().await.unwrap(), 1);
++        assert_eq!(editor.reload_languages().await.unwrap(), 2);
++        assert!(editor.config.languages.contains_key("markdown"));
+         assert_eq!(editor.current_language_id().as_deref(), Some("buildspec"));
+         assert_eq!(editor.buffer_manager[0].contents(), contents);
+         assert_eq!(editor.indentation().shift_width, 2);
+@@ -35257,7 +35258,7 @@ builtin = "rust"
+         assert!(editor.config.languages.contains_key("buildspec"));
+         assert_eq!(
+             editor.last_error.as_deref(),
+-            Some("reloaded 1 configured language")
++            Some("reloaded 2 configured languages")
+         );
+     }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
