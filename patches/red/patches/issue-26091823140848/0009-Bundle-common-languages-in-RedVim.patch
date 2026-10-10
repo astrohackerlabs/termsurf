@@ -1,0 +1,2155 @@
+From 2011a9c2e53b32c8cf578f0b46de2b651cbb9761 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 08:08:35 -0500
+Subject: [PATCH] Bundle common languages in RedVim
+
+Ten grammars move beneath one roof,
+With colored tokens offering proof.
+Make keeps its tabs, the queries stay,
+No parser errands on install day.
+---
+ Cargo.lock                                 | 110 ++++++++
+ Cargo.toml                                 |  10 +
+ docs/BUNDLED_LANGUAGES.md                  |  60 +++++
+ docs/languages-provenance.json             | 142 ++++++++++
+ docs/licenses/tree-sitter-c.txt            |  21 ++
+ docs/licenses/tree-sitter-cpp.txt          |  21 ++
+ docs/licenses/tree-sitter-css.txt          |  21 ++
+ docs/licenses/tree-sitter-html.txt         |  21 ++
+ docs/licenses/tree-sitter-make.txt         |  21 ++
+ docs/licenses/tree-sitter-python.txt       |  21 ++
+ docs/licenses/tree-sitter-ruby.txt         |  22 ++
+ docs/licenses/tree-sitter-swift.txt        |  21 ++
+ docs/licenses/tree-sitter-xml.txt          |  19 ++
+ docs/licenses/tree-sitter-zig.txt          |  21 ++
+ examples/check_bundled_files.rs            |  26 ++
+ src/config.rs                              |   7 +-
+ src/editor.rs                              |  42 +++
+ src/highlighter.rs                         | 170 +++++++++++-
+ src/highlighter/bundled_checks.rs          | 288 ++++++++++++++++++++
+ src/main.rs                                |  11 +-
+ src/queries/highlights/ruby.scm            | 153 +++++++++++
+ src/queries/highlights/smoke/Makefile      |   5 +
+ src/queries/highlights/smoke/example.c     |   7 +
+ src/queries/highlights/smoke/example.cpp   |   7 +
+ src/queries/highlights/smoke/example.css   |   4 +
+ src/queries/highlights/smoke/example.html  |   3 +
+ src/queries/highlights/smoke/example.py    |   5 +
+ src/queries/highlights/smoke/example.rb    |   5 +
+ src/queries/highlights/smoke/example.svg   |   4 +
+ src/queries/highlights/smoke/example.swift |   5 +
+ src/queries/highlights/smoke/example.xml   |   3 +
+ src/queries/highlights/smoke/example.zig   |   6 +
+ src/queries/highlights/zig.scm             | 291 +++++++++++++++++++++
+ src/theme/mod.rs                           |   7 +-
+ tests/editing.rs                           |  25 +-
+ tests/self_check.rs                        |   8 +
+ 36 files changed, 1594 insertions(+), 19 deletions(-)
+ create mode 100644 docs/BUNDLED_LANGUAGES.md
+ create mode 100644 docs/languages-provenance.json
+ create mode 100644 docs/licenses/tree-sitter-c.txt
+ create mode 100644 docs/licenses/tree-sitter-cpp.txt
+ create mode 100644 docs/licenses/tree-sitter-css.txt
+ create mode 100644 docs/licenses/tree-sitter-html.txt
+ create mode 100644 docs/licenses/tree-sitter-make.txt
+ create mode 100644 docs/licenses/tree-sitter-python.txt
+ create mode 100644 docs/licenses/tree-sitter-ruby.txt
+ create mode 100644 docs/licenses/tree-sitter-swift.txt
+ create mode 100644 docs/licenses/tree-sitter-xml.txt
+ create mode 100644 docs/licenses/tree-sitter-zig.txt
+ create mode 100644 examples/check_bundled_files.rs
+ create mode 100644 src/highlighter/bundled_checks.rs
+ create mode 100644 src/queries/highlights/ruby.scm
+ create mode 100644 src/queries/highlights/smoke/Makefile
+ create mode 100644 src/queries/highlights/smoke/example.c
+ create mode 100644 src/queries/highlights/smoke/example.cpp
+ create mode 100644 src/queries/highlights/smoke/example.css
+ create mode 100644 src/queries/highlights/smoke/example.html
+ create mode 100644 src/queries/highlights/smoke/example.py
+ create mode 100644 src/queries/highlights/smoke/example.rb
+ create mode 100644 src/queries/highlights/smoke/example.svg
+ create mode 100644 src/queries/highlights/smoke/example.swift
+ create mode 100644 src/queries/highlights/smoke/example.xml
+ create mode 100644 src/queries/highlights/smoke/example.zig
+ create mode 100644 src/queries/highlights/zig.scm
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 11430de..038b347 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2364,18 +2364,28 @@ dependencies = [
+  "trash",
+  "tree-sitter",
+  "tree-sitter-bash",
++ "tree-sitter-c",
++ "tree-sitter-cpp",
++ "tree-sitter-css",
+  "tree-sitter-fish",
++ "tree-sitter-html",
+  "tree-sitter-javascript",
+  "tree-sitter-json",
+  "tree-sitter-language",
+  "tree-sitter-lua",
++ "tree-sitter-make",
+  "tree-sitter-md",
+  "tree-sitter-nu",
+  "tree-sitter-powershell",
++ "tree-sitter-python",
++ "tree-sitter-ruby",
+  "tree-sitter-rust",
++ "tree-sitter-swift",
+  "tree-sitter-toml-ng",
+  "tree-sitter-typescript",
++ "tree-sitter-xml",
+  "tree-sitter-yaml",
++ "tree-sitter-zig",
+  "unicode-ident",
+  "unicode-linebreak",
+  "unicode-segmentation",
+@@ -3179,6 +3189,36 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-c"
++version = "0.24.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a9b2eb57a55fed6b00812912e730b7a275cf4fe98bfd6a5d76263d4438371728"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
++[[package]]
++name = "tree-sitter-cpp"
++version = "0.23.4"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
++[[package]]
++name = "tree-sitter-css"
++version = "0.25.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-fish"
+ version = "3.6.0"
+@@ -3189,6 +3229,16 @@ dependencies = [
+  "tree-sitter",
+ ]
+ 
++[[package]]
++name = "tree-sitter-html"
++version = "0.23.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-javascript"
+ version = "0.25.0"
+@@ -3225,6 +3275,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-make"
++version = "1.1.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c5998dc7cbcbdab19fae8aefef982bf2d6544513d8d2e69cc44aec4c63810104"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-md"
+ version = "0.5.3"
+@@ -3254,6 +3314,26 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-python"
++version = "0.25.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
++[[package]]
++name = "tree-sitter-ruby"
++version = "0.23.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "be0484ea4ef6bb9c575b4fdabde7e31340a8d2dbc7d52b321ac83da703249f95"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-rust"
+ version = "0.24.2"
+@@ -3264,6 +3344,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-swift"
++version = "0.7.3"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "fe36052155b9dd69ca82b3b8f1b4ccfb2d867125ac1a4db1dd7331829242668c"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-toml-ng"
+ version = "0.7.0"
+@@ -3284,6 +3374,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-xml"
++version = "0.7.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "e670041f591d994f54d597ddcd8f4ebc930e282c4c76a42268743b71f0c8b6b3"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-yaml"
+ version = "0.7.2"
+@@ -3294,6 +3394,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-zig"
++version = "1.1.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ab11fc124851b0db4dd5e55983bbd9631192e93238389dcd44521715e5d53e28"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "try-lock"
+ version = "0.2.5"
+diff --git a/Cargo.toml b/Cargo.toml
+index 6085f95..d8d879f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -128,6 +128,16 @@ unicode-linebreak = "0.1"
+ unicode-segmentation = "1.12.0"
+ unicode-width = "0.2"
+ uuid = { version = "1.12.0", features = ["v4", "v5"] }
++tree-sitter-c = "=0.24.2"
++tree-sitter-cpp = "=0.23.4"
++tree-sitter-python = "=0.25.0"
++tree-sitter-html = "=0.23.2"
++tree-sitter-css = "=0.25.0"
++tree-sitter-ruby = "=0.23.1"
++tree-sitter-zig = "=1.1.2"
++tree-sitter-swift = "=0.7.3"
++tree-sitter-xml = "=0.7.0"
++tree-sitter-make = "=1.1.1"
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ base64 = "0.22.1"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+new file mode 100644
+index 0000000..05ebf75
+--- /dev/null
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -0,0 +1,60 @@
++# Bundled language expansion
++
++RedVim compiles C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++parsers into the executable and embeds their highlighting queries. Existing
++languages, including Nushell, remain available. No Neovim installation, external
++parser/query files, trust command or runtime download is needed.
++
++| Language | Files | Default indentation |
++| --- | --- | --- |
++| C | .c, .h | 4 spaces |
++| C++ | .cc, .cpp, .cxx, .hpp, .hxx, .hh | 4 spaces |
++| Python | .py, .pyi; python/python3 shebang | 4 spaces |
++| HTML | .html, .htm | 2 spaces |
++| CSS | .css | 2 spaces |
++| Ruby | .rb, Gemfile, Rakefile, formula.rb.in; ruby shebang | 2 spaces |
++| Zig | .zig | 4 spaces |
++| Swift | .swift | 4 spaces |
++| XML | .xml, .svg, textual XML .plist | 2 spaces |
++| Make | .mk, Makefile, makefile, GNUmakefile | tabs, width 8 |
++
++C owns .h by default. For a C++ project, use the existing language override or
++add `[languages.cpp]` with `extensions = ["h", "cc", "cpp", "cxx", "hpp", "hxx", "hh"]`
++to config.toml. Comment commands use the language's usual comment delimiter.
++The existing indent_width override selects spaces; omit it for Make recipe tabs.
++
++This expansion provides host-language syntax highlighting. Embedded JS/CSS in
++HTML and shell syntax in Make recipes are not enabled here. DTD files, binary
++plists, Objective-C++, SCSS, LSP completion and semantic diagnostics are not
++claimed by these mappings. Syntax highlighting tolerates incomplete edits; it
++is not a compiler or dialect conformance check.
++
++## Reproducible inputs
++
++Cargo.toml pins exact crate versions and Cargo.lock pins archive checksums.
++`languages-provenance.json` records crate checksums, upstream source revisions,
++query paths/hashes and license hashes. All ten crates declare MIT; their license
++texts are in docs/licenses and distributed in the binary archive. When the crate
++omits its license file, the recorded source URL identifies the exact upstream
++revision used to retrieve it.
++
++C++ combines the C and C++ queries. Most queries are embedded directly from
++their crate. Zig's copied query replaces its three Lua patterns with equivalent
++Rust regex predicates and removes the editor-specific priority directive.
++Ruby's copied query removes the generic identifier-as-method rule guarded by
++`#is-not? local`: Red does not evaluate local-scope predicates, so leaving it
++would incorrectly color local variables as methods. Explicit method/call
++patterns remain. Adapted query hashes are recorded separately.
++
++For the ten added languages, semantic captures such as function/type/constant
++take precedence over generic captures covering the same bytes. Existing language
++precedence is preserved. Theme compatibility fallbacks map legacy constant,
++boolean/float and control-flow captures to existing styles when an explicit
++theme scope is absent.
++
++`redvim --self-check` parses embedded fixtures and checks filename recognition
++and effective Mocha token colors for each new language, SVG and Nushell. It uses
++built-ins without reading external grammar configuration. Tests additionally
++cover detection overrides, default comments/indentation and Make tabs.
++
++Nushell's independently pinned provenance remains in docs/NUSHELL.md.
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+new file mode 100644
+index 0000000..1bfead5
+--- /dev/null
++++ b/docs/languages-provenance.json
+@@ -0,0 +1,142 @@
++[
++  {
++    "name": "tree-sitter-c",
++    "version": "0.24.2",
++    "crate_sha256": "a9b2eb57a55fed6b00812912e730b7a275cf4fe98bfd6a5d76263d4438371728",
++    "repository": "https://github.com/tree-sitter/tree-sitter-c",
++    "revision": "b780e47fc780ddc8da13afa35a3f4ed5c157823d",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c",
++    "bundled_query_sha256": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c",
++    "license": "MIT",
++    "license_file": "tree-sitter-c.txt",
++    "license_sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
++    "license_source": "published crate LICENSE"
++  },
++  {
++    "name": "tree-sitter-cpp",
++    "version": "0.23.4",
++    "crate_sha256": "df2196ea9d47b4ab4a31b9297eaa5a5d19a0b121dceb9f118f6790ad0ab94743",
++    "repository": "https://github.com/tree-sitter/tree-sitter-cpp",
++    "revision": "f41e1a044c8a84ea9fa8577fdd2eab92ec96de02",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "52136576a9a9dacd9e95a8de0f351689bf46140738572ab4e9f24c9278e6b458",
++    "bundled_query_sha256": "52136576a9a9dacd9e95a8de0f351689bf46140738572ab4e9f24c9278e6b458",
++    "license": "MIT",
++    "license_file": "tree-sitter-cpp.txt",
++    "license_sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-cpp/f41e1a044c8a84ea9fa8577fdd2eab92ec96de02/LICENSE"
++  },
++  {
++    "name": "tree-sitter-python",
++    "version": "0.25.0",
++    "crate_sha256": "6bf85fd39652e740bf60f46f4cda9492c3a9ad75880575bf14960f775cb74a1c",
++    "repository": "https://github.com/tree-sitter/tree-sitter-python",
++    "revision": "293fdc02038ee2bf0e2e206711b69c90ac0d413f",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "a6708f209381618e2b398972c8f1ccd892f0c064eab35a2a3f911c3e22e79a7e",
++    "bundled_query_sha256": "a6708f209381618e2b398972c8f1ccd892f0c064eab35a2a3f911c3e22e79a7e",
++    "license": "MIT",
++    "license_file": "tree-sitter-python.txt",
++    "license_sha256": "d724405ce238a22c0d35769c5a36b386ad5958192efe8bbb304fb2896254575f",
++    "license_source": "published crate LICENSE"
++  },
++  {
++    "name": "tree-sitter-html",
++    "version": "0.23.2",
++    "crate_sha256": "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee",
++    "repository": "https://github.com/tree-sitter/tree-sitter-html",
++    "revision": "5a5ca8551a179998360b4a4ca2c0f366a35acc03",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "1ebb3811a8cdc054385b847a3aac6fbf7079faefd5b3dfab5bbad256cd5afdcf",
++    "bundled_query_sha256": "1ebb3811a8cdc054385b847a3aac6fbf7079faefd5b3dfab5bbad256cd5afdcf",
++    "license": "MIT",
++    "license_file": "tree-sitter-html.txt",
++    "license_sha256": "2e0110e07abef7c2548b26ec9d6969775617ca539a0dc8dbeeb14d6452c711d1",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-html/5a5ca8551a179998360b4a4ca2c0f366a35acc03/LICENSE"
++  },
++  {
++    "name": "tree-sitter-css",
++    "version": "0.25.0",
++    "crate_sha256": "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f",
++    "repository": "https://github.com/tree-sitter/tree-sitter-css",
++    "revision": "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "23f7948a3817a0d06d7120158c3bee4ec5b58daa77e524985a4738b364db17b2",
++    "bundled_query_sha256": "23f7948a3817a0d06d7120158c3bee4ec5b58daa77e524985a4738b364db17b2",
++    "license": "MIT",
++    "license_file": "tree-sitter-css.txt",
++    "license_sha256": "c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78",
++    "license_source": "published crate LICENSE"
++  },
++  {
++    "name": "tree-sitter-ruby",
++    "version": "0.23.1",
++    "crate_sha256": "be0484ea4ef6bb9c575b4fdabde7e31340a8d2dbc7d52b321ac83da703249f95",
++    "repository": "https://github.com/tree-sitter/tree-sitter-ruby",
++    "revision": "71bd32fb7607035768799732addba884a37a6210",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "0858de9feece6dcd3408a541f995a34918d587ac2c552096026b0e47e2b332e6",
++    "bundled_query_sha256": "1da2a3ef73d81cc31a4b02771154dfc9ded4dd1ee07c2a97fe4241fe35412275",
++    "license": "MIT",
++    "license_file": "tree-sitter-ruby.txt",
++    "license_sha256": "ee006f02a3d856df282e409be2a86e24a65bb573a98b9c28343771141351bb6b",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter/tree-sitter-ruby/71bd32fb7607035768799732addba884a37a6210/LICENSE"
++  },
++  {
++    "name": "tree-sitter-zig",
++    "version": "1.1.2",
++    "crate_sha256": "ab11fc124851b0db4dd5e55983bbd9631192e93238389dcd44521715e5d53e28",
++    "repository": "https://github.com/tree-sitter-grammars/tree-sitter-zig",
++    "revision": "b670c8df85a1568f498aa5c8cae42f51a90473c0",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "27a7ffc77086ec6394c04e59b42f0da4c9d3c294a0225bc155c80305ee54ca86",
++    "bundled_query_sha256": "39f6533ac1124cfeef465df155f6f5646a7461f4da9092db6a50821164f6219b",
++    "license": "MIT",
++    "license_file": "tree-sitter-zig.txt",
++    "license_sha256": "0eea8dc45e89deeb03c7799bbbc7b4688f365fb274562f4540ecfebdea82e727",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-zig/b670c8df85a1568f498aa5c8cae42f51a90473c0/LICENSE"
++  },
++  {
++    "name": "tree-sitter-swift",
++    "version": "0.7.3",
++    "crate_sha256": "fe36052155b9dd69ca82b3b8f1b4ccfb2d867125ac1a4db1dd7331829242668c",
++    "repository": "https://github.com/alex-pinkus/tree-sitter-swift",
++    "revision": "b8b22bffbb3441780e6471665bacfb263741c86a",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "b0bbeb918904b252e8bd361f4afb4756647232391110a67deecbf7227464aff8",
++    "bundled_query_sha256": "b0bbeb918904b252e8bd361f4afb4756647232391110a67deecbf7227464aff8",
++    "license": "MIT",
++    "license_file": "tree-sitter-swift.txt",
++    "license_sha256": "3533cec129bb4bba015c0d61d86dd7c3b7e82110e4d2ff7837a01eff5bad5ccc",
++    "license_source": "published crate LICENSE"
++  },
++  {
++    "name": "tree-sitter-xml",
++    "version": "0.7.0",
++    "crate_sha256": "e670041f591d994f54d597ddcd8f4ebc930e282c4c76a42268743b71f0c8b6b3",
++    "repository": "https://github.com/tree-sitter-grammars/tree-sitter-xml",
++    "revision": "4b64dd3a03ec002258d6268d712fd93716d6ab57",
++    "query": "queries/xml/highlights.scm",
++    "upstream_query_sha256": "aa4a561c846928c3a4d885acbe690a60689661a45684babe16cf8b7a1509b610",
++    "bundled_query_sha256": "aa4a561c846928c3a4d885acbe690a60689661a45684babe16cf8b7a1509b610",
++    "license": "MIT",
++    "license_file": "tree-sitter-xml.txt",
++    "license_sha256": "3297073719030b7261afd78b7267931ccc03a27f7a65ca6fc644316180f71bf6",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-xml/4b64dd3a03ec002258d6268d712fd93716d6ab57/LICENSE"
++  },
++  {
++    "name": "tree-sitter-make",
++    "version": "1.1.1",
++    "crate_sha256": "c5998dc7cbcbdab19fae8aefef982bf2d6544513d8d2e69cc44aec4c63810104",
++    "repository": "https://github.com/tree-sitter-grammars/tree-sitter-make",
++    "revision": "5e9e8f8ff3387b0edcaa90f46ddf3629f4cfeb1d",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "295045cf653f02bdca99f86bd34667eabbc474939056209655505fae3c8c83f4",
++    "bundled_query_sha256": "295045cf653f02bdca99f86bd34667eabbc474939056209655505fae3c8c83f4",
++    "license": "MIT",
++    "license_file": "tree-sitter-make.txt",
++    "license_sha256": "28eecdb75b6de2d9020603531461444bf54db827ee2fb345a8fcf4dbee7c2ad1",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-make/5e9e8f8ff3387b0edcaa90f46ddf3629f4cfeb1d/LICENSE"
++  }
++]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-c.txt b/docs/licenses/tree-sitter-c.txt
+new file mode 100644
+index 0000000..4b52d19
+--- /dev/null
++++ b/docs/licenses/tree-sitter-c.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2014 Max Brunsfeld
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-cpp.txt b/docs/licenses/tree-sitter-cpp.txt
+new file mode 100644
+index 0000000..4b52d19
+--- /dev/null
++++ b/docs/licenses/tree-sitter-cpp.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2014 Max Brunsfeld
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-css.txt b/docs/licenses/tree-sitter-css.txt
+new file mode 100644
+index 0000000..971b81f
+--- /dev/null
++++ b/docs/licenses/tree-sitter-css.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2018 Max Brunsfeld
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-html.txt b/docs/licenses/tree-sitter-html.txt
+new file mode 100644
+index 0000000..4b52d19
+--- /dev/null
++++ b/docs/licenses/tree-sitter-html.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2014 Max Brunsfeld
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-make.txt b/docs/licenses/tree-sitter-make.txt
+new file mode 100644
+index 0000000..5c279ff
+--- /dev/null
++++ b/docs/licenses/tree-sitter-make.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2021 Alexandre A. Muller
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-python.txt b/docs/licenses/tree-sitter-python.txt
+new file mode 100644
+index 0000000..ff8ed93
+--- /dev/null
++++ b/docs/licenses/tree-sitter-python.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2016 Max Brunsfeld
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-ruby.txt b/docs/licenses/tree-sitter-ruby.txt
+new file mode 100644
+index 0000000..2a79f43
+--- /dev/null
++++ b/docs/licenses/tree-sitter-ruby.txt
+@@ -0,0 +1,22 @@
++The MIT License (MIT)
++
++Copyright (c) 2016 Rob Rix
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
++
+diff --git a/docs/licenses/tree-sitter-swift.txt b/docs/licenses/tree-sitter-swift.txt
+new file mode 100644
+index 0000000..f158d70
+--- /dev/null
++++ b/docs/licenses/tree-sitter-swift.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2021 alex-pinkus
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-xml.txt b/docs/licenses/tree-sitter-xml.txt
+new file mode 100644
+index 0000000..7094a20
+--- /dev/null
++++ b/docs/licenses/tree-sitter-xml.txt
+@@ -0,0 +1,19 @@
++Copyright (c) 2023 ObserverOfTime
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-zig.txt b/docs/licenses/tree-sitter-zig.txt
+new file mode 100644
+index 0000000..4e8c9b3
+--- /dev/null
++++ b/docs/licenses/tree-sitter-zig.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2024 Amaan Qureshi <amaanq12@gmail.com>
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/examples/check_bundled_files.rs b/examples/check_bundled_files.rs
+new file mode 100644
+index 0000000..cccfe4f
+--- /dev/null
++++ b/examples/check_bundled_files.rs
+@@ -0,0 +1,26 @@
++//! Developer probe: render real source files using only bundled grammars/themes.
++use anyhow::Context;
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn main() -> anyhow::Result<()> {
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let files = std::env::args().skip(1).collect::<Vec<_>>();
++    anyhow::ensure!(!files.is_empty(), "supply source files to check");
++    for file in files {
++        let source = std::fs::read_to_string(&file).with_context(|| file.clone())?;
++        let language = highlighter
++            .language_id_for_file(Some(&file))
++            .with_context(|| format!("no bundled language for {file}"))?
++            .to_owned();
++        let spans = highlighter.highlight(&language, &source)?;
++        anyhow::ensure!(
++            spans
++                .iter()
++                .any(|span| span.style.fg.is_some() && span.style.fg != theme.style.fg),
++            "{file}: no visible syntax colors"
++        );
++        println!("{language}: {} spans: {file}", spans.len());
++    }
++    Ok(())
++}
+diff --git a/src/config.rs b/src/config.rs
+index b4878e9..8a08e15 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -737,6 +737,11 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("markdown", "<!-- %s -->"),
+         ("nu", "# %s"),
+         ("powershell", "# %s"),
++        ("python", "# %s"),
++        ("ruby", "# %s"),
++        ("make", "# %s"),
++        ("swift", "// %s"),
++        ("zig", "// %s"),
+         ("rust", "// %s"),
+         ("scss", "/* %s */"),
+         ("sql", "-- %s"),
+@@ -4359,7 +4364,7 @@ input_position = "left"
+         assert!(config.commenting.continue_on_open_line);
+         assert_eq!(config.commenting.languages["fish"], "# %s");
+         assert_eq!(config.commenting.languages["rust"], "// %s");
+-        assert!(!config.commenting.languages.contains_key("python"));
++        assert_eq!(config.commenting.languages["python"], "# %s");
+         assert_eq!(config.commenting.languages["lua"], "-- %s");
+         assert_eq!(config.commenting.languages["html"], "<!-- %s -->");
+         assert_eq!(config.commenting.languages["css"], "/* %s */");
+diff --git a/src/editor.rs b/src/editor.rs
+index 1f9d619..6790679 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6649,6 +6649,15 @@ impl Editor {
+                 ("zsh", 2),
+                 ("fish", 4),
+                 ("nu", 2),
++                ("c", 4),
++                ("cpp", 4),
++                ("python", 4),
++                ("html", 2),
++                ("css", 2),
++                ("ruby", 2),
++                ("zig", 4),
++                ("swift", 4),
++                ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+                 (
+@@ -6657,6 +6666,7 @@ impl Editor {
+                 )
+             }),
+         );
++        indentation.insert("make".into(), Indentation::new(8, 8, false));
+         for (language, definition) in &config.languages {
+             if let Some(width) = definition.indent_width {
+                 let settings = Indentation::new(width, width, true);
+@@ -34483,6 +34493,38 @@ builtin = "rust"
+             .starts_with("# custom let answer"));
+     }
+ 
++    #[test]
++    fn common_language_defaults_and_make_recipe_tabs() {
++        let mut editor = test_editor(80, 12);
++        for (file, width, comment) in [
++            ("example.c", 4, "//"),
++            ("example.cpp", 4, "//"),
++            ("example.py", 4, "#"),
++            ("example.html", 2, "<!--"),
++            ("example.css", 2, "/*"),
++            ("formula.rb.in", 2, "#"),
++            ("example.zig", 4, "//"),
++            ("example.swift", 4, "//"),
++            ("example.svg", 2, "<!--"),
++            ("Makefile", 8, "#"),
++        ] {
++            editor.buffer_manager[0] = Buffer::new(Some(file.into()), "sample\n".into());
++            assert_eq!(editor.indentation().shift_width, width, "{file}");
++            assert!(editor.toggle_comment_lines(0, 0), "{file}");
++            assert!(
++                editor.current_buffer().contents().starts_with(comment),
++                "{file}"
++            );
++            assert!(editor.toggle_comment_lines(0, 0), "{file}");
++            assert_eq!(editor.current_buffer().contents(), "sample\n", "{file}");
++        }
++        editor.buffer_manager[0] =
++            Buffer::new(Some("Makefile".into()), "all:\n\t@echo hello\n".into());
++        assert!(!editor.indentation().expand_tab);
++        assert_eq!(editor.indentation().whitespace_for_columns(8), "\t");
++        assert_eq!(editor.current_buffer().contents(), "all:\n\t@echo hello\n");
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index 7a5f2bd..6ae93c9 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -20,6 +20,9 @@ use libloading::Library;
+ use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree};
+ use tree_sitter_language::LanguageFn;
+ 
++mod bundled_checks;
++pub use bundled_checks::check_bundled_languages;
++
+ use crate::{
+     config::{LanguageConfig, LanguageGrammarConfig},
+     editor::StyleInfo,
+@@ -71,6 +74,7 @@ struct RuntimeLanguageDefinition {
+     indent_queries: Vec<String>,
+     injection_query: Option<String>,
+     specialized: Option<SpecializedHighlighter>,
++    semantic_refinements: bool,
+ }
+ 
+ /// Immutable language routing and grammar definitions shared by all render surfaces.
+@@ -133,6 +137,18 @@ impl LanguageRegistry {
+                     .collect(),
+                 injection_query: definition.injection_query.map(ToString::to_string),
+                 specialized: definition.specialized,
++                semantic_refinements: matches!(
++                    definition.id,
++                    "c" | "cpp"
++                        | "python"
++                        | "html"
++                        | "css"
++                        | "ruby"
++                        | "zig"
++                        | "swift"
++                        | "xml"
++                        | "make"
++                ),
+             });
+         }
+         registry
+@@ -180,6 +196,7 @@ impl LanguageRegistry {
+             indent_queries: Vec::new(),
+             injection_query: None,
+             specialized: None,
++            semantic_refinements: false,
+         });
+         if !config.extensions.is_empty() {
+             definition.extensions = config
+@@ -220,6 +237,7 @@ impl LanguageRegistry {
+                 definition
+                     .injection_query
+                     .clone_from(&bundled.injection_query);
++                definition.semantic_refinements = bundled.semantic_refinements;
+                 definition.specialized = None;
+             }
+             if let Some(path) = grammar_path(grammar, config_dir)? {
+@@ -580,6 +598,21 @@ const MAX_CACHED_HIGHLIGHT_BYTES: usize = 64 * 1024;
+ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ 
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
++    ("c", "c"),
++    ("cpp", "cpp"),
++    ("c++", "cpp"),
++    ("python", "python"),
++    ("py", "python"),
++    ("html", "html"),
++    ("css", "css"),
++    ("ruby", "ruby"),
++    ("rb", "ruby"),
++    ("zig", "zig"),
++    ("swift", "swift"),
++    ("xml", "xml"),
++    ("svg", "xml"),
++    ("make", "make"),
++    ("makefile", "make"),
+     ("rs", "rust"),
+     ("rust", "rust"),
+     ("js", "javascript"),
+@@ -1419,7 +1452,13 @@ impl Highlighter {
+                                 end,
+                                 style: style.clone(),
+                             };
+-                            if capture_refines_equal_range(capture_name) {
++                            if capture_refines_equal_range(capture_name)
++                                || (definition.semantic_refinements
++                                    && matches!(
++                                        capture_name.split('.').next(),
++                                        Some("function" | "type" | "constructor" | "constant")
++                                    ))
++                            {
+                                 refinement_colors.push(captured);
+                             } else {
+                                 colors.push(captured);
+@@ -2179,6 +2218,8 @@ pub(crate) const MAX_SHEBANG_CHARS: usize = 512;
+ 
+ fn bundled_shebangs(id: &str) -> &'static [&'static str] {
+     match id {
++        "python" => &["python", "python3"],
++        "ruby" => &["ruby"],
+         "bash" => &["sh", "bash", "dash", "ash", "zsh"],
+         "fish" => &["fish"],
+         "nu" => &["nu"],
+@@ -2236,6 +2277,109 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "c",
++            extensions: &["c", "h"],
++            filenames: &[],
++            language: Some(|| tree_sitter_c::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_c::HIGHLIGHT_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "cpp",
++            extensions: &["cc", "cpp", "cxx", "hpp", "hxx", "hh"],
++            filenames: &[],
++            language: Some(|| tree_sitter_cpp::LANGUAGE.into()),
++            highlight_queries: &[
++                tree_sitter_c::HIGHLIGHT_QUERY,
++                tree_sitter_cpp::HIGHLIGHT_QUERY,
++            ],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "python",
++            extensions: &["py", "pyi"],
++            filenames: &[],
++            language: Some(|| tree_sitter_python::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_python::HIGHLIGHTS_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "html",
++            extensions: &["html", "htm"],
++            filenames: &[],
++            language: Some(|| tree_sitter_html::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_html::HIGHLIGHTS_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "css",
++            extensions: &["css"],
++            filenames: &[],
++            language: Some(|| tree_sitter_css::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_css::HIGHLIGHTS_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "ruby",
++            extensions: &["rb"],
++            filenames: &["Gemfile", "Rakefile", "formula.rb.in"],
++            language: Some(|| tree_sitter_ruby::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/ruby.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "zig",
++            extensions: &["zig"],
++            filenames: &[],
++            language: Some(|| tree_sitter_zig::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/zig.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "swift",
++            extensions: &["swift"],
++            filenames: &[],
++            language: Some(|| tree_sitter_swift::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_swift::HIGHLIGHTS_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "xml",
++            extensions: &["xml", "svg", "plist"],
++            filenames: &[],
++            language: Some(|| tree_sitter_xml::LANGUAGE_XML.into()),
++            highlight_queries: &[tree_sitter_xml::XML_HIGHLIGHT_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
++        BundledLanguageDefinition {
++            id: "make",
++            extensions: &["mk"],
++            filenames: &["Makefile", "makefile", "GNUmakefile"],
++            language: Some(|| tree_sitter_make::LANGUAGE.into()),
++            highlight_queries: &[tree_sitter_make::HIGHLIGHTS_QUERY],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "nu",
+             extensions: &["nu"],
+@@ -4474,7 +4618,7 @@ mod tests {
+             ),
+             ("#!/usr/bin/env -- /bin/dash", Some("bash")),
+             ("\u{feff}#! /usr/bin/lua5.4\r\nprint(1)", Some("lua")),
+-            ("#!/usr/bin/env python3.12", None),
++            ("#!/usr/bin/env python3.12", Some("python")),
+             ("#!/usr/bin/env missing bash", None),
+             ("#!/usr/bin/env --unknown bash", None),
+             ("#!/usr/bin/env -u", None),
+@@ -4613,7 +4757,10 @@ mod tests {
+             highlighter.language_id_for_name("commit"),
+             Some("gitcommit")
+         );
+-        assert_eq!(highlighter.language_id_for_file(Some("main.py")), None);
++        assert_eq!(
++            highlighter.language_id_for_file(Some("main.py")),
++            Some("python")
++        );
+         assert_eq!(highlighter.language_id_for_file(Some("LICENSE")), None);
+     }
+ 
+@@ -5014,7 +5161,7 @@ mod tests {
+         let highlighter = highlighter();
+ 
+         assert_eq!(highlighter.language_id_for_name("rs"), Some("rust"));
+-        assert_eq!(highlighter.language_id_for_name("py"), None);
++        assert_eq!(highlighter.language_id_for_name("py"), Some("python"));
+         assert_eq!(highlighter.language_id_for_name("yml"), Some("yaml"));
+         assert_eq!(highlighter.language_id_for_name("ts"), Some("typescript"));
+         assert_eq!(highlighter.language_id_for_name("jsx"), Some("jsx"));
+@@ -5138,21 +5285,31 @@ mod tests {
+             highlighter.language_ids(),
+             vec![
+                 "bash",
++                "c",
++                "cpp",
++                "css",
+                 "fish",
+                 "gitcommit",
++                "html",
+                 "husk",
+                 "javascript",
+                 "json",
+                 "jsx",
+                 "lua",
++                "make",
+                 "markdown",
+                 "nu",
+                 "powershell",
++                "python",
++                "ruby",
+                 "rust",
++                "swift",
+                 "toml",
+                 "tsx",
+                 "typescript",
++                "xml",
+                 "yaml",
++                "zig",
+             ]
+         );
+     }
+@@ -5162,7 +5319,10 @@ mod tests {
+         let highlighter = highlighter();
+ 
+         assert_eq!(highlighter.matching_language_ids("fi"), vec!["fish"]);
+-        assert_eq!(highlighter.matching_language_ids("ru"), vec!["rust"]);
++        assert_eq!(
++            highlighter.matching_language_ids("ru"),
++            vec!["ruby", "rust"]
++        );
+         assert_eq!(highlighter.matching_language_ids("ym"), vec!["yaml"]);
+         assert_eq!(highlighter.matching_language_ids(".rs"), vec!["rust"]);
+         assert_eq!(
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+new file mode 100644
+index 0000000..dd916e1
+--- /dev/null
++++ b/src/highlighter/bundled_checks.rs
+@@ -0,0 +1,288 @@
++//! Release checks exercise the same registry, queries and theme as normal rendering.
++use super::*;
++
++struct Fixture {
++    language: &'static str,
++    filename: &'static str,
++    source: &'static str,
++    tokens: &'static [(&'static str, &'static str)],
++}
++
++const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "c",
++        filename: "example.c",
++        source: include_str!("../queries/highlights/smoke/example.c"),
++        tokens: &[
++            ("// café", "comment"),
++            ("return", "keyword"),
++            ("\"hello\"", "string"),
++            ("42", "number"),
++        ],
++    },
++    Fixture {
++        language: "cpp",
++        filename: "example.cpp",
++        source: include_str!("../queries/highlights/smoke/example.cpp"),
++        tokens: &[
++            ("// café", "comment"),
++            ("template", "keyword"),
++            ("\"hello\"", "string"),
++            ("21", "number"),
++        ],
++    },
++    Fixture {
++        language: "python",
++        filename: "example.py",
++        source: include_str!("../queries/highlights/smoke/example.py"),
++        tokens: &[
++            ("# café", "comment"),
++            ("def", "keyword"),
++            ("greet", "function"),
++            ("\"world\"", "string"),
++        ],
++    },
++    Fixture {
++        language: "html",
++        filename: "example.html",
++        source: include_str!("../queries/highlights/smoke/example.html"),
++        tokens: &[
++            ("<!-- café -->", "comment"),
++            ("h1", "tag"),
++            ("class", "attribute"),
++            ("greeting", "string"),
++        ],
++    },
++    Fixture {
++        language: "css",
++        filename: "example.css",
++        source: include_str!("../queries/highlights/smoke/example.css"),
++        tokens: &[
++            ("/* café */", "comment"),
++            ("@media", "keyword"),
++            ("\"hello\"", "string"),
++            ("42", "number"),
++        ],
++    },
++    Fixture {
++        language: "ruby",
++        filename: "example.rb",
++        source: include_str!("../queries/highlights/smoke/example.rb"),
++        tokens: &[
++            ("# café", "comment"),
++            ("def", "keyword"),
++            ("greet", "function.method"),
++            ("hello", "string"),
++            ("message", "variable"),
++        ],
++    },
++    Fixture {
++        language: "zig",
++        filename: "example.zig",
++        source: include_str!("../queries/highlights/smoke/example.zig"),
++        tokens: &[
++            ("// café", "comment"),
++            ("pub", "keyword"),
++            ("main", "function"),
++            ("hello", "string"),
++            ("42", "number"),
++            ("count", "variable"),
++        ],
++    },
++    Fixture {
++        language: "swift",
++        filename: "example.swift",
++        source: include_str!("../queries/highlights/smoke/example.swift"),
++        tokens: &[
++            ("// café", "comment"),
++            ("let", "keyword"),
++            ("greet()", "function.method"),
++            ("hello", "string"),
++        ],
++    },
++    Fixture {
++        language: "xml",
++        filename: "example.xml",
++        source: include_str!("../queries/highlights/smoke/example.xml"),
++        tokens: &[
++            ("<!-- café -->", "comment"),
++            ("greeting", "tag"),
++            ("world", "string"),
++        ],
++    },
++    Fixture {
++        language: "xml",
++        filename: "example.svg",
++        source: include_str!("../queries/highlights/smoke/example.svg"),
++        tokens: &[
++            ("<!-- café -->", "comment"),
++            ("circle", "tag"),
++            ("cx", "property"),
++            ("red", "string"),
++        ],
++    },
++    Fixture {
++        language: "make",
++        filename: "Makefile",
++        source: include_str!("../queries/highlights/smoke/Makefile"),
++        tokens: &[
++            ("# café", "comment"),
++            ("GREETING", "constant"),
++            (":=", "operator"),
++            ("hello", "string"),
++        ],
++    },
++    Fixture {
++        language: "nu",
++        filename: "example.nu",
++        source: include_str!("../queries/highlights/nu-smoke.nu"),
++        tokens: &[
++            ("def", "keyword.function"),
++            ("# café", "comment"),
++            ("Hello", "string"),
++        ],
++    },
++];
++
++/// Validate bundled parsers, filename detection and effective token colors without
++/// reading user configuration, loading external grammars or entering raw mode.
++pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str>> {
++    let registry = Arc::new(LanguageRegistry::bundled());
++    let mut highlighter = Highlighter::with_registry(theme, Arc::clone(&registry))?;
++    let mut checked = Vec::new();
++    for fixture in FIXTURES {
++        let id = fixture.language;
++        anyhow::ensure!(
++            highlighter.language_id_for_file(Some(fixture.filename)) == Some(id),
++            "{}: wrong bundled language detection",
++            fixture.filename
++        );
++        let Some(GrammarSource::Bundled(grammar)) = registry.languages[id].grammar else {
++            anyhow::bail!("{id}: parser is not bundled");
++        };
++        let mut parser = Parser::new();
++        parser.set_language(&grammar())?;
++        let tree = parser
++            .parse(fixture.source, None)
++            .context("parser returned no tree")?;
++        anyhow::ensure!(
++            !tree.root_node().has_error(),
++            "{id}: fixture parse error: {}",
++            tree.root_node().to_sexp()
++        );
++        let styles = highlighter
++            .highlight(id, fixture.source)
++            .with_context(|| format!("{id}: bundled highlighting"))?;
++        for &(token, scope) in fixture.tokens {
++            let byte = fixture
++                .source
++                .find(token)
++                .context("missing fixture token")?;
++            let expected = theme
++                .get_style(scope)
++                .with_context(|| format!("{id}: missing theme scope {scope}"))?;
++            let actual = styles
++                .iter()
++                .rev()
++                .find(|s| s.start <= byte && byte < s.end)
++                .map(|s| &s.style);
++            anyhow::ensure!(actual == Some(&expected), "{id}: {token:?} should have {scope} style; actual={actual:?}, expected={expected:?}");
++            if scope != "variable" {
++                anyhow::ensure!(
++                    expected.fg.is_some() && expected.fg != theme.style.fg,
++                    "{id}: {scope} must have visible color"
++                );
++            }
++        }
++        if !checked.contains(&id) {
++            checked.push(id);
++        }
++    }
++    Ok(checked)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::theme::parse_vscode_theme_contents;
++
++    #[test]
++    fn common_languages_parse_and_render_with_embedded_mocha() {
++        let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let checked = check_bundled_languages(&theme).unwrap();
++        assert_eq!(checked.len(), 11);
++    }
++
++    #[test]
++    fn common_language_detection_and_overrides_are_deterministic() {
++        let directory = tempfile::tempdir().unwrap();
++        let mut registry =
++            LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
++        let theme = Theme::default();
++        let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
++        for definition in language_definitions().iter().take(10) {
++            for extension in definition.extensions {
++                assert_eq!(
++                    highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
++                    Some(definition.id)
++                );
++            }
++            for filename in definition.filenames {
++                assert_eq!(
++                    highlighter.language_id_for_file(Some(filename)),
++                    Some(definition.id)
++                );
++            }
++        }
++        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
++        // Explicit C++ header routing remains available through supported config.
++        registry
++            .insert_configured(
++                "cpp",
++                &LanguageConfig {
++                    extensions: vec!["h".into()],
++                    ..LanguageConfig::default()
++                },
++                directory.path(),
++            )
++            .unwrap();
++        let highlighter = Highlighter::with_registry(&theme, Arc::new(registry)).unwrap();
++        assert_eq!(
++            highlighter.language_id_for_file(Some("example.h")),
++            Some("cpp")
++        );
++        assert_eq!(
++            highlighter.language_id_for_file(Some("example.c")),
++            Some("c")
++        );
++    }
++
++    #[test]
++    fn configured_builtin_alias_preserves_semantic_colors() {
++        let directory = tempfile::tempdir().unwrap();
++        let config = HashMap::from([(
++            "custom-python".to_owned(),
++            LanguageConfig {
++                grammar: Some(LanguageGrammarConfig {
++                    builtin: Some("python".into()),
++                    ..LanguageGrammarConfig::default()
++                }),
++                ..LanguageConfig::default()
++            },
++        )]);
++        let registry = LanguageRegistry::from_config(&config, directory.path()).unwrap();
++        let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let mut highlighter = Highlighter::with_registry(&theme, Arc::new(registry)).unwrap();
++        let code = "def greet():\n    return 42\n";
++        let shape = |styles: Vec<StyleInfo>| {
++            styles
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        assert_eq!(
++            shape(highlighter.highlight("python", code).unwrap()),
++            shape(highlighter.highlight("custom-python", code).unwrap())
++        );
++    }
++}
+diff --git a/src/main.rs b/src/main.rs
+index 30ca48e..a1b341b 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -119,14 +119,9 @@ async fn run() -> anyhow::Result<()> {
+         let report = run_self_check().await?;
+         println!("{}", report.format());
+         let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
+-        let mut highlighter = red::highlighter::Highlighter::new(&theme)?;
+-        let fixture = include_str!("queries/highlights/nu-smoke.nu");
+-        anyhow::ensure!(
+-            highlighter.language_id_for_source(Some("example.nu"), fixture) == Some("nu")
+-                && !highlighter.highlight("nu", fixture)?.is_empty(),
+-            "bundled Nushell highlighting failed"
+-        );
+-        println!("language nu: bundled highlighting ok");
++        for language in red::highlighter::check_bundled_languages(&theme)? {
++            println!("language {language}: bundled highlighting ok");
++        }
+         println!("redvim self-check ok");
+         return Ok(());
+     }
+diff --git a/src/queries/highlights/ruby.scm b/src/queries/highlights/ruby.scm
+new file mode 100644
+index 0000000..9d4344b
+--- /dev/null
++++ b/src/queries/highlights/ruby.scm
+@@ -0,0 +1,153 @@
++(identifier) @variable
++
++; Bare identifiers remain variables; Red does not evaluate local-scope predicates.
++
++[
++  "alias"
++  "and"
++  "begin"
++  "break"
++  "case"
++  "class"
++  "def"
++  "do"
++  "else"
++  "elsif"
++  "end"
++  "ensure"
++  "for"
++  "if"
++  "in"
++  "module"
++  "next"
++  "or"
++  "rescue"
++  "retry"
++  "return"
++  "then"
++  "unless"
++  "until"
++  "when"
++  "while"
++  "yield"
++] @keyword
++
++((identifier) @keyword
++ (#match? @keyword "^(private|protected|public)$"))
++
++(constant) @constructor
++
++; Function calls
++
++"defined?" @function.method.builtin
++
++(call
++  method: [(identifier) (constant)] @function.method)
++
++((identifier) @function.method.builtin
++ (#eq? @function.method.builtin "require"))
++
++; Function definitions
++
++(alias (identifier) @function.method)
++(setter (identifier) @function.method)
++(method name: [(identifier) (constant)] @function.method)
++(singleton_method name: [(identifier) (constant)] @function.method)
++
++; Identifiers
++
++[
++  (class_variable)
++  (instance_variable)
++] @property
++
++((identifier) @constant.builtin
++ (#match? @constant.builtin "^__(FILE|LINE|ENCODING)__$"))
++
++(file) @constant.builtin
++(line) @constant.builtin
++(encoding) @constant.builtin
++
++(hash_splat_nil
++  "**" @operator) @constant.builtin
++
++((constant) @constant
++ (#match? @constant "^[A-Z\\d_]+$"))
++
++[
++  (self)
++  (super)
++] @variable.builtin
++
++(block_parameter (identifier) @variable.parameter)
++(block_parameters (identifier) @variable.parameter)
++(destructured_parameter (identifier) @variable.parameter)
++(hash_splat_parameter (identifier) @variable.parameter)
++(lambda_parameters (identifier) @variable.parameter)
++(method_parameters (identifier) @variable.parameter)
++(splat_parameter (identifier) @variable.parameter)
++
++(keyword_parameter name: (identifier) @variable.parameter)
++(optional_parameter name: (identifier) @variable.parameter)
++
++; Literals
++
++[
++  (string)
++  (bare_string)
++  (subshell)
++  (heredoc_body)
++  (heredoc_beginning)
++] @string
++
++[
++  (simple_symbol)
++  (delimited_symbol)
++  (hash_key_symbol)
++  (bare_symbol)
++] @string.special.symbol
++
++(regex) @string.special.regex
++(escape_sequence) @escape
++
++[
++  (integer)
++  (float)
++] @number
++
++[
++  (nil)
++  (true)
++  (false)
++] @constant.builtin
++
++(interpolation
++  "#{" @punctuation.special
++  "}" @punctuation.special) @embedded
++
++(comment) @comment
++
++; Operators
++
++[
++"="
++"=>"
++"->"
++] @operator
++
++[
++  ","
++  ";"
++  "."
++] @punctuation.delimiter
++
++[
++  "("
++  ")"
++  "["
++  "]"
++  "{"
++  "}"
++  "%w("
++  "%i("
++] @punctuation.bracket
+diff --git a/src/queries/highlights/smoke/Makefile b/src/queries/highlights/smoke/Makefile
+new file mode 100644
+index 0000000..f1b6f60
+--- /dev/null
++++ b/src/queries/highlights/smoke/Makefile
+@@ -0,0 +1,5 @@
++# café: recipe tab below
++GREETING := hello
++.PHONY: all
++all:
++	@echo "$(GREETING)"
+diff --git a/src/queries/highlights/smoke/example.c b/src/queries/highlights/smoke/example.c
+new file mode 100644
+index 0000000..e09fdfc
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.c
+@@ -0,0 +1,7 @@
++// café: C defaults
++#include <stdio.h>
++int main(void) {
++    const char *message = "hello";
++    printf("%s\n", message);
++    return 42;
++}
+diff --git a/src/queries/highlights/smoke/example.cpp b/src/queries/highlights/smoke/example.cpp
+new file mode 100644
+index 0000000..080c84e
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.cpp
+@@ -0,0 +1,7 @@
++// café: generics
++#include <string>
++template<typename T> T twice(T value) { return value + value; }
++int main() {
++    std::string message = "hello";
++    return twice(21);
++}
+diff --git a/src/queries/highlights/smoke/example.css b/src/queries/highlights/smoke/example.css
+new file mode 100644
+index 0000000..2474af7
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.css
+@@ -0,0 +1,4 @@
++/* café */
++@media screen {
++  .greeting { color: #abcdef; width: 42px; content: "hello"; }
++}
+diff --git a/src/queries/highlights/smoke/example.html b/src/queries/highlights/smoke/example.html
+new file mode 100644
+index 0000000..43fd5d9
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.html
+@@ -0,0 +1,3 @@
++<!doctype html>
++<!-- café -->
++<html><body><h1 class="greeting">Hello</h1></body></html>
+diff --git a/src/queries/highlights/smoke/example.py b/src/queries/highlights/smoke/example.py
+new file mode 100644
+index 0000000..1c06873
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.py
+@@ -0,0 +1,5 @@
++# café: indentation
++def greet(name: str) -> str:
++    if name:
++        return f"hello {name}"
++    return "world"
+diff --git a/src/queries/highlights/smoke/example.rb b/src/queries/highlights/smoke/example.rb
+new file mode 100644
+index 0000000..3fddb18
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.rb
+@@ -0,0 +1,5 @@
++# café: interpolation
++def greet(name)
++  message = "hello #{name}"
++  puts message
++end
+diff --git a/src/queries/highlights/smoke/example.svg b/src/queries/highlights/smoke/example.svg
+new file mode 100644
+index 0000000..5f1b503
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
++  <!-- café -->
++  <circle cx="50" cy="50" r="40" fill="red"/>
++</svg>
+diff --git a/src/queries/highlights/smoke/example.swift b/src/queries/highlights/smoke/example.swift
+new file mode 100644
+index 0000000..7721975
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.swift
+@@ -0,0 +1,5 @@
++// café: declaration
++struct Greeting {
++    let message = "hello"
++    func greet() -> String { return message }
++}
+diff --git a/src/queries/highlights/smoke/example.xml b/src/queries/highlights/smoke/example.xml
+new file mode 100644
+index 0000000..6ca9f12
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.xml
+@@ -0,0 +1,3 @@
++<?xml version="1.0"?>
++<!-- café -->
++<greeting name="world">Hello</greeting>
+diff --git a/src/queries/highlights/smoke/example.zig b/src/queries/highlights/smoke/example.zig
+new file mode 100644
+index 0000000..cc84de5
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.zig
+@@ -0,0 +1,6 @@
++// café: declaration
++const std = @import("std");
++pub fn main() void {
++    const count: u32 = 42;
++    std.debug.print("hello {d}\n", .{count});
++}
+diff --git a/src/queries/highlights/zig.scm b/src/queries/highlights/zig.scm
+new file mode 100644
+index 0000000..464b597
+--- /dev/null
++++ b/src/queries/highlights/zig.scm
+@@ -0,0 +1,291 @@
++; Variables
++
++(identifier) @variable
++
++; Parameters
++
++(parameter
++  name: (identifier) @variable.parameter)
++
++; Types
++
++(parameter
++  type: (identifier) @type)
++
++((identifier) @type
++  (#match? @type "^[A-Z_][a-zA-Z0-9_]*"))
++
++(variable_declaration
++  (identifier) @type
++  "="
++  [
++    (struct_declaration)
++    (enum_declaration)
++    (union_declaration)
++    (opaque_declaration)
++  ])
++
++[
++  (builtin_type)
++  "anyframe"
++] @type.builtin
++
++; Constants
++
++((identifier) @constant
++  (#match? @constant "^[A-Z][A-Z_0-9]+$"))
++
++[
++  "null"
++  "unreachable"
++  "undefined"
++] @constant.builtin
++
++(field_expression
++  .
++  member: (identifier) @constant)
++
++(enum_declaration
++  (container_field
++    type: (identifier) @constant))
++
++; Labels
++
++(block_label (identifier) @label)
++
++(break_label (identifier) @label)
++
++; Fields
++
++(field_initializer
++  .
++  (identifier) @variable.member)
++
++(field_expression
++  (_)
++  member: (identifier) @variable.member)
++
++(container_field
++  name: (identifier) @variable.member)
++
++(initializer_list
++  (assignment_expression
++      left: (field_expression
++              .
++              member: (identifier) @variable.member)))
++
++; Functions
++
++(builtin_identifier) @function.builtin
++
++(call_expression
++  function: (identifier) @function.call)
++
++(call_expression
++  function: (field_expression
++    member: (identifier) @function.call))
++
++(function_declaration
++  name: (identifier) @function)
++
++; Modules
++
++(variable_declaration
++  (identifier) @module
++  (builtin_function
++    (builtin_identifier) @keyword.import
++    (#any-of? @keyword.import "@import" "@cImport")))
++
++; Builtins
++
++[
++  "c"
++  "..."
++] @variable.builtin
++
++((identifier) @variable.builtin
++  (#eq? @variable.builtin "_"))
++
++(calling_convention
++  (identifier) @variable.builtin)
++
++; Keywords
++
++[
++  "asm"
++  "defer"
++  "errdefer"
++  "test"
++  "error"
++  "const"
++  "var"
++] @keyword
++
++[
++  "struct"
++  "union"
++  "enum"
++  "opaque"
++] @keyword.type
++
++[
++  "async"
++  "await"
++  "suspend"
++  "nosuspend"
++  "resume"
++] @keyword.coroutine
++
++"fn" @keyword.function
++
++[
++  "and"
++  "or"
++  "orelse"
++] @keyword.operator
++
++"return" @keyword.return
++
++[
++  "if"
++  "else"
++  "switch"
++] @keyword.conditional
++
++[
++  "for"
++  "while"
++  "break"
++  "continue"
++] @keyword.repeat
++
++[
++  "usingnamespace"
++  "export"
++] @keyword.import
++
++[
++  "try"
++  "catch"
++] @keyword.exception
++
++[
++  "volatile"
++  "allowzero"
++  "noalias"
++  "addrspace"
++  "align"
++  "callconv"
++  "linksection"
++  "pub"
++  "inline"
++  "noinline"
++  "extern"
++  "comptime"
++  "packed"
++  "threadlocal"
++] @keyword.modifier
++
++; Operator
++
++[
++  "="
++  "*="
++  "*%="
++  "*|="
++  "/="
++  "%="
++  "+="
++  "+%="
++  "+|="
++  "-="
++  "-%="
++  "-|="
++  "<<="
++  "<<|="
++  ">>="
++  "&="
++  "^="
++  "|="
++  "!"
++  "~"
++  "-"
++  "-%"
++  "&"
++  "=="
++  "!="
++  ">"
++  ">="
++  "<="
++  "<"
++  "&"
++  "^"
++  "|"
++  "<<"
++  ">>"
++  "<<|"
++  "+"
++  "++"
++  "+%"
++  "-%"
++  "+|"
++  "-|"
++  "*"
++  "/"
++  "%"
++  "**"
++  "*%"
++  "*|"
++  "||"
++  ".*"
++  ".?"
++  "?"
++  ".."
++] @operator
++
++; Literals
++
++(character) @character
++
++([
++  (string)
++  (multiline_string)
++] @string
++)
++
++(integer) @number
++
++(float) @number.float
++
++(boolean) @boolean
++
++(escape_sequence) @string.escape
++
++; Punctuation
++
++[
++  "["
++  "]"
++  "("
++  ")"
++  "{"
++  "}"
++] @punctuation.bracket
++
++[
++  ";"
++  "."
++  ","
++  ":"
++  "=>"
++  "->"
++] @punctuation.delimiter
++
++(payload "|" @punctuation.bracket)
++
++; Comments
++
++(comment) @comment @spell
++
++((comment) @comment.documentation
++  (#match? @comment.documentation "^//!"))
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index 67600c5..e1d1c51 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -529,7 +529,12 @@ fn compatible_scopes(scope: &str) -> Vec<String> {
+     // numeric constants and read/write variables. Preserve explicit captures
+     // and their parent styles before trying the compatibility fallback.
+     match scope {
+-        "number" | "number.float" => push_scope_with_parents(&mut scopes, "constant.builtin"),
++        "number" | "number.float" | "float" | "boolean" | "constant" | "constant.macro" => {
++            push_scope_with_parents(&mut scopes, "constant.builtin");
++        }
++        "conditional" | "repeat" | "include" | "exception" => {
++            push_scope_with_parents(&mut scopes, "keyword");
++        }
+         "variable" => push_scope_with_parents(&mut scopes, "variable.other.readwrite"),
+         _ => {}
+     }
+diff --git a/tests/editing.rs b/tests/editing.rs
+index 98370b1..a899e6c 100644
+--- a/tests/editing.rs
++++ b/tests/editing.rs
+@@ -5277,7 +5277,8 @@ fn command_tab_ignores_non_file_commands() {
+ #[test]
+ fn command_tab_completes_syntax_names_and_aliases() {
+     for (command, expected) in [
+-        ("syntax ru", "syntax rust"),
++        ("syntax ru", "syntax ruby"),
++        ("syntax rus", "syntax rust"),
+         ("syn ym", "syn yaml"),
+         ("ft rs", "ft rust"),
+         ("syntax ", "syntax auto"),
+@@ -5624,7 +5625,7 @@ async fn test_enter_on_opened_indented_blank_line_moves_generated_indentation()
+ }
+ 
+ #[tokio::test]
+-async fn python_autoindent_requires_the_language_pack() {
++async fn python_autoindent_is_bundled_without_a_language_pack() {
+     let buffer = Buffer::new(
+         Some("sample.py".to_string()),
+         "def something(x):".to_string(),
+@@ -5636,8 +5637,24 @@ async fn python_autoindent_requires_the_language_pack() {
+         .await
+         .unwrap();
+ 
+-    harness.assert_cursor_at(0, 1);
+-    harness.assert_buffer_contents("def something(x):\n");
++    harness.assert_cursor_at(4, 1);
++    harness.assert_buffer_contents("def something(x):\n    ");
++}
++
++#[tokio::test]
++async fn make_insert_tab_preserves_recipe_whitespace() {
++    let mut harness = comment_harness("Makefile", "all:");
++    harness
++        .execute_action(Action::InsertLineBelowCursor)
++        .await
++        .unwrap();
++    harness
++        .execute_action(Action::EnterMode(Mode::Insert))
++        .await
++        .unwrap();
++    command_key(&mut harness, KeyCode::Tab).await;
++    harness.type_text("@echo hello").await.unwrap();
++    harness.assert_buffer_contents("all:\n\t@echo hello");
+ }
+ 
+ #[tokio::test]
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index 62fe211..2ba306e 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -58,6 +58,14 @@ fn assert_self_check_report(output: Output) {
+ 
+     let lines = stdout.lines().collect::<Vec<_>>();
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
++    for language in [
++        "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make",
++    ] {
++        assert!(
++            lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),
++            "{stdout}"
++        );
++    }
+     let plugins = lines
+         .iter()
+         .filter_map(|line| line.strip_prefix("plugin "))
+-- 
+2.54.0 (Apple Git-157)
+

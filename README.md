@@ -124,14 +124,17 @@ you.
 Typical host: **Apple silicon macOS**, with:
 
 - Xcode (and command-line tools)
-- Zig
+- Zig, at the version Ghostty's `forks/ghostty/build.zig.zon` names in
+  `minimum_zig_version` (same major.minor). Homebrew's plain `zig` tracks the
+  newest release and may not match, so install the versioned keg-only formula.
+  `scripts/build.nu` finds it, or stops and prints the exact
+  `brew install zig@<major>.<minor>` command.
 - Rust (`rustup`)
 - Bun (for TermSurf apps that need it)
 - Chromium **`depot_tools`** and a full Chromium source checkout workflow
   (large disk + long first build)
 
 ```bash
-brew install zig
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 curl -fsSL https://bun.sh/install | bash
 ```
@@ -211,9 +214,9 @@ forks/ghostty/macos/build/Release/Astrohacker TermSurf.app
 During development, launch the Ghostty-based host from the reconstructed
 Ghostty workspace:
 
-```bash
+```nu
 cd forks/ghostty
-zig build -Demit-macos-app=false
+^(nu ../../scripts/lib/zig-toolchain.nu) build -Demit-macos-app=false
 cd macos
 ./build.nu --configuration Debug --action build
 ```

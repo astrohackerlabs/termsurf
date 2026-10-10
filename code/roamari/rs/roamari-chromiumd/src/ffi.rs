@@ -170,9 +170,7 @@ extern "C" {
     );
 
     pub fn ts_set_on_download_progress(
-        cb: Option<
-            unsafe extern "C" fn(TsWebContents, *const c_char, u64, u64, *mut c_void),
-        >,
+        cb: Option<unsafe extern "C" fn(TsWebContents, *const c_char, u64, u64, *mut c_void)>,
         user_data: *mut c_void,
     );
 

@@ -5,29 +5,22 @@
     {
       "name": "ghostty",
       "checkout": "forks/ghostty",
-      "base": "0ba6250388641f52135414b38c4259aa682c489b",
-      "branch": "issue-26092000444652-exp1-roamari-cask-artifact",
-      "expected_head": "52163ef98eb9da2b1e6d9101e945110b93a81709",
-      "expected_tree": "6a375c3d8281b040d37849a382dad22fed4a057f",
+      "upstream": "https://github.com/ghostty-org/ghostty.git",
+      "base": "246f702876b924a1cb7cade1e99274d1470302fc",
+      "branch": "issue-26101009137900-exp5-ghostty-main",
+      "expected_head": "7b42a3fc4f2aadcb4c166cb9b2b1456f00c06635",
+      "expected_tree": "db5de2eaa39db69d31a54d9ee3e00f87c275d97b",
       "patch_directories": [
-        "patches/ghostty/patches/issue-26081616315182",
-        "patches/ghostty/patches/issue-26081913378559",
-        "patches/ghostty/patches/issue-26082214188331",
-        "patches/ghostty/patches/issue-26082217204646",
-        "patches/ghostty/patches/issue-26082910011832",
-        "patches/ghostty/patches/issue-26082916261801",
-        "patches/ghostty/patches/issue-26083023000538",
-        "patches/ghostty/patches/issue-26091215074416",
-        "patches/ghostty/patches/issue-26091410263129",
-        "patches/ghostty/patches/issue-26092000444652"
+        "patches/ghostty/patches/issue-26101009137900-exp5"
       ],
-      "patch_count": 43,
-      "archive_sha256": "968d420ea90ae322d87cb7f8eac65234bf425744d221e487acf9b68de0998cea",
+      "patch_count": 45,
+      "archive_sha256": "a4bcef0639284b60c700194ca458bb7a67ce1033f3ddef3f85e5561f1602aa0e",
       "allowed_untracked": []
     },
     {
       "name": "nushell",
       "checkout": "forks/nushell",
+      "upstream": "https://github.com/nushell/nushell.git",
       "base": "b6e6562a9a385df439ae864714c609c60314fde9",
       "branch": "issue-26091523132966-exp1-environment-sync",
       "expected_head": "9b381cb3bb3f325ae898e7dc5cd788af4f99f2b0",
@@ -43,6 +36,7 @@
     {
       "name": "reedline",
       "checkout": "forks/reedline",
+      "upstream": "https://github.com/nushell/reedline.git",
       "base": "d9db2f7979471b70eb3c3901a2eba3ef5197b656",
       "branch": "issue-26091316465368-exp1-upstream-update",
       "expected_head": "4acac3aeba448c0ce5274d048335846fad36d627",
@@ -57,6 +51,7 @@
     {
       "name": "nexus",
       "checkout": "forks/nexus",
+      "upstream": "https://github.com/zquestz/nexus.git",
       "base": "85c9edab73733f412f6855800fecdd8da3e76d14",
       "branch": "issue-26083023000538-exp2-refresh-guidance",
       "expected_head": "1e2dfb14426172f327b80447d876474298c451d9",
@@ -72,16 +67,21 @@
     {
       "name": "chromium",
       "checkout": "forks/chromium/src",
-      "base": "36bfd07adec25f5027aaecf2023b35821f30ee4e",
-      "branch": "150.0.7871.224-issue-26082217204646-exp6-overlay-screenshot",
-      "expected_head": "3a81eca94aeed9b087bed4bba161a3b18ef2168e",
-      "expected_tree": "06eaea2c416aea6c203d5a4a1ca5a1cf9b7c997b",
+      "upstream": "https://chromium.googlesource.com/chromium/src.git",
+      "provision": "gclient",
+      "tools": {
+        "path": "forks/chromium/depot_tools",
+        "upstream": "https://chromium.googlesource.com/chromium/tools/depot_tools.git"
+      },
+      "base": "2c592105bbcd9490a9894df48d0fe59b2c512651",
+      "branch": "152.0.7977.130-issue-26092123582688-exp2-webstore-null",
+      "expected_head": "186c72208a942e55cba8d1f500227657f14d6c0f",
+      "expected_tree": "b1f3451fb4efd372692bbce188917b797bd0ec50",
       "patch_directories": [
-        "patches/chromium/patches/issue-26081616315182",
-        "patches/chromium/patches/issue-26082217204646"
+        "patches/chromium/patches/issue-26092123582688"
       ],
-      "patch_count": 38,
-      "archive_sha256": "e1ddfafab1de3565b546cc8517349cbc533967240ca3c66b2aa6645a8b006b63",
+      "patch_count": 40,
+      "archive_sha256": "06b66bc84f8486b2b92005c53c794d7992990f6991b4f3de7d09d78061be1496",
       "allowed_untracked": [
         "third_party/google_toolbox_for_mac/src/",
         "third_party/ink_stroke_modeler/src/",
@@ -90,16 +90,19 @@
       "nested_checkouts": [
         {
           "path": "third_party/google_toolbox_for_mac/src",
+          "upstream": "https://chromium.googlesource.com/external/github.com/google/google-toolbox-for-mac.git",
           "expected_head": "42b12f10cd8342f5cb41a1e3e3a2f13fd9943b0d",
           "expected_tree": "f736af6aa811d740ba798c2affbd865db1747039"
         },
         {
           "path": "third_party/ink_stroke_modeler/src",
+          "upstream": "https://chromium.googlesource.com/external/github.com/google/ink-stroke-modeler.git",
           "expected_head": "da42d439389c90ec7574f0381ec53e7f5be0c2eb",
           "expected_tree": "6a848bac1d3fb20e01b1449991b83fd4fe3d2521"
         },
         {
           "path": "third_party/libphonenumber/dist",
+          "upstream": "https://chromium.googlesource.com/external/libphonenumber.git",
           "expected_head": "9d46308f313f2bf8dbce1dfd4f364633ca869ca7",
           "expected_tree": "9c413a95028c747cfbcc75b976c75a9a00b3efc8"
         }
@@ -108,15 +111,21 @@
     {
       "name": "red",
       "checkout": "forks/red",
+      "upstream": "https://github.com/codersauce/red.git",
       "base": "9e0952767d35d5b8dddd3fa3bb90087938692c52",
-      "branch": "issue-26091823140848-exp7-storage-paths",
-      "expected_head": "b56e93d5d809d3e77b6a0eb24889d7304fb00afc",
-      "expected_tree": "1ca2868dc0507ba7868de5bcc935354efef5fe1f",
+      "branch": "issue-26092609387958-exp1-bundle-typst",
+      "expected_head": "be5a4b86c656b26194715682e1fa841b0737a7f3",
+      "expected_tree": "ab21b68d29ebd69ef9b87f226a36c570874025e8",
       "patch_directories": [
-        "patches/red/patches/issue-26091823140848"
+        "patches/red/patches/issue-26091823140848",
+        "patches/red/patches/issue-26091914238740",
+        "patches/red/patches/issue-26091918020609",
+        "patches/red/patches/issue-26092310328880",
+        "patches/red/patches/issue-26092311060249",
+        "patches/red/patches/issue-26092609387958"
       ],
-      "patch_count": 8,
-      "archive_sha256": "5c0ab7f14ba970a4b899d189c24af3a4a8b945438e8a6844af6ca29120f3db00",
+      "patch_count": 36,
+      "archive_sha256": "646c129e772b0757bbbf042656ddd1e93d278429301dd59a46d8b61ab1251593",
       "allowed_untracked": []
     }
   ]

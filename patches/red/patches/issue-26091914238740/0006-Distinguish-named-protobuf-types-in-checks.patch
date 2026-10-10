@@ -1,0 +1,32 @@
+From 4ab1a4306ab3ec2c3443ab803a7b22c19a70ff0b Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 10:15:43 -0500
+Subject: [PATCH] Distinguish named protobuf types in checks
+
+A scalar and a message wear
+Two different coats; the checks now care.
+---
+ examples/check_proto_files.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/examples/check_proto_files.rs b/examples/check_proto_files.rs
+index be28689..8d90e17 100644
+--- a/examples/check_proto_files.rs
++++ b/examples/check_proto_files.rs
+@@ -34,6 +34,13 @@ fn main() -> anyhow::Result<()> {
+                 "message_name" | "enum_name" | "service_name" | "message_or_enum_type" => {
+                     Some("type")
+                 }
++                "type"
++                    if node
++                        .named_child(0)
++                        .is_some_and(|child| child.kind() == "message_or_enum_type") =>
++                {
++                    Some("type")
++                }
+                 "type" | "key_type" => Some("type.builtin"),
+                 "rpc_name" => Some("function.method"),
+                 "string" if node.is_named() => Some("string"),
+-- 
+2.54.0 (Apple Git-157)
+

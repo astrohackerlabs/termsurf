@@ -1,0 +1,1075 @@
+From b6264e3a6e5b026b2228bcd2bd0083b82290ef32 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 26 Sep 2026 04:53:06 -0500
+Subject: [PATCH] Bundle pinned Typst syntax support
+
+---
+ Cargo.lock                               |  10 +
+ Cargo.toml                               |   1 +
+ docs/BUNDLED_LANGUAGES.md                |  32 ++-
+ docs/languages-provenance.json           |  73 ++++++
+ docs/licenses/tree-sitter-typst.txt      |  21 ++
+ src/config.rs                            |   1 +
+ src/editor.rs                            |  73 ++++++
+ src/highlighter.rs                       |  16 ++
+ src/highlighter/bundled_checks.rs        |   5 +-
+ src/highlighter/typst_checks.rs          | 108 +++++++++
+ src/highlighter/typst_tests.rs           | 195 ++++++++++++++++
+ src/queries/highlights/smoke/example.typ |  40 ++++
+ src/queries/highlights/typst.scm         | 272 +++++++++++++++++++++++
+ src/queries/injections/typst.scm         |  13 ++
+ 14 files changed, 857 insertions(+), 3 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-typst.txt
+ create mode 100644 src/highlighter/typst_checks.rs
+ create mode 100644 src/highlighter/typst_tests.rs
+ create mode 100644 src/queries/highlights/smoke/example.typ
+ create mode 100644 src/queries/highlights/typst.scm
+ create mode 100644 src/queries/injections/typst.scm
+
+diff --git a/Cargo.lock b/Cargo.lock
+index aafdf1a503f3485e66e31ee6ce75d7ca3ab9e8ed..f3fbfd405fa731a9e5e49a955aff1a414c767395 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2391,6 +2391,7 @@ dependencies = [
+  "tree-sitter-swift",
+  "tree-sitter-toml-ng",
+  "tree-sitter-typescript",
++ "tree-sitter-typst",
+  "tree-sitter-wgsl",
+  "tree-sitter-xml",
+  "tree-sitter-yaml",
+@@ -3459,6 +3460,15 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-typst"
++version = "0.1.0"
++source = "git+https://github.com/SeniorMars/tree-sitter-typst?rev=1acd48c90d260bc9f8a99f903d3e2a8031bc7aae#1acd48c90d260bc9f8a99f903d3e2a8031bc7aae"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-wgsl"
+ version = "0.0.9"
+diff --git a/Cargo.toml b/Cargo.toml
+index e2273f24dff4eb98b253aaa2b8a9fd33f2f40ea2..61d35acc36a26609ca9b64b905684cc8dbcef7c0 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -124,6 +124,7 @@ tree-sitter-json = "0.24.8"
+ tree-sitter-lua = "0.5.0"
+ tree-sitter-md = "0.5.3"
+ tree-sitter-nu = { git = "https://github.com/nushell/tree-sitter-nu", rev = "bb3f533e5792260291945e1f329e1f0a779def6e" }
++tree-sitter-typst = { git = "https://github.com/SeniorMars/tree-sitter-typst", rev = "1acd48c90d260bc9f8a99f903d3e2a8031bc7aae" }
+ tree-sitter-powershell = "0.26.4"
+ tree-sitter-rust = "0.24.2"
+ tree-sitter-toml-ng = "0.7.0"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 3c9bf988f111da89eb8d62d095e6d94c7edaf167..54d6d4683343c672e6c06eb68868c361b410d255 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,12 +1,13 @@
+ # Bundled language expansion
+ 
+-RedVim compiles AppleScript, Caddyfile, WGSL, GN, Dockerfile, Protocol Buffers, Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles Typst, AppleScript, Caddyfile, WGSL, GN, Dockerfile, Protocol Buffers, Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+ 
+ | Language | Files | Default indentation |
+ | --- | --- | --- |
++| Typst | .typ (case-insensitive); typst/typ syntax and fences | 2 spaces |
+ | Caddyfile | Caddyfile/caddyfile and their dot variants; .caddy/.caddyfile; caddyfile/caddy syntax and fences | tabs, width 4 |
+ | WGSL | .wgsl (case-insensitive), wgsl syntax and fences | 2 spaces |
+ | GN | .gn, .gni (case-insensitive), exact .gn filename; gn/gni syntax and fences | 2 spaces |
+@@ -67,6 +68,35 @@ cover detection overrides, default comments/indentation and Make tabs.
+ 
+ Nushell's independently pinned provenance remains in docs/NUSHELL.md.
+ 
++## Typst
++
++Typst uses SeniorMars/tree-sitter-typst revision
++`1acd48c90d260bc9f8a99f903d3e2a8031bc7aae` (MIT), compiled through its
++LanguageFn Rust binding with the existing Tree-sitter 0.25 runtime. The checked-in
++native parser, scanner, headers and build script are unchanged. No generator or
++Node installation is required. Cargo fetches the pinned dependency at build time;
++normal editor use needs no grammar or query downloads.
++
++The query adapts Neovim captures to existing RedVim scopes: heading levels use
++the existing heading styles, strong/emphasis use text.strong/text.emphasis,
++links use text.uri/text.reference, raw text and unclassified math text use string,
++members use property, modules use type, labels use constant, malformed/incomplete
++syntax uses token.error-token. Original predicates remain standard Tree-sitter
++predicates. Query and native-file hashes are in languages-provenance.json.
++
++Raw blocks use the unchanged upstream injection query. Registered language tags
++use their bundled highlighting; unknown languages retain the raw string style.
++The typ/typst tags select the default markup parser, which also handles embedded
++code and math. Companion typc/typm parsers are not bundled. The existing injection
++depth limit applies to recursive blocks.
++
++Comments use // and indentation defaults to two spaces with ordinary inherited
++indentation. User detection, theme, comment and width overrides remain effective.
++This support does not supply structural indentation, Typst textobjects, Tinymist,
++completion, semantic diagnostics, compilation, formatting or PDF preview.
++Upstream recovery nodes are checked alongside ERROR/MISSING in complete fixtures;
++tolerating incomplete edits is not a claim of full Typst compiler conformance.
++
+ ## Terraform/HCL
+ 
+ The HCL parser is pinned at crate 1.1.0. The separately embedded nvim-treesitter
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index bd14b8d7175221cdc74279aaed3c883c933c16f5..370a362d9b5203bf82a9b2620756f6879187a346 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -489,5 +489,78 @@
+     "license_file": "tree-sitter-applescript.txt",
+     "license_source": "https://raw.githubusercontent.com/HelgeSverre/tree-sitter-applescript/1676f5fe99eee6b6532ab6d13559323c48d26190/LICENSE",
+     "license_sha256": "a65a537295910b776a8b2edb2e7410c3b0e975ca6388994e032c4d1842b4952d"
++  },
++  {
++    "name": "tree-sitter-typst",
++    "version": "0.1.0",
++    "repository": "https://github.com/SeniorMars/tree-sitter-typst",
++    "revision": "1acd48c90d260bc9f8a99f903d3e2a8031bc7aae",
++    "license": "MIT",
++    "license_file": "tree-sitter-typst.txt",
++    "license_sha256": "1d1d91dd869aa375e732fbec41560408072c021812f2a4a16d5b572c7620d56d",
++    "query": "queries/typst/highlights.scm",
++    "upstream_query_sha256": "397b4db9ef7a52bc394c37b2c65b3c5a4c9c83207fd2292488a0dc7caff25532",
++    "bundled_query_sha256": "341c4cb681118400de3a1b8f53baf7d521bf0c1d00ed956d6f49394a9516d27e",
++    "upstream_injections_sha256": "6722beb22f591393cb0ddab8f0836c343f06d6dd880085d94c2feb4303a67026",
++    "bundled_injections_sha256": "6722beb22f591393cb0ddab8f0836c343f06d6dd880085d94c2feb4303a67026",
++    "native_files": [
++      {
++        "path": "src/parser.c",
++        "sha256": "cc0d291d4f3dcb65fb15ee68577eab77013f9dd0148e6916df76fa3da8e3fb8b"
++      },
++      {
++        "path": "src/scanner.c",
++        "sha256": "19695f8792acd9ee417102366d56ab05ff05f1d5648c19d154ef8f1a1acb6e64"
++      },
++      {
++        "path": "src/external_tokens.h",
++        "sha256": "2cf015f8838a3f08c3dcf434e7097f3be532e7ab52fdc531bb45819426ea8e3c"
++      },
++      {
++        "path": "src/unicode_tables.h",
++        "sha256": "69724162ca485ad065d321d4d2d4de71bba2958e9a1fb04cc7bc4710f9352cd3"
++      },
++      {
++        "path": "src/node-types.json",
++        "sha256": "2a97b516d665adcf09e282cbc1ef9fd9fe213415558f96bb92c72e876e19b991"
++      },
++      {
++        "path": "src/grammar.json",
++        "sha256": "fa834dc7ace411a6f41ed5c5c792394388f61071e3e5a4f34661fc434bdec7fe"
++      },
++      {
++        "path": "src/tree_sitter/parser.h",
++        "sha256": "180b893c8734778fd32f372dfbc27bd6ad1cd2221f26150b31256ff6716320d2"
++      },
++      {
++        "path": "src/tree_sitter/alloc.h",
++        "sha256": "b29c1c9fb7cc82f58c84b376df1297d6e2737a1d655fd356db0859e3c29c2fea"
++      },
++      {
++        "path": "src/tree_sitter/array.h",
++        "sha256": "31e60a1bff6f715afacce03b5b70efe42b58371b4f9595dd4af52a577ff9608c"
++      },
++      {
++        "path": "bindings/rust/lib.rs",
++        "sha256": "cd763cc30ab75d928ca467be89aac8b324f25dd57de0fe5907bf10f97d93e616"
++      },
++      {
++        "path": "bindings/rust/build.rs",
++        "sha256": "7434693e50cbd559854647978fc5afd2d12628815a41551d8b036c9dc812eafa"
++      },
++      {
++        "path": "Cargo.toml",
++        "sha256": "dbec8983de4592bc26eb5948adfb316c7a165fcb02f374c118ed06c34b0973ae"
++      },
++      {
++        "path": "grammar.js",
++        "sha256": "27aee083fe78fdcee90d6b053049d5c0d8a278414d7e18c31a63a084aa6bbf7f"
++      },
++      {
++        "path": "tree-sitter.json",
++        "sha256": "8ababff6621c741b4e1ce4a2965c7a72c1738b57fc9960dcd6cc6e764cb0c728"
++      }
++    ],
++    "adaptations": "Highlight captures map to RedVim scopes; all raw content receives a string fallback before supported language injections. Injection query unchanged. Native sources unchanged."
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-typst.txt b/docs/licenses/tree-sitter-typst.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..05a8b934704af2daf337fb61851abe0b2b19e5d4
+--- /dev/null
++++ b/docs/licenses/tree-sitter-typst.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2023 SeniorMars
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/src/config.rs b/src/config.rs
+index 06781b54e60c1e30a01ea31d93d045977013ec62..0c846badbd3dc1337d18ad56e80918790ec4dc08 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -736,6 +736,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("lua", "-- %s"),
+         ("markdown", "<!-- %s -->"),
+         ("nu", "# %s"),
++        ("typst", "// %s"),
+         ("hcl", "# %s"),
+         ("objc", "// %s"),
+         ("proto", "// %s"),
+diff --git a/src/editor.rs b/src/editor.rs
+index 287d93739a13875c59f8a2570eeaa7c9697178e5..b82281624e5edaa8201f2d11986a365ecdbd0183 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6649,6 +6649,7 @@ impl Editor {
+                 ("zsh", 2),
+                 ("fish", 4),
+                 ("nu", 2),
++                ("typst", 2),
+                 ("c", 4),
+                 ("cpp", 4),
+                 ("python", 4),
+@@ -34523,6 +34524,7 @@ builtin = "rust"
+             ("example.wgsl", 2, "//"),
+             ("Caddyfile", 4, "#"),
+             ("example.applescript", 4, "--"),
++            ("example.typ", 2, "//"),
+             ("example.tf", 2, "#"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+@@ -34820,6 +34822,77 @@ builtin = "rust"
+             .starts_with("# custom FROM"));
+     }
+ 
++    #[tokio::test]
++    async fn typst_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        let source = "#let message = \"café\"\n";
++        editor.buffer_manager[0] = Buffer::new(Some("notes.txt".into()), source.into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("typst".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("typst"));
++        assert_eq!(editor.indentation().shift_width, 2);
++        assert!(editor.indentation().expand_tab);
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertTab,
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert!(editor.current_buffer().contents().starts_with("  "));
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), source);
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('/'),
++            Action::InsertCharAtCursorPos('/'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), source);
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.typst]\nindent_width = 6\ncomment = '// custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 6);
++        assert!(editor.indentation().expand_tab);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("// custom #let message"));
++    }
++
+     #[tokio::test]
+     async fn applescript_manual_syntax_overrides_and_undo_refresh_colors() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index 0e7f748915424b8ab8e00aad50892e9b64ee1926..3c68ae56d94b1367b0d174142ade6e716f58a09f 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -23,6 +23,9 @@ use tree_sitter_language::LanguageFn;
+ mod bundled_checks;
+ mod sql_checks;
+ mod sql_recovery;
++mod typst_checks;
++#[cfg(test)]
++mod typst_tests;
+ pub use bundled_checks::check_bundled_languages;
+ 
+ use crate::{
+@@ -668,6 +671,8 @@ const LANGUAGE_NAMES: &[(&str, &str)] = &[
+     ("fish", "fish"),
+     ("nu", "nu"),
+     ("nushell", "nu"),
++    ("typst", "typst"),
++    ("typ", "typst"),
+     ("powershell", "powershell"),
+     ("pwsh", "powershell"),
+     ("ps1", "powershell"),
+@@ -2632,6 +2637,16 @@ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+             injection_query: None,
+             specialized: None,
+         },
++        BundledLanguageDefinition {
++            id: "typst",
++            extensions: &["typ"],
++            filenames: &[],
++            language: Some(|| tree_sitter_typst::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/typst.scm")],
++            textobject_queries: &[],
++            injection_query: Some(include_str!("queries/injections/typst.scm")),
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "rust",
+             extensions: &["rs"],
+@@ -5575,6 +5590,7 @@ mod tests {
+                 "toml",
+                 "tsx",
+                 "typescript",
++                "typst",
+                 "wgsl",
+                 "xml",
+                 "yaml",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index 06df47cbd213f2f45672ed39d55994b1a5445114..a235dceb1cfb8f40ffb25d53a091922ee74872f9 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -556,9 +556,10 @@ const FIXTURES: &[Fixture] = &[
+ /// reading user configuration, loading external grammars or entering raw mode.
+ pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str>> {
+     super::sql_checks::check(theme)?;
++    super::typst_checks::check(theme)?;
+     let registry = Arc::new(LanguageRegistry::bundled());
+     let mut highlighter = Highlighter::with_registry(theme, Arc::clone(&registry))?;
+-    let mut checked = Vec::new();
++    let mut checked = vec!["typst"];
+     for fixture in FIXTURES {
+         let id = fixture.language;
+         anyhow::ensure!(
+@@ -1759,7 +1760,7 @@ mod tests {
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 20);
++        assert_eq!(checked.len(), 21);
+     }
+ 
+     #[test]
+diff --git a/src/highlighter/typst_checks.rs b/src/highlighter/typst_checks.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..3d21373c78973f143f97385ff84d4ce15acf95f0
+--- /dev/null
++++ b/src/highlighter/typst_checks.rs
+@@ -0,0 +1,108 @@
++//! Standalone checks of Typst syntax and the effective (shortest-range) styles.
++use super::*;
++
++pub(super) const SOURCE: &str = include_str!("../queries/highlights/smoke/example.typ");
++
++pub(super) fn assert_clean(node: tree_sitter::Node<'_>) -> anyhow::Result<()> {
++    anyhow::ensure!(
++        !node.is_error()
++            && !node.is_missing()
++            && !node.kind().starts_with("malformed_")
++            && !node.kind().starts_with("incomplete_"),
++        "Typst recovery node {} at {:?}",
++        node.kind(),
++        node.range()
++    );
++    let mut cursor = node.walk();
++    for child in node.children(&mut cursor) {
++        assert_clean(child)?;
++    }
++    Ok(())
++}
++
++pub(super) fn token_style(
++    theme: &Theme,
++    source: &str,
++    spans: &[StyleInfo],
++    anchor: &str,
++    token: &str,
++    scope: &str,
++) -> anyhow::Result<()> {
++    let start = source.find(anchor).context("missing Typst anchor")?
++        + anchor.find(token).context("missing Typst token")?;
++    let expected = theme
++        .get_style(scope)
++        .with_context(|| format!("missing scope {scope}"))?;
++    for byte in start..start + token.len() {
++        // Same priority as the editor's StyleCursor: shortest range, last tie.
++        let actual = spans
++            .iter()
++            .enumerate()
++            .filter(|(_, s)| s.start <= byte && byte < s.end)
++            .min_by_key(|(order, s)| (s.end - s.start, std::cmp::Reverse(*order)))
++            .map(|(_, s)| &s.style);
++        anyhow::ensure!(
++            actual == Some(&expected),
++            "Typst {token:?} at {byte}: expected {scope}, got {actual:?}"
++        );
++    }
++    Ok(())
++}
++
++pub(super) fn check(theme: &Theme) -> anyhow::Result<()> {
++    let mut parser = Parser::new();
++    parser.set_language(&tree_sitter_typst::LANGUAGE.into())?;
++    let tree = parser
++        .parse(SOURCE, None)
++        .context("Typst parse cancelled")?;
++    assert_clean(tree.root_node())?;
++    let mut highlighter = Highlighter::new(theme)?;
++    anyhow::ensure!(
++        highlighter.language_id_for_file(Some("example.TYP")) == Some("typst"),
++        "Typst detection"
++    );
++    let styles = highlighter.highlight("typst", SOURCE)?;
++    for (anchor, token, scope) in [
++        (
++            "// café: let set show are comments",
++            "let set show",
++            "comment",
++        ),
++        (
++            "/* outer /* nested */ still comment */",
++            "still comment",
++            "comment",
++        ),
++        ("= Typst in RedVim", "Typst in RedVim", "heading.1.markdown"),
++        ("== Code", "Code", "heading.2.markdown"),
++        ("*strong text*", "strong text", "text.strong"),
++        ("_emphasized text_", "emphasized text", "text.emphasis"),
++        ("`raw let text`", "raw let text", "string"),
++        ("https://typst.app", "https://typst.app", "text.uri"),
++        ("@intro", "intro", "text.reference"),
++        ("#import", "import", "keyword.import"),
++        ("#let answer", "let", "keyword"),
++        ("answer = 42", "42", "number"),
++        ("enabled = true", "true", "boolean"),
++        ("greeting(name)", "greeting", "function"),
++        ("greeting(name)", "name", "variable.parameter"),
++        ("title: \"café\"", "title", "property"),
++        ("title: \"café\"", "café", "string"),
++        ("#set text", "set", "keyword"),
++        ("#show strong", "show", "keyword"),
++        ("#greeting(\"world\")", "greeting", "function.call"),
++        ("x_1^2", "^", "operator"),
++        ("alpha / beta", "alpha", "constant"),
++        ("alpha / beta", "/", "operator"),
++        ("let total = 73", "73", "number"),
++        (
++            "let unparsed = \"plain raw text\"",
++            "plain raw text",
++            "string",
++        ),
++        ("*still strong*", "still strong", "text.strong"),
++    ] {
++        token_style(theme, SOURCE, &styles, anchor, token, scope)?;
++    }
++    Ok(())
++}
+diff --git a/src/highlighter/typst_tests.rs b/src/highlighter/typst_tests.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..2af33fa867aef42e619da60d8b3a038a08c44bbe
+--- /dev/null
++++ b/src/highlighter/typst_tests.rs
+@@ -0,0 +1,195 @@
++use super::*;
++use crate::theme::parse_vscode_theme_contents;
++
++#[test]
++fn typst_standalone_colors_in_both_bundled_themes() {
++    for source in [
++        include_str!("../../themes/austin-night.json"),
++        include_str!("../../themes/mocha.json"),
++    ] {
++        typst_checks::check(&parse_vscode_theme_contents(source).unwrap()).unwrap();
++    }
++}
++
++#[test]
++fn typst_pinned_grammar_loads_with_existing_runtime() {
++    let language = tree_sitter_typst::LANGUAGE.into();
++    let mut parser = Parser::new();
++    parser.set_language(&language).unwrap();
++    let tree = parser
++        .parse("= Hello\n#let answer = 42\n$ x^2 $\n", None)
++        .unwrap();
++    assert!(
++        !tree.root_node().has_error(),
++        "{}",
++        tree.root_node().to_sexp()
++    );
++    Query::new(&language, tree_sitter_typst::HIGHLIGHTS_QUERY).unwrap();
++    Query::new(&language, tree_sitter_typst::INJECTIONS_QUERY).unwrap();
++}
++
++#[test]
++fn typst_queries_use_supported_predicates_and_theme_scopes() {
++    let language = tree_sitter_typst::LANGUAGE.into();
++    let theme =
++        parse_vscode_theme_contents(include_str!("../../themes/austin-night.json")).unwrap();
++    for source in [
++        include_str!("../queries/highlights/typst.scm"),
++        include_str!("../queries/injections/typst.scm"),
++    ] {
++        let query = Query::new(&language, source).unwrap();
++        for pattern in 0..query.pattern_count() {
++            assert!(
++                query.general_predicates(pattern).is_empty(),
++                "unsupported predicate {pattern}"
++            );
++        }
++        for name in query.capture_names() {
++            if !name.starts_with('_') && !name.starts_with("injection.") {
++                assert!(theme.get_style(name).is_some(), "unmapped capture {name}");
++            }
++        }
++    }
++}
++
++#[test]
++fn typst_detection_fences_and_raw_language_injections() {
++    let theme =
++        parse_vscode_theme_contents(include_str!("../../themes/austin-night.json")).unwrap();
++    let mut highlighter = Highlighter::new(&theme).unwrap();
++    for file in ["main.typ", "main.TYP"] {
++        assert_eq!(highlighter.language_id_for_file(Some(file)), Some("typst"));
++    }
++    for alias in ["typ", "typst"] {
++        assert_eq!(highlighter.language_id_for_name(alias), Some("typst"));
++        let source = format!("```{alias}\n#let answer = 42\n```\n");
++        for host in ["markdown", "typst"] {
++            let styles = highlighter.highlight(host, &source).unwrap();
++            typst_checks::token_style(&theme, &source, &styles, "42", "42", "number").unwrap();
++        }
++    }
++    for alias in ["rust", "rs", "nu", "nushell"] {
++        let source = format!("```{alias}\nlet answer = 42\n```\n");
++        let styles = highlighter.highlight("typst", &source).unwrap();
++        typst_checks::token_style(&theme, &source, &styles, "42", "42", "number").unwrap();
++    }
++    for alias in ["not-installed", "typc", "typm"] {
++        let source = format!("```{alias}\nlet answer = 42\n```\n");
++        let styles = highlighter.highlight("typst", &source).unwrap();
++        typst_checks::token_style(
++            &theme,
++            &source,
++            &styles,
++            "let answer = 42",
++            "let answer = 42",
++            "string",
++        )
++        .unwrap();
++    }
++    let mut nested = "#let answer = 42\n".to_owned();
++    for n in 0..MAX_INJECTION_DEPTH + 3 {
++        let fence = "`".repeat(n + 3);
++        nested = format!("{fence}typst\n{nested}{fence}\n");
++    }
++    let spans = highlighter.highlight("typst", &nested).unwrap();
++    assert!(!spans.is_empty());
++    assert!(spans.len() < 200);
++}
++
++#[test]
++fn typst_incremental_edits_match_fresh_trees_and_styles() {
++    let theme =
++        parse_vscode_theme_contents(include_str!("../../themes/austin-night.json")).unwrap();
++    let mut highlighter = Highlighter::new(&theme).unwrap();
++    let original = typst_checks::SOURCE;
++    let mut versions = vec![original.to_owned()];
++    for (from, to) in [
++        ("#let answer = 42", "#let answer = 123"),
++        ("/* nested */", "/* nested"),
++        ("*strong text*", "*strong café*"),
++        ("_emphasized text_", "_unfinished"),
++        ("$x_1^2 + alpha / beta$", "$x_1^2 + alpha / beta"),
++        ("```rust", "``rust"),
++        ("\"café\"", "\"café"),
++        ("#greeting(\"world\")", "#greeting[world]"),
++        ("#let values = (1, 2, 3)", "#let values = (1, 2,"),
++    ] {
++        versions.push(original.replace(from, to));
++        versions.push(original.to_owned());
++    }
++    let shape = |spans: Vec<StyleInfo>| {
++        spans
++            .into_iter()
++            .map(|s| (s.start, s.end, s.style))
++            .collect::<Vec<_>>()
++    };
++    for source in versions {
++        let actual = highlighter.highlight("typst", &source).unwrap();
++        for span in &actual {
++            assert!(
++                span.start <= span.end
++                    && source.is_char_boundary(span.start)
++                    && source.is_char_boundary(span.end)
++            );
++        }
++        let mut fresh = Highlighter::new(&theme).unwrap();
++        assert_eq!(
++            shape(actual),
++            shape(fresh.highlight("typst", &source).unwrap())
++        );
++        let incremental = highlighter.highlighters["typst"]
++            .cached_tree
++            .as_ref()
++            .unwrap();
++        let rebuilt = fresh.highlighters["typst"].cached_tree.as_ref().unwrap();
++        assert_eq!(
++            incremental.tree.root_node().to_sexp(),
++            rebuilt.tree.root_node().to_sexp()
++        );
++    }
++    // Independent expected colors and clean complete-form tree after recovery.
++    typst_checks::check(&theme).unwrap();
++    let spans = highlighter.highlight("typst", original).unwrap();
++    typst_checks::token_style(
++        &theme,
++        original,
++        &spans,
++        "*still strong*",
++        "still strong",
++        "text.strong",
++    )
++    .unwrap();
++}
++
++#[test]
++fn typst_user_routing_and_theme_overrides_remain_authoritative() {
++    let directory = tempfile::tempdir().unwrap();
++    let config = HashMap::from([(
++        "typst".to_owned(),
++        LanguageConfig {
++            extensions: vec!["document".into()],
++            ..LanguageConfig::default()
++        },
++    )]);
++    let registry = Arc::new(LanguageRegistry::from_config(&config, directory.path()).unwrap());
++    let mut theme =
++        parse_vscode_theme_contents(include_str!("../../themes/austin-night.json")).unwrap();
++    let mut custom = theme.get_style("function").unwrap();
++    custom.bold = !custom.bold;
++    theme.token_styles.insert(
++        0,
++        crate::theme::TokenStyle {
++            name: None,
++            scope: vec!["function".into()],
++            style: custom,
++        },
++    );
++    let mut highlighter = Highlighter::with_registry(&theme, registry).unwrap();
++    assert_eq!(
++        highlighter.language_id_for_file(Some("main.document")),
++        Some("typst")
++    );
++    let source = "#let greet(name) = [Hello #name]\n";
++    let styles = highlighter.highlight("typst", source).unwrap();
++    typst_checks::token_style(&theme, source, &styles, "greet", "greet", "function").unwrap();
++}
+diff --git a/src/queries/highlights/smoke/example.typ b/src/queries/highlights/smoke/example.typ
+new file mode 100644
+index 0000000000000000000000000000000000000000..4ba492c415c79b6b923e8a15ea9a1c346eaf804a
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.typ
+@@ -0,0 +1,40 @@
++// café: let set show are comments
++/* outer /* nested */ still comment */
++= Typst in RedVim
++
++A paragraph with *strong text*, _emphasized text_, and `raw let text`.
++See https://typst.app and @intro.
++
++== Code <intro>
++- First item
+++ Numbered item
++/ Term: Description
++
++#import "helpers.typ": greet as welcome
++#let answer = 42
++#let distance = 12pt
++#let enabled = true
++#let greeting(name) = [Hello, #name!]
++#let values = (1, 2, 3)
++#let record = (title: "café", count: answer)
++#let escaped = "quote: \" and newline: \n"
++#let square = x => x * x
++#set text(size: 10pt)
++#show strong: it => it.body
++#greeting("world")
++#if enabled [Yes] else [No]
++
++== Mathematics
++Inline $x_1^2 + alpha / beta$ and display math:
++$ sum_(i=1)^n i = (n(n+1))/2 $
++
++== Embedded source
++```rust
++fn main() { let total = 73; }
++```
++
++```unknown-language
++let unparsed = "plain raw text"
++```
++
++After raw blocks, *still strong*.
+diff --git a/src/queries/highlights/typst.scm b/src/queries/highlights/typst.scm
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d6812468253f8a1d4bbfc86558babfcdd916521
+--- /dev/null
++++ b/src/queries/highlights/typst.scm
+@@ -0,0 +1,272 @@
++; Adapted for RedVim from SeniorMars/tree-sitter-typst 1acd48c90d260bc9f8a99f903d3e2a8031bc7aae (MIT).
++; Comments and shebang
++(shebang) @keyword.directive
++(line_comment) @comment
++(block_comment) @comment
++((line_comment) @comment.todo
++  (#match? @comment.todo "TODO"))
++((line_comment) @comment.todo
++  (#match? @comment.todo "WIP"))
++((block_comment) @comment.todo
++  (#match? @comment.todo "TODO"))
++((block_comment) @comment.todo
++  (#match? @comment.todo "WIP"))
++((line_comment) @comment.note
++  (#match? @comment.note "NOTE"))
++((line_comment) @comment.note
++  (#match? @comment.note "INFO"))
++((line_comment) @comment.note
++  (#match? @comment.note "XXX"))
++((block_comment) @comment.note
++  (#match? @comment.note "NOTE"))
++((block_comment) @comment.note
++  (#match? @comment.note "INFO"))
++((block_comment) @comment.note
++  (#match? @comment.note "XXX"))
++((line_comment) @comment.warning
++  (#match? @comment.warning "WARNING"))
++((line_comment) @comment.warning
++  (#match? @comment.warning "FIX"))
++((line_comment) @comment.warning
++  (#match? @comment.warning "HACK"))
++((block_comment) @comment.warning
++  (#match? @comment.warning "WARNING"))
++((block_comment) @comment.warning
++  (#match? @comment.warning "FIX"))
++((block_comment) @comment.warning
++  (#match? @comment.warning "HACK"))
++((line_comment) @comment.error
++  (#match? @comment.error "ERROR"))
++((line_comment) @comment.error
++  (#match? @comment.error "FIXME"))
++((line_comment) @comment.error
++  (#match? @comment.error "DEPRECATED"))
++((block_comment) @comment.error
++  (#match? @comment.error "ERROR"))
++((block_comment) @comment.error
++  (#match? @comment.error "FIXME"))
++((block_comment) @comment.error
++  (#match? @comment.error "DEPRECATED"))
++
++; Markup
++[
++  (incomplete_let_binding)
++  (incomplete_module_import)
++  (incomplete_module_include)
++  (incomplete_return_expression)
++  (incomplete_set_rule)
++  (incomplete_show_rule)
++  (malformed_automatic_link)
++  (malformed_embedded_code)
++  (malformed_escape)
++  (malformed_number)
++] @token.error-token
++
++(heading) @heading.1.markdown
++((heading marker: (heading_marker) @_heading_marker) @heading.1.markdown
++  (#eq? @_heading_marker "="))
++((heading marker: (heading_marker) @_heading_marker) @heading.2.markdown
++  (#eq? @_heading_marker "=="))
++((heading marker: (heading_marker) @_heading_marker) @heading.3.markdown
++  (#eq? @_heading_marker "==="))
++((heading marker: (heading_marker) @_heading_marker) @heading.4.markdown
++  (#eq? @_heading_marker "===="))
++((heading marker: (heading_marker) @_heading_marker) @heading.5.markdown
++  (#eq? @_heading_marker "====="))
++((heading marker: (heading_marker) @_heading_marker) @heading.6.markdown
++  (#eq? @_heading_marker "======"))
++(bullet_list_item marker: (bullet_list_marker) @punctuation.special)
++(numbered_list_item marker: (numbered_list_marker) @punctuation.special)
++(term_list_item marker: (term_list_marker) @punctuation.special)
++(strong) @text.strong
++(emphasis) @text.emphasis
++(smart_quote) @string.escape
++(shorthand) @string.escape
++(escape) @string.escape
++(linebreak) @string.escape
++(bracketed_text ["[" "]"] @punctuation.bracket)
++(automatic_link) @text.uri
++(label) @constant
++(reference) @text.reference
++(reference "@" @punctuation.special)
++(reference target: (identifier) @text.reference)
++
++; Raw text and language tags
++(raw
++  (raw_delimiter) @punctuation.special)
++(raw language: (raw_language) @constant)
++(raw content: (raw_content) @string)
++((raw
++  (raw_delimiter) @_raw_delimiter
++  !language
++  content: (raw_content) @string)
++  (#match? @_raw_delimiter "^```"))
++
++; Cross-mode punctuation.
++(embedded_code "#" @punctuation.special)
++(equation "$" @punctuation.special)
++
++[
++  "(" ")" "[" "]" "{" "}"
++] @punctuation.bracket
++
++[
++  "," ":" ";"
++] @punctuation.delimiter
++
++"." @punctuation.delimiter
++(content_block ["[" "]"] @punctuation.special)
++
++; Code keywords and builtins
++["let" "set" "show" "context"] @keyword
++(if_expression "if" @keyword.conditional)
++(else_clause "else" @keyword.conditional)
++(for_loop ["for" "in"] @keyword.repeat)
++(while_loop "while" @keyword.repeat)
++(return_expression "return" @keyword.return)
++["import" "include"] @keyword.import
++"as" @keyword.operator
++
++(break_expression) @keyword.repeat
++(continue_expression) @keyword.repeat
++
++(none) @constant.builtin
++(auto) @constant.builtin
++(boolean) @boolean
++(integer) @number
++(float) @number.float
++(numeric) @number
++(unit) @type.builtin
++(string) @string
++(module_import source: (string) @string.special.path)
++(module_include source: (string) @string.special.path)
++(string_escape) @string.escape
++(discard_pattern) @variable.builtin
++
++; Definitions and calls
++(let_binding
++  name: (identifier) @function
++  parameters: (parameters))
++(let_binding
++  name: (identifier) @variable
++  !parameters)
++(let_binding "=" @operator)
++(closure parameters: (identifier) @variable.parameter)
++(closure parameters: (discard_pattern) @variable.parameter.builtin)
++(parameters (identifier) @variable.parameter)
++(parameters (discard_pattern) @variable.parameter.builtin)
++(named_parameter name: (identifier) @variable.parameter)
++(sink_parameter name: (identifier) @variable.parameter)
++(sink_parameter name: (discard_pattern) @variable.parameter.builtin)
++(destructuring_pattern (identifier) @variable)
++(named_destructuring_item pattern: (identifier) @variable)
++(destructuring_sink pattern: (identifier) @variable)
++(for_loop pattern: (identifier) @variable)
++(named_destructuring_item key: (identifier) @property)
++(dictionary_entry key: (identifier) @property)
++(named_argument name: (identifier) @variable.parameter)
++
++; Identifier references. Keep this targeted to expression-value positions:
++; import items, dictionary keys, parameters, and field names have their own
++; captures and should not fall through to generic variable highlighting.
++(embedded_code body: (identifier) @variable)
++(arguments (identifier) @variable)
++(array (identifier) @variable)
++(code_block body: (identifier) @variable)
++(parenthesized_expression expression: (identifier) @variable)
++(let_binding value: (identifier) @variable)
++(named_parameter default: (identifier) @variable)
++(named_argument value: (identifier) @variable)
++(spread value: (identifier) @variable)
++(spread_argument value: (identifier) @variable)
++(dictionary_entry value: (identifier) @variable)
++(binary_expression left: (identifier) @variable)
++(binary_expression right: (identifier) @variable)
++(unary_expression operand: (identifier) @variable)
++(logical_not_expression operand: (identifier) @variable)
++(assignment_expression left: (identifier) @variable)
++(assignment_expression right: (identifier) @variable)
++(destructuring_assignment value: (identifier) @variable)
++(if_expression condition: (identifier) @variable)
++(for_loop iterable: (identifier) @variable)
++(while_loop condition: (identifier) @variable)
++(return_expression value: (identifier) @variable)
++(contextual_expression body: (identifier) @variable)
++(field_access object: (identifier) @variable)
++
++(field_access field: (identifier) @property)
++(function_call function: (identifier) @function.call)
++(function_call function: (field_access field: (identifier) @function.method.call))
++(set_rule target: (identifier) @function.builtin)
++(set_rule target: (field_access field: (identifier) @function.builtin))
++(show_rule selector: (identifier) @function.builtin)
++(show_rule selector: (field_access field: (identifier) @function.builtin))
++(module_import alias: (identifier) @type)
++(import_item alias: (identifier) @type)
++(import_path
++  head: (identifier) @type)
++(import_path
++  tail: (identifier) @type)
++
++; Operators
++(unary_expression operator: ["+" "-" "−"] @operator)
++(logical_not_expression operator: "not" @keyword.operator)
++(assignment_expression operator: ["=" "+=" "-=" "−=" "*=" "/="] @operator)
++(binary_expression
++  operator: [
++    "==" "!=" "<" "<=" ">" ">="
++    "+" "-" "−" "*" "/"
++  ] @operator)
++(binary_expression
++  operator: ["or" "and" "in"] @keyword.operator)
++(not_in_operator) @keyword.operator
++(destructuring_assignment operator: "=" @operator)
++(closure "=>" @operator)
++(spread ".." @operator)
++(spread_argument ".." @operator)
++(sink_parameter ".." @operator)
++(destructuring_sink ".." @operator)
++(wildcard_import "*" @operator)
++
++; Math
++(equation) @string
++(math_identifier) @constant
++(math_letter) @variable
++((math_text) @operator
++  (#match? @operator "^[+=<>]$"))
++((math_text) @string
++  (#match? @string "^([^+=<>]|..+)$"))
++(math_number) @number
++(math_shorthand) @operator
++(math_alignment_point) @operator
++(math_primes) @operator
++(math_field_access field: (math_identifier) @property)
++(math_call function: (math_identifier) @function.call)
++(math_call function: (math_field_access field: (math_identifier) @function.method.call))
++(math_application function: (math_letter) @function.call)
++(math_application function: (math_identifier) @function.call)
++(math_application function: (math_field_access field: (math_identifier) @function.method.call))
++(math_named_argument name: (identifier) @variable.parameter)
++(math_spread_argument (math_spread_operator) @operator)
++(math_fraction "/" @operator)
++(math_root operator: _ @operator)
++(math_factorial "!" @operator)
++(math_delimiter) @punctuation.bracket
++(math_group
++  open: (math_delimiter) @punctuation.special
++  close: (math_delimiter) @punctuation.special)
++
++; Attachments are captured at their structural node instead of trying to match
++; arbitrary descendants. This handles subscript, superscript, and grouped prime
++; forms consistently.
++(math_attachment base: (math_text) @variable)
++(math_attachment base: (math_letter) @variable)
++(math_attachment base: (math_identifier) @variable)
++(math_attachment subscript: (math_text) @variable)
++(math_attachment subscript: (math_letter) @variable)
++(math_attachment subscript: (math_identifier) @variable)
++(math_attachment superscript: (math_text) @variable)
++(math_attachment superscript: (math_letter) @variable)
++(math_attachment superscript: (math_identifier) @variable)
++(math_attachment ["_" "^"] @operator)
++(math_attachment primes: (math_primes) @operator)
+diff --git a/src/queries/injections/typst.scm b/src/queries/injections/typst.scm
+new file mode 100644
+index 0000000000000000000000000000000000000000..afe5fab1047a975b2242b0b86f046f7735681f83
+--- /dev/null
++++ b/src/queries/injections/typst.scm
+@@ -0,0 +1,13 @@
++; Standard raw-language injection. With the companion typc/typm parser builds,
++; fenced examples tagged `typc` or `typm` start in the correct Typst syntax mode.
++(raw
++  language: (raw_language) @_typst.language
++  content: (raw_content) @injection.content
++  (#any-of? @_typst.language "typ" "typst")
++  (#set! injection.language "typst")
++)
++
++(raw
++  language: (raw_language) @injection.language
++  content: (raw_content) @injection.content
++  (#not-any-of? @injection.language "typ" "typst"))

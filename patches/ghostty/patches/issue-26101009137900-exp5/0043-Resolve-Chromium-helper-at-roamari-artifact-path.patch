@@ -1,0 +1,65 @@
+From ccc737ee8cce8f4e487ca12804fceccdef985037 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 20 Sep 2026 05:09:20 -0500
+Subject: [PATCH 43/45] Resolve Chromium helper at roamari artifact path
+
+Default installed Chromium is the cask artifact
+/opt/homebrew/opt/roamari-chromiumd/roamari-chromiumd.
+PATH roamari-chromiumd is used only when libtermsurf_chromium.dylib
+sits next to it, so a dylib-less prefix/bin copy cannot win.
+---
+ src/apprt/termsurf.zig | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index 84c47d8ea68ea4a46fce132aa398ec176a93ea37..c9db18ad088e5ce5e564cee6fc900295f32ab750 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -173,9 +173,10 @@ const chromium_path_env = "ASTROHACKER_CHROMIUM_PATH";
+ // Legacy dual-read aliases (deprecated codenames; still accepted one cycle).
+ const chromium_path_env_legacy = "TERMSURF_ROAMIUM_PATH";
+ const chromium_path_env_legacy_installed = "TERMSURF_INSTALLED_ROAMIUM_PATH";
+-const installed_chromium_path = "/opt/homebrew/opt/roamari/libexec/roamari-chromiumd/roamari-chromiumd";
++const installed_chromium_path = "/opt/homebrew/opt/roamari-chromiumd/roamari-chromiumd";
+ const chromium_helper_basename = "roamari-chromiumd";
+ var chromium_path_search_buf: [std.fs.max_path_bytes]u8 = undefined;
++var chromium_dylib_buf: [std.fs.max_path_bytes]u8 = undefined;
+ // Compat names used by older test helpers (same values as installed_*).
+ const installed_roamium_path = installed_chromium_path;
+ const roamium_path_env = chromium_path_env_legacy;
+@@ -2135,6 +2136,15 @@ fn resolveEnginePathFromEnv(
+     return installed_default;
+ }
+ 
++fn helperHasColocatedChromium(helper: []const u8) bool {
++    const slash = std.mem.lastIndexOfScalar(u8, helper, '/') orelse return false;
++    const dylib = std.fmt.bufPrint(&chromium_dylib_buf, "{s}/libtermsurf_chromium.dylib", .{helper[0..slash]}) catch return false;
++    if (dylib.len + 1 > chromium_dylib_buf.len) return false;
++    chromium_dylib_buf[dylib.len] = 0;
++    const dylib_z: [:0]u8 = chromium_dylib_buf[0..dylib.len :0];
++    return c.access(dylib_z, c.F_OK) == 0;
++}
++
+ fn whichChromiumHelper() ?[]const u8 {
+     const path_env = processGetenv("PATH") orelse return null;
+     var it = std.mem.splitScalar(u8, path_env, ':');
+@@ -2146,6 +2156,7 @@ fn whichChromiumHelper() ?[]const u8 {
+         chromium_path_search_buf[joined.len] = 0;
+         const joined_z: [:0]u8 = chromium_path_search_buf[0..joined.len :0];
+         if (c.access(joined_z, c.X_OK) != 0) continue;
++        if (!helperHasColocatedChromium(joined_z)) continue;
+         return joined_z;
+     }
+     return null;
+@@ -6292,6 +6303,11 @@ fn testBrowserResolution() !void {
+         file.close();
+     }
+     if (c.setenv("PATH", path_dir, 1) != 0) return error.SetenvFailed;
++    try testing.expectEqualStrings(installed_chromium_path, resolveBrowserExecutableForBuild(roamium, false).?);
++    {
++        const dylib = try std.fs.cwd().createFile(path_dir ++ "/libtermsurf_chromium.dylib", .{});
++        dylib.close();
++    }
+     try testing.expectEqualStrings(path_helper, resolveBrowserExecutableForBuild(roamium, false).?);
+     if (c.setenv("PATH", isolated_path, 1) != 0) return error.SetenvFailed;
+     try testing.expectEqualStrings(installed_chromium_path, resolveBrowserExecutableForBuild(roamium, false).?);

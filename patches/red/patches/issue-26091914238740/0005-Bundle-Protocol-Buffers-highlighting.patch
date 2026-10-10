@@ -1,0 +1,885 @@
+From d031387b4291de59780a714132fe2a82ca141d71 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 10:13:49 -0500
+Subject: [PATCH] Bundle Protocol Buffers highlighting
+
+Messages carry colors, fields wear names,
+No server wakes to play these games.
+From proto two to streaming three,
+The grammar ships internally.
+---
+ Cargo.lock                                 |  11 ++
+ Cargo.toml                                 |   1 +
+ docs/BUNDLED_LANGUAGES.md                  |  19 ++-
+ docs/languages-provenance.json             |  14 ++
+ docs/licenses/tree-sitter-proto.txt        |  19 +++
+ examples/check_proto_files.rs              |  87 ++++++++++
+ src/config.rs                              |   1 +
+ src/editor.rs                              |  57 +++++++
+ src/highlighter.rs                         |  14 ++
+ src/highlighter/bundled_checks.rs          | 185 +++++++++++++++++++-
+ src/queries/highlights/proto.scm           | 190 +++++++++++++++++++++
+ src/queries/highlights/smoke/edition.proto |   6 +
+ src/queries/highlights/smoke/example.proto |  21 +++
+ src/queries/highlights/smoke/proto2.proto  |  11 ++
+ tests/self_check.rs                        |   2 +-
+ 15 files changed, 634 insertions(+), 4 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-proto.txt
+ create mode 100644 examples/check_proto_files.rs
+ create mode 100644 src/queries/highlights/proto.scm
+ create mode 100644 src/queries/highlights/smoke/edition.proto
+ create mode 100644 src/queries/highlights/smoke/example.proto
+ create mode 100644 src/queries/highlights/smoke/proto2.proto
+
+diff --git a/Cargo.lock b/Cargo.lock
+index e0389bb..f444347 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2379,6 +2379,7 @@ dependencies = [
+  "tree-sitter-nu",
+  "tree-sitter-objc",
+  "tree-sitter-powershell",
++ "tree-sitter-proto",
+  "tree-sitter-python",
+  "tree-sitter-ruby",
+  "tree-sitter-rust",
+@@ -3337,6 +3338,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-proto"
++version = "0.6.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9c93b6f1ed20de442e900eb636f2176af6063953dfaa9f76bf168dd3b490a3a1"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-python"
+ version = "0.25.0"
+diff --git a/Cargo.toml b/Cargo.toml
+index 9c7245d..5f3dbb7 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -141,6 +141,7 @@ tree-sitter-swift = "=0.7.3"
+ tree-sitter-xml = "=0.7.0"
+ tree-sitter-make = "=1.1.1"
+ tree-sitter-objc = "=3.0.2"
++tree-sitter-proto = "=0.6.0"
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ base64 = "0.22.1"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 6de5179..3b9686c 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,6 +1,6 @@
+ # Bundled language expansion
+ 
+-RedVim compiles Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles Protocol Buffers, Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+@@ -9,6 +9,7 @@ parser/query files, trust command or runtime download is needed.
+ | --- | --- | --- |
+ | C | .c, .h | 4 spaces |
+ | Objective-C | .m (case-insensitive); objc/objective-c syntax and fences | 4 spaces |
++| Protocol Buffers | .proto (case-insensitive); proto/protobuf syntax and fences | 2 spaces |
+ | Terraform/HCL | .tf, .tfvars, .hcl; hcl/terraform syntax and fences | 2 spaces |
+ | SQL | .sql (case-insensitive), explicit sql syntax, Markdown sql fences | 4 spaces |
+ | C++ | .cc, .cpp, .cxx, .hpp, .hxx, .hh | 4 spaces |
+@@ -101,6 +102,22 @@ produces parser errors with this Objective-C grammar. This integration does not
+ claim Objective-C++. The repository's WebKitHostingProof.m parses error-free;
+ its token colors and the full synthetic fixture are checked without execution.
+ 
++## Protocol Buffers boundary
++
++Protocol Buffers uses the exact `tree-sitter-proto =0.6.0` crate, its generated
++ABI-15 parser and matching published query. Package captures map to
++`type.namespace` and member captures to `property`; the parser and query need
++no runtime downloads or trust action. The MIT notice and original/adapted hashes
++are retained in provenance. Defaults are two spaces and `//` comments.
++
++Complete proto2/proto3 fixtures cover maps, oneofs, services/streaming RPC,
++options/defaults, groups/extensions and reserved fields. An edition-2023 fixture
++also parses and highlights. This is syntax support, not protobuf semantic
++validation or a promise of complete edition conformance. All three repository
++schemas parse without errors and pass token-color checks without protoc or
++service execution. User grammar, theme, indentation and comment overrides remain
++available.
++
+ ## SQL dialect boundary
+ 
+ SQL uses the checksummed `tree-sitter-sequel =0.3.11` crate. Its published VCS
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index be91ba4..45d7cc2 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -191,5 +191,19 @@
+     "license_file": "tree-sitter-objc.txt",
+     "license_sha256": "099c44248f8cf353123211318680e93465587c005a4b3730ce8cb5334de043d6",
+     "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-objc/18802acf31d0b5c1c1d50bdbc9eb0e1636cab9ed/LICENSE"
++  },
++  {
++    "name": "tree-sitter-proto",
++    "version": "0.6.0",
++    "crate_sha256": "9c93b6f1ed20de442e900eb636f2176af6063953dfaa9f76bf168dd3b490a3a1",
++    "repository": "https://github.com/coder3101/tree-sitter-proto",
++    "revision": "6c878d18628ebbff3474479d2fdd6d8ba1954c3e",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "90d918dad99f076681aa035b6879f0c3d3dca207b8490a9ddd670200af68689d",
++    "bundled_query_sha256": "69fd4cbfda61a1c90e4e8e7aaf7ea8471e88b395ad3ac3215ac77349c620e241",
++    "license": "MIT",
++    "license_file": "tree-sitter-proto.txt",
++    "license_sha256": "1cc17f880ff4fa68079a72b98b89d42e8ce16b1bdbb1ec7b6f33465241e41003",
++    "license_source": "published crate LICENSE"
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-proto.txt b/docs/licenses/tree-sitter-proto.txt
+new file mode 100644
+index 0000000..c0e3f2c
+--- /dev/null
++++ b/docs/licenses/tree-sitter-proto.txt
+@@ -0,0 +1,19 @@
++Copyright (c) 2024-2025 Mohammad Ashar Khan
++
++Permission is hereby granted, free of charge, to any person obtaining a copy of
++this software and associated documentation files (the " Software"), to deal in
++the Software without restriction, including without limitation the rights to
++use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
++the Software, and to permit persons to whom the Software is furnished to do so,
++subject to the following conditions:
++
++The above copyright notice and this permission notice (including the next
++paragraph) shall be included in all copies or substantial portions of the
++Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
++FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
++COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
++IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
++CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+diff --git a/examples/check_proto_files.rs b/examples/check_proto_files.rs
+new file mode 100644
+index 0000000..be28689
+--- /dev/null
++++ b/examples/check_proto_files.rs
+@@ -0,0 +1,87 @@
++//! Parse real Protocol Buffers schemas and assert token colors without protoc.
++use anyhow::Context;
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn main() -> anyhow::Result<()> {
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let mut parser = tree_sitter::Parser::new();
++    parser.set_language(&tree_sitter_proto::LANGUAGE.into())?;
++    let files = std::env::args().skip(1).collect::<Vec<_>>();
++    anyhow::ensure!(!files.is_empty(), "supply tracked .proto schemas");
++    for file in files {
++        let source = std::fs::read_to_string(&file)?;
++        anyhow::ensure!(
++            highlighter.language_id_for_file(Some(&file)) == Some("proto"),
++            "wrong detection: {file}"
++        );
++        let tree = parser.parse(&source, None).context("no tree")?;
++        anyhow::ensure!(
++            !tree.root_node().has_error(),
++            "{file}: {}",
++            tree.root_node().to_sexp()
++        );
++        let spans = highlighter.highlight("proto", &source)?;
++        let mut cursor = tree.walk();
++        let mut checked = 0;
++        loop {
++            let node = cursor.node();
++            let scope = match node.kind() {
++                "int_lit" => Some("number"),
++                "float_lit" => Some("number.float"),
++                "true" | "false" => Some("boolean"),
++                "comment" => Some("comment"),
++                "message_name" | "enum_name" | "service_name" | "message_or_enum_type" => {
++                    Some("type")
++                }
++                "type" | "key_type" => Some("type.builtin"),
++                "rpc_name" => Some("function.method"),
++                "string" if node.is_named() => Some("string"),
++                "identifier" => match node.parent().map(|n| n.kind()) {
++                    Some("field" | "map_field" | "oneof_field" | "field_option") => {
++                        Some("property")
++                    }
++                    Some("enum_field") => Some("constant"),
++                    Some("oneof") => Some("type"),
++                    _ => None,
++                },
++                "syntax" if !node.is_named() => Some("keyword.directive"),
++                "message" | "oneof" | "service" | "enum" if !node.is_named() => {
++                    Some("keyword.type")
++                }
++                "stream" | "repeated" | "optional" => Some("keyword.modifier"),
++                "rpc" if !node.is_named() => Some("keyword.function"),
++                "returns" => Some("keyword.return"),
++                _ => None,
++            };
++            if let Some(scope) = scope {
++                let byte = node.start_byte();
++                let actual = spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style);
++                anyhow::ensure!(
++                    actual == theme.get_style(scope).as_ref(),
++                    "{file}: {} at {byte}: expected {scope}, got {actual:?}",
++                    node.kind()
++                );
++                checked += 1;
++            }
++            if cursor.goto_first_child() {
++                continue;
++            }
++            while !cursor.goto_next_sibling() {
++                if !cursor.goto_parent() {
++                    anyhow::ensure!(checked > 0, "no tokens checked: {file}");
++                    println!("{file}: error-free, {checked} token colors checked");
++                    break;
++                }
++            }
++            if cursor.node() == tree.root_node() {
++                break;
++            }
++        }
++    }
++    Ok(())
++}
+diff --git a/src/config.rs b/src/config.rs
+index 95a895d..92c81e3 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -738,6 +738,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("nu", "# %s"),
+         ("hcl", "# %s"),
+         ("objc", "// %s"),
++        ("proto", "// %s"),
+         ("powershell", "# %s"),
+         ("python", "# %s"),
+         ("ruby", "# %s"),
+diff --git a/src/editor.rs b/src/editor.rs
+index 9a29eb7..fa20dd6 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6660,6 +6660,7 @@ impl Editor {
+                 ("sql", 4),
+                 ("hcl", 2),
+                 ("objc", 4),
++                ("proto", 2),
+                 ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+@@ -34510,6 +34511,7 @@ builtin = "rust"
+             ("example.swift", 4, "//"),
+             ("example.sql", 4, "--"),
+             ("example.m", 4, "//"),
++            ("example.proto", 2, "//"),
+             ("example.tf", 2, "#"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+@@ -34697,6 +34699,61 @@ builtin = "rust"
+             .starts_with("// custom NSString"));
+     }
+ 
++    #[tokio::test]
++    async fn proto_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        let source = "syntax = \"proto3\"; // café\n";
++        editor.buffer_manager[0] = Buffer::new(Some("notes.txt".into()), source.into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("proto".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("proto"));
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('/'),
++            Action::InsertCharAtCursorPos('/'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), source);
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.proto]\nindent_width = 6\ncomment = '// custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 6);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("// custom syntax"));
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index aebeb0b..3c37858 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -153,6 +153,7 @@ impl LanguageRegistry {
+                         | "sql"
+                         | "hcl"
+                         | "objc"
++                        | "proto"
+                 ),
+             });
+         }
+@@ -605,6 +606,8 @@ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
+     ("hcl", "hcl"),
+     ("objc", "objc"),
++    ("proto", "proto"),
++    ("protobuf", "proto"),
+     ("objective-c", "objc"),
+     ("terraform", "hcl"),
+     ("sql", "sql"),
+@@ -2308,6 +2311,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "proto",
++            extensions: &["proto"],
++            filenames: &[],
++            language: Some(|| tree_sitter_proto::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/proto.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "objc",
+             extensions: &["m"],
+@@ -5363,6 +5376,7 @@ mod tests {
+                 "nu",
+                 "objc",
+                 "powershell",
++                "proto",
+                 "python",
+                 "ruby",
+                 "rust",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index f23d485..384f4ae 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -9,6 +9,93 @@ struct Fixture {
+ }
+ 
+ const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "proto",
++        filename: "example.PROTO",
++        source: include_str!("../queries/highlights/smoke/example.proto"),
++        tokens: &[
++            ("// café", "comment"),
++            ("syntax", "keyword.directive"),
++            ("\"proto3\"", "string.special.symbol"),
++            ("package", "keyword.import"),
++            ("demo", "type.namespace"),
++            ("import", "keyword.import"),
++            ("public", "keyword.modifier"),
++            ("other.proto", "string.special.path"),
++            ("option", "keyword.directive"),
++            ("java_package", "property"),
++            ("message", "keyword.type"),
++            ("Request", "type"),
++            ("Nested", "type"),
++            ("reserved", "keyword"),
++            ("9", "number"),
++            ("to 12", "keyword"),
++            ("old_name", "string"),
++            ("optional", "keyword.modifier"),
++            ("name =", "property"),
++            ("repeated", "keyword.modifier"),
++            (".demo.api.Request.Nested", "type"),
++            ("map", "keyword.type"),
++            ("counts", "property"),
++            ("oneof", "keyword.type"),
++            ("choice", "type"),
++            ("data", "property"),
++            ("enum", "keyword.type"),
++            ("UNKNOWN", "constant"),
++            ("deprecated", "property"),
++            ("true", "boolean"),
++            ("service", "keyword.type"),
++            ("Gateway", "type"),
++            ("rpc", "keyword.function"),
++            ("Send", "function.method"),
++            ("stream", "keyword.modifier"),
++            ("returns", "keyword.return"),
++            ("/* after", "comment"),
++            ("After", "type"),
++            ("42", "number"),
++            ("=", "operator"),
++            ("<", "punctuation.bracket"),
++            (";", "punctuation.delimiter"),
++        ],
++    },
++    Fixture {
++        language: "proto",
++        filename: "proto2.proto",
++        source: include_str!("../queries/highlights/smoke/proto2.proto"),
++        tokens: &[
++            ("\"proto2\"", "string.special.symbol"),
++            ("required", "keyword.modifier"),
++            ("string", "type.builtin"),
++            ("label", "property"),
++            ("default", "property"),
++            ("café", "string"),
++            ("\\n", "string.escape"),
++            ("3.14", "number.float"),
++            ("false", "boolean"),
++            ("group", "keyword.type"),
++            ("Details", "type"),
++            ("note", "property"),
++            ("extensions", "keyword.type"),
++            ("max", "keyword"),
++            ("extend Record", "keyword.type"),
++            ("extra", "property"),
++            ("100", "number"),
++        ],
++    },
++    Fixture {
++        language: "proto",
++        filename: "edition.proto",
++        source: include_str!("../queries/highlights/smoke/edition.proto"),
++        tokens: &[
++            ("edition =", "keyword.directive"),
++            ("2023", "string"),
++            ("edition_demo", "type.namespace"),
++            ("Modern", "type"),
++            ("string", "type.builtin"),
++            ("label", "property"),
++            ("2;", "number"),
++        ],
++    },
+     Fixture {
+         language: "objc",
+         filename: "example.M",
+@@ -377,6 +464,100 @@ mod tests {
+     use super::*;
+     use crate::theme::parse_vscode_theme_contents;
+ 
++    #[test]
++    fn proto_routing_predicates_overrides_and_incremental_edits() {
++        let mut theme =
++            parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let query = Query::new(
++            &tree_sitter_proto::LANGUAGE.into(),
++            include_str!("../queries/highlights/proto.scm"),
++        )
++        .unwrap();
++        for pattern in 0..query.pattern_count() {
++            assert!(query.general_predicates(pattern).is_empty());
++        }
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        for file in ["main.proto", "main.PROTO"] {
++            assert_eq!(highlighter.language_id_for_file(Some(file)), Some("proto"));
++        }
++        for alias in ["proto", "protobuf"] {
++            assert_eq!(highlighter.language_id_for_name(alias), Some("proto"));
++            let source = format!("```{alias}\nmessage A {{ int32 value = 42; }}\n```\n");
++            let spans = highlighter.highlight("markdown", &source).unwrap();
++            let byte = source.find("42").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                theme.get_style("number").as_ref()
++            );
++        }
++        for source in [
++            "syntax = \"proto3\"; // café\n",
++            "message A { string name =",
++            "message A { string name = 1; }\n",
++        ] {
++            let shape = |spans: Vec<StyleInfo>| {
++                spans
++                    .into_iter()
++                    .map(|s| (s.start, s.end, s.style))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(
++                shape(highlighter.highlight("proto", source).unwrap()),
++                shape(
++                    Highlighter::new(&theme)
++                        .unwrap()
++                        .highlight("proto", source)
++                        .unwrap()
++                )
++            );
++        }
++        let directory = tempfile::tempdir().unwrap();
++        let config = HashMap::from([(
++            "schema".into(),
++            LanguageConfig {
++                extensions: vec!["schema".into()],
++                grammar: Some(LanguageGrammarConfig {
++                    builtin: Some("proto".into()),
++                    ..LanguageGrammarConfig::default()
++                }),
++                ..LanguageConfig::default()
++            },
++        )]);
++        let registry = Arc::new(LanguageRegistry::from_config(&config, directory.path()).unwrap());
++        let mut custom = theme.get_style("property").unwrap();
++        custom.bold = !custom.bold;
++        theme.token_styles.insert(
++            0,
++            crate::theme::TokenStyle {
++                name: None,
++                scope: vec!["property".into()],
++                style: custom.clone(),
++            },
++        );
++        let mut highlighter = Highlighter::with_registry(&theme, registry).unwrap();
++        assert_eq!(
++            highlighter.language_id_for_file(Some("main.schema")),
++            Some("schema")
++        );
++        let source = "message A { string name = 1; }";
++        for id in ["proto", "schema"] {
++            let spans = highlighter.highlight(id, source).unwrap();
++            let byte = source.find("name").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                Some(&custom)
++            );
++        }
++    }
++
+     #[test]
+     fn objc_routing_predicates_overrides_and_incremental_edits() {
+         let mut theme =
+@@ -577,7 +758,7 @@ mod tests {
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 14);
++        assert_eq!(checked.len(), 15);
+     }
+ 
+     #[test]
+@@ -587,7 +768,7 @@ mod tests {
+             LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
+         let theme = Theme::default();
+         let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
+-        for definition in language_definitions().iter().take(13) {
++        for definition in language_definitions().iter().take(14) {
+             for extension in definition.extensions {
+                 assert_eq!(
+                     highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
+diff --git a/src/queries/highlights/proto.scm b/src/queries/highlights/proto.scm
+new file mode 100644
+index 0000000..3261188
+--- /dev/null
++++ b/src/queries/highlights/proto.scm
+@@ -0,0 +1,190 @@
++(package
++  (full_ident
++    (identifier) @type.namespace))
++
++(extend
++  (full_ident
++    (identifier) @type))
++
++(constant
++  (full_ident
++    (identifier) @constant))
++
++(field
++  (identifier) @property)
++
++(map_field
++  (identifier) @property)
++
++(oneof
++  (identifier) @type)
++
++(oneof_field
++  (identifier) @property)
++
++(field_option
++  (identifier) @property)
++
++(enum_value_option
++  (identifier) @property)
++
++(block_lit
++  (identifier) @property)
++
++; Extension names and Any type URLs in aggregate option values,
++; e.g. { [foo.bar]: 1 } and { [type.googleapis.com/foo.Bar]: {} }
++(extension_name
++  name: (full_ident
++    (identifier) @variable))
++
++(extension_name
++  type: (full_ident
++    (identifier) @type))
++
++; Extension option names, e.g. option (foo.bar) = ...
++; Also matches field/enum-value options, e.g. [(foo.bar) = ...]
++[
++  (option
++    (full_ident
++      (identifier) @variable))
++  (field_option
++    (full_ident
++      (identifier) @variable))
++  (enum_value_option
++    (full_ident
++      (identifier) @variable))
++]
++
++[
++  (option
++    (full_ident
++      (identifier)
++      (identifier) @property))
++  (field_option
++    (full_ident
++      (identifier)
++      (identifier) @property))
++  (enum_value_option
++    (full_ident
++      (identifier)
++      (identifier) @property))
++]
++
++; Bare option names, e.g. option java_package = ...
++; Also matches the trailing segments of a parenthesized name,
++; e.g. option (foo.bar).baz = ...
++; Matches the @property treatment of bare field_option/enum_value_option
++; names below, since these all name a field on a proto *Options message.
++(option
++  (identifier) @property)
++
++[
++  "option"
++  "syntax"
++  "edition"
++] @keyword.directive
++
++[
++  "reserved"
++  "to"
++  "max"
++] @keyword
++
++[
++  "enum"
++  "extend"
++  "extensions"
++  "group"
++  "message"
++  "map"
++  "oneof"
++  "service"
++] @keyword.type
++
++"rpc" @keyword.function
++
++"returns" @keyword.return
++
++[
++  "export"
++  "local"
++  "optional"
++  "repeated"
++  "required"
++  "stream"
++  "weak"
++  "public"
++] @keyword.modifier
++
++[
++  "package"
++  "import"
++] @keyword.import
++
++[
++  (key_type)
++  (type)
++] @type.builtin
++
++[
++  (message_name)
++  (enum_name)
++  (service_name)
++  (message_or_enum_type)
++] @type
++
++(rpc_name) @function.method
++
++(enum_field
++  (identifier) @constant)
++
++(string) @string
++
++; reserved names are their own node type rather than (string), so they need
++; their own rule - without it they are the only unhighlighted literal.
++(reserved_identifier) @string
++
++(import
++  path: (string) @string.special.path)
++
++(syntax
++  version: (string) @string.special.symbol)
++
++(escape_sequence) @string.escape
++
++(int_lit) @number
++
++(float_lit) @number.float
++
++[
++  (true)
++  (false)
++] @boolean
++
++(comment) @spell
++
++(comment) @comment
++
++[
++  "("
++  ")"
++  "["
++  "]"
++  "{"
++  "}"
++  "<"
++  ">"
++] @punctuation.bracket
++
++[
++  ";"
++  ","
++  "."
++  ":"
++] @punctuation.delimiter
++
++[
++  "="
++  "-"
++  "+"
++] @operator
+diff --git a/src/queries/highlights/smoke/edition.proto b/src/queries/highlights/smoke/edition.proto
+new file mode 100644
+index 0000000..d3b076d
+--- /dev/null
++++ b/src/queries/highlights/smoke/edition.proto
+@@ -0,0 +1,6 @@
++edition = "2023";
++package edition_demo;
++message Modern {
++  string label = 1;
++  int32 count = 2;
++}
+diff --git a/src/queries/highlights/smoke/example.proto b/src/queries/highlights/smoke/example.proto
+new file mode 100644
+index 0000000..7b215f9
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.proto
+@@ -0,0 +1,21 @@
++// café: proto3 schema, never executed
++syntax = "proto3";
++package demo.api;
++import public "other.proto";
++option java_package = "demo.api";
++message Request {
++  reserved 7, 9 to 12;
++  reserved "old_name";
++  message Nested { string text = 1; }
++  optional string name = 1;
++  repeated .demo.api.Request.Nested entries = 2;
++  map<string, int32> counts = 3;
++  oneof choice { bytes data = 4; bool flag = 5; }
++  enum State { UNKNOWN = 0; READY = 1; }
++  State state = 6 [deprecated = true];
++}
++service Gateway {
++  rpc Send(stream Request) returns (stream Request);
++}
++/* after the service */
++message After { int64 value = 42; }
+diff --git a/src/queries/highlights/smoke/proto2.proto b/src/queries/highlights/smoke/proto2.proto
+new file mode 100644
+index 0000000..d155e7e
+--- /dev/null
++++ b/src/queries/highlights/smoke/proto2.proto
+@@ -0,0 +1,11 @@
++syntax = "proto2";
++package legacy;
++message Record {
++  required string label = 1 [default = "café\nworld"];
++  optional double ratio = 2 [default = 3.14];
++  optional bool enabled = 3 [default = false];
++  repeated int32 values = 4;
++  optional group Details = 5 { optional string note = 6; }
++  extensions 100 to max;
++}
++extend Record { optional string extra = 100; }
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index cbf78a1..ebf5ade 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -60,7 +60,7 @@ fn assert_self_check_report(output: Output) {
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     for language in [
+         "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make", "sql",
+-        "hcl", "objc",
++        "hcl", "objc", "proto",
+     ] {
+         assert!(
+             lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),
+-- 
+2.54.0 (Apple Git-157)
+

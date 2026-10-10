@@ -1,0 +1,1276 @@
+From 1a25a616db79d32dc50a8884d4d8185f9d7d7ffb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 08:59:32 -0500
+Subject: [PATCH] Bundle SQL highlighting in RedVim
+
+SELECT some colors, FROM the binary bright;
+Prepared statements join the opening night.
+The parser trips; a few lost words recover,
+While tests inspect each hue beneath the cover.
+---
+ Cargo.lock                               |  11 +
+ Cargo.toml                               |   1 +
+ docs/BUNDLED_LANGUAGES.md                |  31 +-
+ docs/languages-provenance.json           |  16 +
+ docs/licenses/tree-sitter-sequel.txt     |  21 ++
+ examples/check_sql_files.rs              |  86 +++++
+ src/editor.rs                            |  57 +++
+ src/highlighter.rs                       |  25 ++
+ src/highlighter/bundled_checks.rs        |  18 +-
+ src/highlighter/sql_checks.rs            | 144 ++++++++
+ src/highlighter/sql_recovery.rs          | 119 ++++++
+ src/queries/highlights/smoke/example.sql |   2 +
+ src/queries/highlights/smoke/mysql.sql   |  18 +
+ src/queries/highlights/smoke/sqlite.sql  |  11 +
+ src/queries/highlights/sql.scm           | 445 +++++++++++++++++++++++
+ tests/self_check.rs                      |   2 +-
+ 16 files changed, 1002 insertions(+), 5 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-sequel.txt
+ create mode 100644 examples/check_sql_files.rs
+ create mode 100644 src/highlighter/sql_checks.rs
+ create mode 100644 src/highlighter/sql_recovery.rs
+ create mode 100644 src/queries/highlights/smoke/example.sql
+ create mode 100644 src/queries/highlights/smoke/mysql.sql
+ create mode 100644 src/queries/highlights/smoke/sqlite.sql
+ create mode 100644 src/queries/highlights/sql.scm
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 95942d9..3c9db1a 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2380,6 +2380,7 @@ dependencies = [
+  "tree-sitter-python",
+  "tree-sitter-ruby",
+  "tree-sitter-rust",
++ "tree-sitter-sequel",
+  "tree-sitter-swift",
+  "tree-sitter-toml-ng",
+  "tree-sitter-typescript",
+@@ -3344,6 +3345,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-sequel"
++version = "0.3.11"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-swift"
+ version = "0.7.3"
+diff --git a/Cargo.toml b/Cargo.toml
+index 0a90037..cc7b16f 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -63,6 +63,7 @@ husk-value = { version = "0.1.0", path = "crates/husk-value" }
+ husk-wasm = { version = "0.1.0", path = "crates/husk-wasm" }
+ 
+ [dependencies]
++tree-sitter-sequel = "=0.3.11"
+ anyhow = "1.0.79"
+ arboard = "3.4.1"
+ async-recursion = "1.0.5"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 05ebf75..11114f6 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,6 +1,6 @@
+ # Bundled language expansion
+ 
+-RedVim compiles C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+@@ -8,6 +8,7 @@ parser/query files, trust command or runtime download is needed.
+ | Language | Files | Default indentation |
+ | --- | --- | --- |
+ | C | .c, .h | 4 spaces |
++| SQL | .sql (case-insensitive), explicit sql syntax, Markdown sql fences | 4 spaces |
+ | C++ | .cc, .cpp, .cxx, .hpp, .hxx, .hh | 4 spaces |
+ | Python | .py, .pyi; python/python3 shebang | 4 spaces |
+ | HTML | .html, .htm | 2 spaces |
+@@ -33,7 +34,7 @@ is not a compiler or dialect conformance check.
+ 
+ Cargo.toml pins exact crate versions and Cargo.lock pins archive checksums.
+ `languages-provenance.json` records crate checksums, upstream source revisions,
+-query paths/hashes and license hashes. All ten crates declare MIT; their license
++query paths/hashes and license hashes. All eleven crates declare MIT; their license
+ texts are in docs/licenses and distributed in the binary archive. When the crate
+ omits its license file, the recorded source URL identifies the exact upstream
+ revision used to retrieve it.
+@@ -58,3 +59,29 @@ built-ins without reading external grammar configuration. Tests additionally
+ cover detection overrides, default comments/indentation and Make tabs.
+ 
+ Nushell's independently pinned provenance remains in docs/NUSHELL.md.
++
++## SQL dialect boundary
++
++SQL uses the checksummed `tree-sitter-sequel =0.3.11` crate. Its published VCS
++metadata reports a dirty source tree; the crate checksum, not its Git revision
++alone, is the exact parser authority. The copied query translates Lua numeric
++patterns to Rust regexes and maps field/parameter/storageclass captures to
++property/variable.parameter/keyword. Normal configuration and theme overrides
++remain supported; comments use `--` and indentation defaults to four spaces.
++
++The general grammar recovers with ERROR nodes on MySQL DATETIME precision,
++charset/collation assignments, session-variable SET statements, prepared
++statements and some Drizzle named UNIQUE constraints, and SQLite AUTOINCREMENT.
++The tree is preserved, including those errors. A narrow supplemental pass colors
++uncovered PREPARE, DEALLOCATE, AUTOINCREMENT, UNIQUE and ASCII-named @session variables
++inside recovery regions. It skips quoted strings/identifiers and comments and
++does not override query colors. It applies only to the bundled SQL grammar and
++its default query, including configured aliases of that built-in grammar.
++
++The self-check verifies concrete MySQL/SQLite token colors, including statements
++after recovery, alongside an error-free basic SQL fixture. Tests cover overrides,
++fences, Unicode, incomplete edits, undo, and quoted/commented lookalikes. The
++developer example `check_sql_files` reports recovery nodes and asserts token
++colors against real migration files without executing them. Syntax highlighting
++is provided; dialect conformance, SQL execution, formatting, language servers
++and SQL embedded inside other host languages are not part of this support.
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index 1bfead5..4ee5e75 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -138,5 +138,21 @@
+     "license_file": "tree-sitter-make.txt",
+     "license_sha256": "28eecdb75b6de2d9020603531461444bf54db827ee2fb345a8fcf4dbee7c2ad1",
+     "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-make/5e9e8f8ff3387b0edcaa90f46ddf3629f4cfeb1d/LICENSE"
++  },
++  {
++    "name": "tree-sitter-sequel",
++    "version": "0.3.11",
++    "crate_sha256": "9d198ad3c319c02e43c21efa1ec796b837afcb96ffaef1a40c1978fbdcec7d17",
++    "repository": "https://github.com/DerekStride/tree-sitter-sql",
++    "revision": "7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8",
++    "published_vcs_dirty": true,
++    "source_authority": "The checksummed published crate; its VCS metadata reports dirty, so the revision alone is not an exact source reconstruction.",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "80e726903b67fbe471bf1272a447ab6a6758e95654f9e9c8f5c2e4af729af8de",
++    "bundled_query_sha256": "caf961cb96ba197956556a2e60c4759cf7a7a4b844ab295d6a934bd0e82224b5",
++    "license": "MIT",
++    "license_file": "tree-sitter-sequel.txt",
++    "license_sha256": "3b3e4e4252d5d7d1c18e1257005f23242bf0580ad619204fd093c99b8c56748d",
++    "license_source": "https://raw.githubusercontent.com/DerekStride/tree-sitter-sql/7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8/LICENSE"
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-sequel.txt b/docs/licenses/tree-sitter-sequel.txt
+new file mode 100644
+index 0000000..b976c9b
+--- /dev/null
++++ b/docs/licenses/tree-sitter-sequel.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2021 Derek Stride
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/examples/check_sql_files.rs b/examples/check_sql_files.rs
+new file mode 100644
+index 0000000..61a8dfa
+--- /dev/null
++++ b/examples/check_sql_files.rs
+@@ -0,0 +1,86 @@
++//! Inspect SQL recovery nodes and actual rendered colors without executing SQL.
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn errors(node: tree_sitter::Node<'_>, source: &str) {
++    if node.is_error() || node.is_missing() {
++        println!(
++            "  recovery {:?}: {:?}: {}",
++            node.range(),
++            &source[node.byte_range()],
++            node.to_sexp()
++        );
++    }
++    let mut cursor = node.walk();
++    for child in node.children(&mut cursor) {
++        errors(child, source);
++    }
++}
++
++fn main() -> anyhow::Result<()> {
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let mut parser = tree_sitter::Parser::new();
++    parser.set_language(&tree_sitter_sequel::LANGUAGE.into())?;
++    for file in std::env::args().skip(1) {
++        let source = std::fs::read_to_string(&file)?;
++        let tree = parser.parse(&source, None).unwrap();
++        println!("{file}: parse_errors={}", tree.root_node().has_error());
++        errors(tree.root_node(), &source);
++        let spans = highlighter.highlight("sql", &source)?;
++        let style_at = |byte| {
++            spans
++                .iter()
++                .rev()
++                .find(|s| s.start <= byte && byte < s.end)
++                .map(|s| &s.style)
++        };
++        let mut checked = 0;
++        for (token, scope) in [
++            ("CREATE", "keyword"),
++            ("SELECT", "keyword"),
++            ("ALTER", "keyword"),
++            ("PREPARE", "keyword"),
++            ("EXECUTE", "keyword"),
++            ("DEALLOCATE", "keyword"),
++            ("AUTOINCREMENT", "keyword"),
++            ("UNSIGNED", "attribute"),
++            ("AUTO_INCREMENT", "attribute"),
++            ("DATETIME", "type.builtin"),
++            ("ENGINE", "attribute"),
++            ("COLLATE", "attribute"),
++            ("UNIQUE", "type.qualifier"),
++            ("KEY", "keyword"),
++            ("DEFAULT", "attribute"),
++            ("BOOLEAN", "type.builtin"),
++        ] {
++            for (byte, _) in source.match_indices(token) {
++                let word = |c: char| c.is_alphanumeric() || c == '_';
++                if source[..byte].chars().next_back().is_some_and(word)
++                    || source[byte + token.len()..]
++                        .chars()
++                        .next()
++                        .is_some_and(word)
++                {
++                    continue;
++                }
++                let actual = style_at(byte);
++                if actual == theme.get_style("comment").as_ref()
++                    || actual == theme.get_style("string").as_ref()
++                {
++                    continue;
++                }
++                anyhow::ensure!(
++                    actual == theme.get_style(scope).as_ref(),
++                    "{file}: {token} at {byte} expected {scope}, got {actual:?}"
++                );
++                checked += 1;
++            }
++        }
++        anyhow::ensure!(checked > 0, "no SQL tokens checked: {file}");
++        println!(
++            "  verified {checked} dialect keyword/type colors in {} spans",
++            spans.len()
++        );
++    }
++    Ok(())
++}
+diff --git a/src/editor.rs b/src/editor.rs
+index 6790679..12eecad 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6657,6 +6657,7 @@ impl Editor {
+                 ("ruby", 2),
+                 ("zig", 4),
+                 ("swift", 4),
++                ("sql", 4),
+                 ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+@@ -34505,6 +34506,7 @@ builtin = "rust"
+             ("formula.rb.in", 2, "#"),
+             ("example.zig", 4, "//"),
+             ("example.swift", 4, "//"),
++            ("example.sql", 4, "--"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+         ] {
+@@ -34525,6 +34527,61 @@ builtin = "rust"
+         assert_eq!(editor.current_buffer().contents(), "all:\n\t@echo hello\n");
+     }
+ 
++    #[tokio::test]
++    async fn sql_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        editor.buffer_manager[0] = Buffer::new(Some("notes.txt".into()), "SELECT 'café';\n".into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("sql".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("sql"));
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('-'),
++            Action::InsertCharAtCursorPos('-'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), "SELECT 'café';\n");
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.sql]\nindent_width = 2\ncomment = '-- custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 2);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("-- custom SELECT"));
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index 6ae93c9..ccbb76e 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -21,6 +21,8 @@ use tree_sitter::{Language, Parser, Query, QueryCursor, StreamingIterator, Tree}
+ use tree_sitter_language::LanguageFn;
+ 
+ mod bundled_checks;
++mod sql_checks;
++mod sql_recovery;
+ pub use bundled_checks::check_bundled_languages;
+ 
+ use crate::{
+@@ -148,6 +150,7 @@ impl LanguageRegistry {
+                         | "swift"
+                         | "xml"
+                         | "make"
++                        | "sql"
+                 ),
+             });
+         }
+@@ -598,6 +601,7 @@ const MAX_CACHED_HIGHLIGHT_BYTES: usize = 64 * 1024;
+ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ 
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
++    ("sql", "sql"),
+     ("c", "c"),
+     ("cpp", "cpp"),
+     ("c++", "cpp"),
+@@ -1474,6 +1478,16 @@ impl Highlighter {
+                 colors.extend(refinement_colors);
+             }
+ 
++            // The pinned general SQL grammar has known MySQL/SQLite recovery
++            // gaps. Add narrowly scoped token colors without changing its tree
++            // or treating recovery as successful dialect validation.
++            if tree.root_node().has_error()
++                && matches!(grammar, GrammarSource::Bundled(language) if language() == tree_sitter_sequel::LANGUAGE.into())
++                && definition.highlight_queries == [include_str!("queries/highlights/sql.scm")]
++            {
++                sql_recovery::fill_gaps(code, tree.root_node(), &self.theme, &mut colors);
++            }
++
+             if depth < MAX_INJECTION_DEPTH {
+                 if let Some(injection_query) = &highlighter.injection_query {
+                     raw_injections = collect_injections(injection_query, tree.root_node(), code);
+@@ -2277,6 +2291,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "sql",
++            extensions: &["sql"],
++            filenames: &[],
++            language: Some(|| tree_sitter_sequel::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/sql.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "c",
+             extensions: &["c", "h"],
+@@ -5303,6 +5327,7 @@ mod tests {
+                 "python",
+                 "ruby",
+                 "rust",
++                "sql",
+                 "swift",
+                 "toml",
+                 "tsx",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index dd916e1..17b3e1b 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -9,6 +9,19 @@ struct Fixture {
+ }
+ 
+ const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "sql",
++        filename: "example.SQL",
++        source: include_str!("../queries/highlights/smoke/example.sql"),
++        tokens: &[
++            ("-- café", "comment"),
++            ("SELECT", "keyword"),
++            ("'hello'", "string"),
++            ("42", "number"),
++            ("3.14", "float"),
++            ("TRUE", "boolean"),
++        ],
++    },
+     Fixture {
+         language: "c",
+         filename: "example.c",
+@@ -147,6 +160,7 @@ const FIXTURES: &[Fixture] = &[
+ /// Validate bundled parsers, filename detection and effective token colors without
+ /// reading user configuration, loading external grammars or entering raw mode.
+ pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str>> {
++    super::sql_checks::check(theme)?;
+     let registry = Arc::new(LanguageRegistry::bundled());
+     let mut highlighter = Highlighter::with_registry(theme, Arc::clone(&registry))?;
+     let mut checked = Vec::new();
+@@ -210,7 +224,7 @@ mod tests {
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 11);
++        assert_eq!(checked.len(), 12);
+     }
+ 
+     #[test]
+@@ -220,7 +234,7 @@ mod tests {
+             LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
+         let theme = Theme::default();
+         let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
+-        for definition in language_definitions().iter().take(10) {
++        for definition in language_definitions().iter().take(11) {
+             for extension in definition.extensions {
+                 assert_eq!(
+                     highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
+diff --git a/src/highlighter/sql_checks.rs b/src/highlighter/sql_checks.rs
+new file mode 100644
+index 0000000..76773c8
+--- /dev/null
++++ b/src/highlighter/sql_checks.rs
+@@ -0,0 +1,144 @@
++//! Dialect highlighting checks, distinct from the general grammar's parse validity.
++use super::*;
++
++pub(super) fn check(theme: &Theme) -> anyhow::Result<()> {
++    let mut highlighter = Highlighter::new(theme)?;
++    for (code, tokens) in [
++        (
++            include_str!("../queries/highlights/smoke/mysql.sql"),
++            &[
++                ("-- café", "comment"),
++                ("CREATE", "keyword"),
++                ("UNSIGNED", "attribute"),
++                ("AUTO_INCREMENT", "attribute"),
++                ("DATETIME", "type.builtin"),
++                ("UNIQUE", "type.qualifier"),
++                ("KEY", "keyword"),
++                ("ENGINE", "attribute"),
++                ("COLLATE", "attribute"),
++                ("ALTER", "keyword"),
++                ("SET", "keyword"),
++                ("SELECT", "keyword"),
++                ("PREPARE", "keyword"),
++                ("EXECUTE", "keyword"),
++                ("DEALLOCATE", "keyword"),
++                ("'café'", "string"),
++                ("42", "number"),
++                ("UNIQUE(`name`)", "type.qualifier"),
++            ][..],
++        ),
++        (
++            include_str!("../queries/highlights/smoke/sqlite.sql"),
++            &[
++                ("/* café", "comment"),
++                ("INTEGER", "type.builtin"),
++                ("AUTOINCREMENT", "keyword"),
++                ("CREATE INDEX", "keyword"),
++                ("TRUE", "boolean"),
++                ("INSERT", "keyword"),
++                ("'it''s café'", "string"),
++                ("select", "keyword"),
++                ("JOIN", "keyword"),
++                ("WHERE", "keyword"),
++                ("UPDATE", "keyword"),
++                ("DELETE", "keyword"),
++                ("42", "number"),
++            ][..],
++        ),
++    ] {
++        let spans = highlighter.highlight("sql", code)?;
++        for &(token, scope) in tokens {
++            let byte = code.find(token).context("SQL fixture token missing")?;
++            let expected = theme.get_style(scope).context("SQL theme scope missing")?;
++            let actual = spans.iter().rev().find(|s| s.start <= byte && byte < s.end);
++            anyhow::ensure!(
++                actual.map(|s| &s.style) == Some(&expected),
++                "SQL dialect token {token:?}: expected {scope}, got {actual:?}"
++            );
++        }
++    }
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::theme::parse_vscode_theme_contents;
++
++    #[test]
++    fn sql_dialect_colors_and_recovery_are_checked() {
++        check(&parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap())
++            .unwrap();
++    }
++
++    #[test]
++    fn sql_configuration_fences_and_edits_preserve_highlighting() {
++        let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let directory = tempfile::tempdir().unwrap();
++        let config = HashMap::from([(
++            "sql".to_owned(),
++            LanguageConfig {
++                extensions: vec!["query".into()],
++                ..LanguageConfig::default()
++            },
++        )]);
++        let registry = LanguageRegistry::from_config(&config, directory.path()).unwrap();
++        let mut highlighter = Highlighter::with_registry(&theme, Arc::new(registry)).unwrap();
++        assert_eq!(
++            highlighter.language_id_for_file(Some("example.query")),
++            Some("sql")
++        );
++        assert_eq!(highlighter.language_id_for_name("sql"), Some("sql"));
++        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
++        let fenced = "```sql\nSELECT 42;\n```\n";
++        let spans = highlighter.highlight("markdown", fenced).unwrap();
++        let byte = fenced.find("SELECT").unwrap();
++        assert_eq!(
++            spans
++                .iter()
++                .rev()
++                .find(|s| s.start <= byte && byte < s.end)
++                .map(|s| &s.style),
++            theme.get_style("keyword").as_ref()
++        );
++        for code in [
++            "SELECT 'café';",
++            "SELECT '",
++            "PREPARE x FROM @ddl;",
++            "SELECT 'café';",
++        ] {
++            let spans = highlighter.highlight("sql", code).unwrap();
++            let fresh = Highlighter::new(&theme)
++                .unwrap()
++                .highlight("sql", code)
++                .unwrap();
++            let shape = |spans: Vec<StyleInfo>| {
++                spans
++                    .into_iter()
++                    .map(|s| (s.start, s.end, s.style))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(shape(spans), shape(fresh), "{code}");
++        }
++    }
++
++    #[test]
++    fn sql_recovery_never_colors_keywords_in_quotes_comments_or_identifiers() {
++        let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let code = "'PREPARE' \"DEALLOCATE\" `AUTOINCREMENT` 'it''s PREPARE' -- PREPARE\n/* DEALLOCATE */ caféPREPARE PREPARE_suffix prepare";
++        let mut parser = Parser::new();
++        parser
++            .set_language(&tree_sitter_sequel::LANGUAGE.into())
++            .unwrap();
++        let tree = parser.parse(code, None).unwrap();
++        let mut spans = Vec::new();
++        sql_recovery::fill_gaps(code, tree.root_node(), &theme, &mut spans);
++        assert_eq!(
++            spans
++                .iter()
++                .map(|s| &code[s.start..s.end])
++                .collect::<Vec<_>>(),
++            ["prepare"]
++        );
++    }
++}
+diff --git a/src/highlighter/sql_recovery.rs b/src/highlighter/sql_recovery.rs
+new file mode 100644
+index 0000000..bc9cc5c
+--- /dev/null
++++ b/src/highlighter/sql_recovery.rs
+@@ -0,0 +1,119 @@
++//! Narrow lexical colors for known dialect gaps in tree-sitter-sequel 0.3.11.
++//! This does not repair the parse tree or provide SQL validation. Only uncovered
++//! tokens inside ERROR nodes receive colors; strings/comments/quoted identifiers
++//! are skipped so SQL words inside them cannot become accidental keywords.
++use super::*;
++
++pub(super) fn fill_gaps(
++    code: &str,
++    root: tree_sitter::Node<'_>,
++    theme: &Theme,
++    colors: &mut Vec<StyleInfo>,
++) {
++    let mut ranges = Vec::new();
++    let mut cursor = root.walk();
++    loop {
++        let node = cursor.node();
++        if node.is_error() {
++            ranges.push(node.byte_range());
++        } else if node.has_error() && cursor.goto_first_child() {
++            continue;
++        }
++        while !cursor.goto_next_sibling() {
++            if !cursor.goto_parent() {
++                add_tokens(code, &ranges, theme, colors);
++                return;
++            }
++        }
++    }
++}
++
++fn add_tokens(code: &str, errors: &[Range<usize>], theme: &Theme, colors: &mut Vec<StyleInfo>) {
++    let bytes = code.as_bytes();
++    let mut i = 0;
++    let original = colors.len();
++    while i < bytes.len() {
++        let start = i;
++        match bytes[i] {
++            b'\'' | b'"' | b'`' => {
++                let quote = bytes[i];
++                i += 1;
++                while i < bytes.len() {
++                    if bytes[i] == b'\\' {
++                        i = (i + 2).min(bytes.len());
++                    } else if bytes[i] == quote {
++                        i += 1;
++                        if bytes.get(i) == Some(&quote) {
++                            i += 1;
++                        } else {
++                            break;
++                        }
++                    } else {
++                        i += 1;
++                    }
++                }
++                continue;
++            }
++            b'-' if bytes.get(i + 1) == Some(&b'-') => {
++                while i < bytes.len() && bytes[i] != b'\n' {
++                    i += 1;
++                }
++                continue;
++            }
++            b'/' if bytes.get(i + 1) == Some(&b'*') => {
++                i += 2;
++                while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
++                    i += 1;
++                }
++                i = (i + 2).min(bytes.len());
++                continue;
++            }
++            b'@' => {
++                i += 1;
++                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
++                    i += 1;
++                }
++            }
++            b if b.is_ascii_alphabetic() || b == b'_' || b >= 128 => {
++                i += 1;
++                while i < bytes.len()
++                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_' || bytes[i] >= 128)
++                {
++                    i += 1;
++                }
++            }
++            _ => {
++                i += 1;
++                continue;
++            }
++        }
++        let token = &code[start..i];
++        let scope = if token.starts_with('@') && token.len() > 1 {
++            "variable.parameter"
++        } else if token.eq_ignore_ascii_case("UNIQUE") {
++            "type.qualifier"
++        } else if ["PREPARE", "DEALLOCATE", "AUTOINCREMENT"]
++            .iter()
++            .any(|keyword| token.eq_ignore_ascii_case(keyword))
++        {
++            "keyword"
++        } else {
++            continue;
++        };
++        if errors
++            .iter()
++            .any(|range| range.start <= start && i <= range.end)
++            && !colors[..original]
++                .iter()
++                .any(|span| span.start < i && start < span.end)
++        {
++            if let Some(style) = theme.get_style(scope) {
++                colors.push(StyleInfo {
++                    start,
++                    end: i,
++                    style,
++                });
++            }
++        }
++    }
++}
+diff --git a/src/queries/highlights/smoke/example.sql b/src/queries/highlights/smoke/example.sql
+new file mode 100644
+index 0000000..d80a25d
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.sql
+@@ -0,0 +1,2 @@
++-- café: SQL ships inside RedVim
++SELECT 'hello', 42, 3.14, TRUE, NULL FROM messages WHERE id = 1;
+diff --git a/src/queries/highlights/smoke/mysql.sql b/src/queries/highlights/smoke/mysql.sql
+new file mode 100644
+index 0000000..0bbe050
+--- /dev/null
++++ b/src/queries/highlights/smoke/mysql.sql
+@@ -0,0 +1,18 @@
++-- café: MySQL migration constructs, never executed
++CREATE TABLE `messages` (
++    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
++    created_at DATETIME(3) NOT NULL,
++    body VARCHAR(255) NOT NULL,
++    UNIQUE KEY messages_body (body)
++) ENGINE=InnoDB DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
++ALTER TABLE messages MODIFY id BIGINT UNSIGNED NULL;
++SET @next_id = (SELECT COALESCE(MAX(id), 0) + 1 FROM messages);
++SET @ddl = CONCAT('ALTER TABLE messages AUTO_INCREMENT = ', @next_id);
++PREPARE migration_stmt FROM @ddl;
++EXECUTE migration_stmt;
++DEALLOCATE PREPARE migration_stmt;
++SELECT 'café', 42 FROM messages;
++CREATE TABLE `domains` (
++    `name` varchar(255) NOT NULL,
++    CONSTRAINT `domains_name_unique` UNIQUE(`name`)
++);
+diff --git a/src/queries/highlights/smoke/sqlite.sql b/src/queries/highlights/smoke/sqlite.sql
+new file mode 100644
+index 0000000..1f7684e
+--- /dev/null
++++ b/src/queries/highlights/smoke/sqlite.sql
+@@ -0,0 +1,11 @@
++/* café: SQLite migration constructs, never executed */
++CREATE TABLE IF NOT EXISTS messages (
++    id INTEGER PRIMARY KEY AUTOINCREMENT,
++    body TEXT NOT NULL,
++    active BOOLEAN DEFAULT TRUE
++);
++CREATE INDEX IF NOT EXISTS messages_body ON messages(body);
++INSERT INTO messages(body) VALUES ('it''s café');
++select m.body from messages AS m JOIN messages AS n ON m.id = n.id WHERE m.id = 42;
++UPDATE messages SET body = 'hello' WHERE id = 1;
++DELETE FROM messages WHERE id = 2;
+diff --git a/src/queries/highlights/sql.scm b/src/queries/highlights/sql.scm
+new file mode 100644
+index 0000000..9fda4ed
+--- /dev/null
++++ b/src/queries/highlights/sql.scm
+@@ -0,0 +1,445 @@
++(object_reference
++  name: (identifier) @type)
++
++(invocation
++  (object_reference
++    name: (identifier) @function.call))
++
++[
++  (keyword_gist)
++  (keyword_btree)
++  (keyword_hash)
++  (keyword_spgist)
++  (keyword_gin)
++  (keyword_brin)
++  (keyword_array)
++  (keyword_object_id)
++] @function.call
++
++(relation
++  alias: (identifier) @variable)
++
++(field
++  name: (identifier) @property)
++
++(term
++  alias: (identifier) @variable)
++
++((term
++   value: (cast
++    name: (keyword_cast) @function.call
++    parameter: [(literal)]?)))
++
++(literal) @string
++(comment) @comment @spell
++(marginalia) @comment
++
++((literal) @number
++   (#match? @number "^[-+]?[0-9]+$"))
++
++((literal) @float
++  (#match? @float "^[-+]?[0-9]*\.[0-9]*$"))
++
++(parameter) @variable.parameter
++
++[
++ (keyword_true)
++ (keyword_false)
++] @boolean
++
++[
++ (keyword_asc)
++ (keyword_desc)
++ (keyword_terminated)
++ (keyword_escaped)
++ (keyword_unsigned)
++ (keyword_nulls)
++ (keyword_last)
++ (keyword_delimited)
++ (keyword_replication)
++ (keyword_auto_increment)
++ (keyword_default)
++ (keyword_collate)
++ (keyword_concurrently)
++ (keyword_engine)
++ (keyword_always)
++ (keyword_generated)
++ (keyword_preceding)
++ (keyword_following)
++ (keyword_first)
++ (keyword_current_timestamp)
++ (keyword_immutable)
++ (keyword_atomic)
++ (keyword_parallel)
++ (keyword_leakproof)
++ (keyword_safe)
++ (keyword_cost)
++ (keyword_strict)
++] @attribute
++
++[
++ (keyword_materialized)
++ (keyword_recursive)
++ (keyword_temp)
++ (keyword_temporary)
++ (keyword_unlogged)
++ (keyword_external)
++ (keyword_parquet)
++ (keyword_csv)
++ (keyword_rcfile)
++ (keyword_textfile)
++ (keyword_orc)
++ (keyword_avro)
++ (keyword_jsonfile)
++ (keyword_sequencefile)
++ (keyword_volatile)
++] @keyword
++
++[
++ (keyword_case)
++ (keyword_when)
++ (keyword_then)
++ (keyword_else)
++] @conditional
++
++[
++  (keyword_select)
++  (keyword_from)
++  (keyword_where)
++  (keyword_index)
++  (keyword_join)
++  (keyword_primary)
++  (keyword_delete)
++  (keyword_create)
++  (keyword_show)
++  (keyword_unload)
++  (keyword_insert)
++  (keyword_merge)
++  (keyword_distinct)
++  (keyword_replace)
++  (keyword_update)
++  (keyword_into)
++  (keyword_overwrite)
++  (keyword_matched)
++  (keyword_values)
++  (keyword_value)
++  (keyword_attribute)
++  (keyword_set)
++  (keyword_left)
++  (keyword_right)
++  (keyword_outer)
++  (keyword_inner)
++  (keyword_full)
++  (keyword_order)
++  (keyword_partition)
++  (keyword_group)
++  (keyword_with)
++  (keyword_without)
++  (keyword_as)
++  (keyword_having)
++  (keyword_limit)
++  (keyword_offset)
++  (keyword_table)
++  (keyword_tables)
++  (keyword_key)
++  (keyword_references)
++  (keyword_foreign)
++  (keyword_constraint)
++  (keyword_force)
++  (keyword_use)
++  (keyword_for)
++  (keyword_if)
++  (keyword_exists)
++  (keyword_column)
++  (keyword_columns)
++  (keyword_cross)
++  (keyword_lateral)
++  (keyword_natural)
++  (keyword_alter)
++  (keyword_drop)
++  (keyword_add)
++  (keyword_view)
++  (keyword_end)
++  (keyword_is)
++  (keyword_using)
++  (keyword_between)
++  (keyword_window)
++  (keyword_no)
++  (keyword_data)
++  (keyword_type)
++  (keyword_rename)
++  (keyword_to)
++  (keyword_schema)
++  (keyword_owner)
++  (keyword_authorization)
++  (keyword_all)
++  (keyword_any)
++  (keyword_some)
++  (keyword_returning)
++  (keyword_begin)
++  (keyword_commit)
++  (keyword_rollback)
++  (keyword_transaction)
++  (keyword_only)
++  (keyword_like)
++  (keyword_similar)
++  (keyword_over)
++  (keyword_change)
++  (keyword_modify)
++  (keyword_after)
++  (keyword_before)
++  (keyword_range)
++  (keyword_rows)
++  (keyword_groups)
++  (keyword_exclude)
++  (keyword_current)
++  (keyword_ties)
++  (keyword_others)
++  (keyword_zerofill)
++  (keyword_format)
++  (keyword_fields)
++  (keyword_row)
++  (keyword_sort)
++  (keyword_compute)
++  (keyword_comment)
++  (keyword_location)
++  (keyword_cached)
++  (keyword_uncached)
++  (keyword_lines)
++  (keyword_stored)
++  (keyword_virtual)
++  (keyword_partitioned)
++  (keyword_analyze)
++  (keyword_explain)
++  (keyword_verbose)
++  (keyword_truncate)
++  (keyword_rewrite)
++  (keyword_optimize)
++  (keyword_vacuum)
++  (keyword_cache)
++  (keyword_language)
++  (keyword_called)
++  (keyword_conflict)
++  (keyword_declare)
++  (keyword_filter)
++  (keyword_function)
++  (keyword_input)
++  (keyword_name)
++  (keyword_oid)
++  (keyword_oids)
++  (keyword_precision)
++  (keyword_regclass)
++  (keyword_regnamespace)
++  (keyword_regproc)
++  (keyword_regtype)
++  (keyword_restricted)
++  (keyword_return)
++  (keyword_returns)
++  (keyword_separator)
++  (keyword_setof)
++  (keyword_stable)
++  (keyword_support)
++  (keyword_tblproperties)
++  (keyword_trigger)
++  (keyword_unsafe)
++  (keyword_admin)
++  (keyword_connection)
++  (keyword_cycle)
++  (keyword_database)
++  (keyword_encrypted)
++  (keyword_increment)
++  (keyword_logged)
++  (keyword_none)
++  (keyword_owned)
++  (keyword_password)
++  (keyword_reset)
++  (keyword_role)
++  (keyword_sequence)
++  (keyword_start)
++  (keyword_restart)
++  (keyword_tablespace)
++  (keyword_until)
++  (keyword_user)
++  (keyword_valid)
++  (keyword_action)
++  (keyword_definer)
++  (keyword_invoker)
++  (keyword_security)
++  (keyword_extension)
++  (keyword_version)
++  (keyword_out)
++  (keyword_inout)
++  (keyword_variadic)
++  (keyword_ordinality)
++  (keyword_session)
++  (keyword_isolation)
++  (keyword_level)
++  (keyword_serializable)
++  (keyword_repeatable)
++  (keyword_read)
++  (keyword_write)
++  (keyword_committed)
++  (keyword_uncommitted)
++  (keyword_deferrable)
++  (keyword_names)
++  (keyword_zone)
++  (keyword_immediate)
++  (keyword_deferred)
++  (keyword_constraints)
++  (keyword_snapshot)
++  (keyword_characteristics)
++  (keyword_off)
++  (keyword_follows)
++  (keyword_precedes)
++  (keyword_each)
++  (keyword_instead)
++  (keyword_of)
++  (keyword_initially)
++  (keyword_old)
++  (keyword_new)
++  (keyword_referencing)
++  (keyword_statement)
++  (keyword_execute)
++  (keyword_procedure)
++  (keyword_copy)
++  (keyword_delimiter)
++  (keyword_encoding)
++  (keyword_escape)
++  (keyword_force_not_null)
++  (keyword_force_null)
++  (keyword_force_quote)
++  (keyword_freeze)
++  (keyword_header)
++  (keyword_match)
++  (keyword_program)
++  (keyword_quote)
++  (keyword_stdin)
++  (keyword_extended)
++  (keyword_main)
++  (keyword_plain)
++  (keyword_storage)
++  (keyword_compression)
++  (keyword_duplicate)
++] @keyword
++
++[
++ (keyword_restrict)
++ (keyword_unbounded)
++ (keyword_unique)
++ (keyword_cascade)
++ (keyword_delayed)
++ (keyword_high_priority)
++ (keyword_low_priority)
++ (keyword_ignore)
++ (keyword_nothing)
++ (keyword_check)
++ (keyword_option)
++ (keyword_local)
++ (keyword_cascaded)
++ (keyword_wait)
++ (keyword_nowait)
++ (keyword_metadata)
++ (keyword_incremental)
++ (keyword_bin_pack)
++ (keyword_noscan)
++ (keyword_stats)
++ (keyword_statistics)
++ (keyword_maxvalue)
++ (keyword_minvalue)
++] @type.qualifier
++
++[
++  (keyword_int)
++  (keyword_null)
++  (keyword_boolean)
++  (keyword_binary)
++  (keyword_varbinary)
++  (keyword_image)
++  (keyword_bit)
++  (keyword_inet)
++  (keyword_character)
++  (keyword_smallserial)
++  (keyword_serial)
++  (keyword_bigserial)
++  (keyword_smallint)
++  (keyword_mediumint)
++  (keyword_bigint)
++  (keyword_tinyint)
++  (keyword_decimal)
++  (keyword_float)
++  (keyword_double)
++  (keyword_numeric)
++  (keyword_real)
++  (double)
++  (keyword_money)
++  (keyword_smallmoney)
++  (keyword_char)
++  (keyword_nchar)
++  (keyword_varchar)
++  (keyword_nvarchar)
++  (keyword_varying)
++  (keyword_text)
++  (keyword_string)
++  (keyword_uuid)
++  (keyword_json)
++  (keyword_jsonb)
++  (keyword_xml)
++  (keyword_bytea)
++  (keyword_enum)
++  (keyword_date)
++  (keyword_datetime)
++  (keyword_time)
++  (keyword_datetime2)
++  (keyword_datetimeoffset)
++  (keyword_smalldatetime)
++  (keyword_timestamp)
++  (keyword_timestamptz)
++  (keyword_geometry)
++  (keyword_geography)
++  (keyword_box2d)
++  (keyword_box3d)
++  (keyword_interval)
++] @type.builtin
++
++[
++  (keyword_in)
++  (keyword_and)
++  (keyword_or)
++  (keyword_not)
++  (keyword_by)
++  (keyword_on)
++  (keyword_do)
++  (keyword_union)
++  (keyword_except)
++  (keyword_intersect)
++] @keyword.operator
++
++[
++  "+"
++  "-"
++  "*"
++  "/"
++  "%"
++  "^"
++  ":="
++  "="
++  "<"
++  "<="
++  "!="
++  ">="
++  ">"
++  "<>"
++  (op_other)
++  (op_unary_other)
++] @operator
++
++[
++  "("
++  ")"
++] @punctuation.bracket
++
++[
++  ";"
++  ","
++  "."
++] @punctuation.delimiter
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index 2ba306e..5b4b630 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -59,7 +59,7 @@ fn assert_self_check_report(output: Output) {
+     let lines = stdout.lines().collect::<Vec<_>>();
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     for language in [
+-        "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make",
++        "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make", "sql",
+     ] {
+         assert!(
+             lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),
+-- 
+2.54.0 (Apple Git-157)
+

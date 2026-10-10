@@ -1,5 +1,9 @@
 # Environment Variables
 
+`RVCOM_TEST_ORIGIN` is a browser-qualification override only: the default is
+`http://127.0.0.1:3519`; the only alternative is `https://redvim.com`. It is not
+read by the website or deployment publisher and cannot select an AWS target.
+
 Canonical taxonomy for Astrohacker process environment variables and packaging
 script locals. Agents and humans should add new names only under this scheme.
 

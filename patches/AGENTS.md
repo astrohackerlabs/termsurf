@@ -49,9 +49,13 @@ the selected branch and pinned nested checkouts.
 
 Preview with `ah fork prepare <name> --dry-run`, then run
 `ah fork prepare <name>` to reconstruct and activate the selected series.
-This preserves old branches and caches and refuses unsafe/divergent state.
-PWD selects this checkout's forks, including on linked branches; no clone,
-network fetch, build, install, publication or fallback to main is implicit.
+A missing checkout whose manifest entry has `upstream` is created with a full
+`git clone` of that URL, then the series is applied. Chromium's `gclient`
+provision shallow-fetches that base, installs depot_tools, fetches the nested
+pins, applies the series, and syncs dependencies. An existing checkout is not
+fetched, replaced, or synced. Preparation preserves old branches and caches and refuses
+unsafe/divergent state. PWD selects this checkout's forks, including on linked
+branches. No build, install, publication, or fallback to main is implicit.
 
 For committed changes, use `ah patch export <name> --issue <id> --experiment <n>
 --from <commit> --dry-run`, then omit `--dry-run` to export. Supply the selected
@@ -60,10 +64,15 @@ series for a delta. The issue must be open, the experiment unfinished, and the
 clean fork branch must contain their IDs. Export verifies reconstruction and
 returns ordered hashes, HEAD/tree and a proposed manifest entry.
 
-Export only creates a new `patches/<name>/patches/issue-<id>/` directory;
-existing directories refuse. It does not support appending inside an existing
-issue archive or changing upstream bases. Such work retains the documented
-manual archive workflow; never delete historical patches to make export run.
+By default export creates a new `patches/<name>/patches/issue-<id>/` directory
+and refuses an existing one. A later experiment in the same issue uses
+`--append`: a delta whose new files are numbered after the last one, allowed only
+when that directory is the last selected archive directory. A series rebased
+onto a new upstream base uses `--base <commit>` with `--from` equal to it. That
+writes `issue-<id>/`, or `issue-<id>-exp<n>/` when the issue directory exists,
+and proposes the new base. Every mode replays the series in a scratch clone,
+and none rewrites existing archive bytes. Hand-built archives are recovery only;
+never delete historical patches to make export run.
 After export, explicitly update the reconstruction README, the manifest when
 the shipped series changes, and experiment evidence, then commit the archive
 with those records. Generated evidence is not approval or product qualification.

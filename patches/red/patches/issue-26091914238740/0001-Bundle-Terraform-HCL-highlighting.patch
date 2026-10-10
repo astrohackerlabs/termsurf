@@ -1,0 +1,900 @@
+From 0b84e97d5b48d0f369ad3e5897c65671a09269d4 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 09:39:05 -0500
+Subject: [PATCH] Bundle Terraform HCL highlighting
+
+Terraform plants its braces in the tree,
+With queries packed and licenses riding free.
+---
+ Cargo.lock                                  |  11 ++
+ Cargo.toml                                  |   1 +
+ docs/BUNDLED_LANGUAGES.md                   |  21 +-
+ docs/languages-provenance.json              |  17 ++
+ docs/licenses/tree-sitter-hcl.txt           | 201 ++++++++++++++++++++
+ examples/check_hcl_files.rs                 |  72 +++++++
+ src/config.rs                               |   1 +
+ src/editor.rs                               |  58 ++++++
+ src/highlighter.rs                          |  22 ++-
+ src/highlighter/bundled_checks.rs           |  95 ++++++++-
+ src/queries/highlights/hcl.scm              | 119 ++++++++++++
+ src/queries/highlights/smoke/example.tf     |  31 +++
+ src/queries/highlights/smoke/example.tfvars |   5 +
+ tests/self_check.rs                         |   1 +
+ 14 files changed, 650 insertions(+), 5 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-hcl.txt
+ create mode 100644 examples/check_hcl_files.rs
+ create mode 100644 src/queries/highlights/hcl.scm
+ create mode 100644 src/queries/highlights/smoke/example.tf
+ create mode 100644 src/queries/highlights/smoke/example.tfvars
+
+diff --git a/Cargo.lock b/Cargo.lock
+index cff37b718adaec8e677f30d54ba4cfed873bb844..59dbac5ed379590dc0f1bde81dd21371a67c4b3b 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2368,6 +2368,7 @@ dependencies = [
+  "tree-sitter-cpp",
+  "tree-sitter-css",
+  "tree-sitter-fish",
++ "tree-sitter-hcl",
+  "tree-sitter-html",
+  "tree-sitter-javascript",
+  "tree-sitter-json",
+@@ -3230,6 +3231,16 @@ dependencies = [
+  "tree-sitter",
+ ]
+ 
++[[package]]
++name = "tree-sitter-hcl"
++version = "1.1.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5a7b2cc3d7121553b84309fab9d11b3ff3d420403eef9ae50f9fd1cd9d9cf012"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-html"
+ version = "0.23.2"
+diff --git a/Cargo.toml b/Cargo.toml
+index bc780e63165c31683d9a595a391b34cb74e10ad3..909b692eae1d8f06f3be19e43f26cac59983895d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -63,6 +63,7 @@ husk-value = { version = "0.1.0", path = "crates/husk-value" }
+ husk-wasm = { version = "0.1.0", path = "crates/husk-wasm" }
+ 
+ [dependencies]
++tree-sitter-hcl = "=1.1.0"
+ tree-sitter-sequel = "=0.3.11"
+ anyhow = "1.0.79"
+ arboard = "3.4.1"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 11114f6d0be4598d8e90b7cc273fb7eaaa607c9a..3c65650b64794aee4bb65f72191132352c295ebb 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,6 +1,6 @@
+ # Bundled language expansion
+ 
+-RedVim compiles SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+@@ -8,6 +8,7 @@ parser/query files, trust command or runtime download is needed.
+ | Language | Files | Default indentation |
+ | --- | --- | --- |
+ | C | .c, .h | 4 spaces |
++| Terraform/HCL | .tf, .tfvars, .hcl; hcl/terraform syntax and fences | 2 spaces |
+ | SQL | .sql (case-insensitive), explicit sql syntax, Markdown sql fences | 4 spaces |
+ | C++ | .cc, .cpp, .cxx, .hpp, .hxx, .hh | 4 spaces |
+ | Python | .py, .pyi; python/python3 shebang | 4 spaces |
+@@ -34,7 +35,7 @@ is not a compiler or dialect conformance check.
+ 
+ Cargo.toml pins exact crate versions and Cargo.lock pins archive checksums.
+ `languages-provenance.json` records crate checksums, upstream source revisions,
+-query paths/hashes and license hashes. All eleven crates declare MIT; their license
++query paths/hashes and license hashes. HCL uses Apache-2.0; the other expansion crates use MIT. License
+ texts are in docs/licenses and distributed in the binary archive. When the crate
+ omits its license file, the recorded source URL identifies the exact upstream
+ revision used to retrieve it.
+@@ -60,6 +61,22 @@ cover detection overrides, default comments/indentation and Make tabs.
+ 
+ Nushell's independently pinned provenance remains in docs/NUSHELL.md.
+ 
++## Terraform/HCL
++
++The HCL parser is pinned at crate 1.1.0. The separately embedded nvim-treesitter
++query is pinned by revision and hashes in the provenance record. Adaptations
++map member captures to property and special punctuation to delimiter. Semantic
++keyword captures take precedence over generic identifier colors in the opted-in
++expansion languages, including configured aliases using those built-in grammars.
++Explicit theme styles remain authoritative.
++
++Default indentation is two spaces and line comments use `#`; highlighting also
++recognizes `//` and block comments. Templates retain distinct expression colors
++inside strings and heredocs. `.tf.json` and `.tfvars.json` remain JSON.
++Standalone `.tftpl` templates, embedded shell/JSON grammars, Terraform execution,
++LSP and formatting are outside this integration. All tracked infrastructure
++HCL is checked as text; no provider or infrastructure operations are required.
++
+ ## SQL dialect boundary
+ 
+ SQL uses the checksummed `tree-sitter-sequel =0.3.11` crate. Its published VCS
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index 4ee5e75e21deb9eda8ab515d73761cdb38534f3c..065a288a6b70761a169c867bf3bbf4ed717c2206 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -154,5 +154,22 @@
+     "license_file": "tree-sitter-sequel.txt",
+     "license_sha256": "3b3e4e4252d5d7d1c18e1257005f23242bf0580ad619204fd093c99b8c56748d",
+     "license_source": "https://raw.githubusercontent.com/DerekStride/tree-sitter-sql/7b51ecda191d36b92f5a90a8d1bc3faef1c7b8b8/LICENSE"
++  },
++  {
++    "name": "tree-sitter-hcl",
++    "version": "1.1.0",
++    "crate_sha256": "5a7b2cc3d7121553b84309fab9d11b3ff3d420403eef9ae50f9fd1cd9d9cf012",
++    "repository": "https://github.com/tree-sitter-grammars/tree-sitter-hcl",
++    "revision": "009def4ae38ec30e5b40beeae26efe93484ab286",
++    "query": "runtime/queries/hcl/highlights.scm",
++    "query_repository": "https://github.com/nvim-treesitter/nvim-treesitter",
++    "query_revision": "4d9466677a5ceadef104eaa0fe08d60d91c4e9a7",
++    "upstream_query_sha256": "553290666870af8165121a20914d5d3b549f5e3ba250773f06a0f331dcf9fcff",
++    "bundled_query_sha256": "dac296bb560c11b85e16e3371eaa6b6b9bff790cdd388f7a635ca24a18cca51e",
++    "license": "Apache-2.0",
++    "license_file": "tree-sitter-hcl.txt",
++    "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
++    "license_source": "published crate LICENSE",
++    "query_license_file": "nvim-treesitter.txt"
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-hcl.txt b/docs/licenses/tree-sitter-hcl.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64
+--- /dev/null
++++ b/docs/licenses/tree-sitter-hcl.txt
+@@ -0,0 +1,201 @@
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff --git a/examples/check_hcl_files.rs b/examples/check_hcl_files.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..201ebace0ee28f005619364484a9824ab86c8e89
+--- /dev/null
++++ b/examples/check_hcl_files.rs
+@@ -0,0 +1,72 @@
++//! Parse tracked infrastructure as text and check effective token colors.
++use anyhow::Context;
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn main() -> anyhow::Result<()> {
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let mut parser = tree_sitter::Parser::new();
++    parser.set_language(&tree_sitter_hcl::LANGUAGE.into())?;
++    let files = std::env::args().skip(1).collect::<Vec<_>>();
++    anyhow::ensure!(!files.is_empty(), "supply tracked HCL files");
++    for file in files {
++        let source = std::fs::read_to_string(&file)?;
++        anyhow::ensure!(
++            highlighter.language_id_for_file(Some(&file)) == Some("hcl"),
++            "{file}: detection"
++        );
++        let tree = parser.parse(&source, None).context("no tree")?;
++        anyhow::ensure!(
++            !tree.root_node().has_error(),
++            "{file}: {}",
++            tree.root_node().to_sexp()
++        );
++        let spans = highlighter.highlight("hcl", &source)?;
++        let mut cursor = tree.walk();
++        let mut checked = 0;
++        loop {
++            let node = cursor.node();
++            let scope = match node.kind() {
++                "numeric_lit" => Some("number"),
++                "bool_lit" => Some("boolean"),
++                "null_lit" => Some("constant"),
++                "comment" => Some("comment"),
++                "template_literal" => Some("string"),
++                "identifier" => match node.parent().map(|n| n.kind()) {
++                    Some("attribute") => Some("property"),
++                    Some("function_call") => Some("function"),
++                    _ => None,
++                },
++                _ => None,
++            };
++            if let Some(scope) = scope {
++                let byte = node.start_byte();
++                let actual = spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style);
++                anyhow::ensure!(
++                    actual == theme.get_style(scope).as_ref(),
++                    "{file}: {} at {byte}: expected {scope}, got {actual:?}",
++                    node.kind()
++                );
++                checked += 1;
++            }
++            if cursor.goto_first_child() {
++                continue;
++            }
++            while !cursor.goto_next_sibling() {
++                if !cursor.goto_parent() {
++                    anyhow::ensure!(checked > 0, "no tokens checked: {file}");
++                    println!("{file}: error-free, {checked} token colors checked");
++                    break;
++                }
++            }
++            if cursor.node() == tree.root_node() {
++                break;
++            }
++        }
++    }
++    Ok(())
++}
+diff --git a/src/config.rs b/src/config.rs
+index 8a08e155402b813c6908c007dbe09aa1312503a8..466063581fb420b53a643be83db9275c6c1d220f 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -736,6 +736,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("lua", "-- %s"),
+         ("markdown", "<!-- %s -->"),
+         ("nu", "# %s"),
++        ("hcl", "# %s"),
+         ("powershell", "# %s"),
+         ("python", "# %s"),
+         ("ruby", "# %s"),
+diff --git a/src/editor.rs b/src/editor.rs
+index 12eecad8c26c5918659a6ed093fc2725aeb635f8..14d58cc74139fcb387730398b354305b9baa04db 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6658,6 +6658,7 @@ impl Editor {
+                 ("zig", 4),
+                 ("swift", 4),
+                 ("sql", 4),
++                ("hcl", 2),
+                 ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+@@ -34507,6 +34508,7 @@ builtin = "rust"
+             ("example.zig", 4, "//"),
+             ("example.swift", 4, "//"),
+             ("example.sql", 4, "--"),
++            ("example.tf", 2, "#"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+         ] {
+@@ -34582,6 +34584,62 @@ builtin = "rust"
+             .starts_with("-- custom SELECT"));
+     }
+ 
++    #[tokio::test]
++    async fn hcl_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        editor.buffer_manager[0] =
++            Buffer::new(Some("notes.txt".into()), "value = \"café\"\n".into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("hcl".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("hcl"));
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('/'),
++            Action::InsertCharAtCursorPos('/'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), "value = \"café\"\n");
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.hcl]\nindent_width = 6\ncomment = '# custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 6);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("# custom value ="));
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index ccbb76e7a748e60052325d9b5df3a8ee9f87fb71..d0dd2ba11922b51b06fda8efadedfc0997908b41 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -151,6 +151,7 @@ impl LanguageRegistry {
+                         | "xml"
+                         | "make"
+                         | "sql"
++                        | "hcl"
+                 ),
+             });
+         }
+@@ -601,6 +602,8 @@ const MAX_CACHED_HIGHLIGHT_BYTES: usize = 64 * 1024;
+ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ 
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
++    ("hcl", "hcl"),
++    ("terraform", "hcl"),
+     ("sql", "sql"),
+     ("c", "c"),
+     ("cpp", "cpp"),
+@@ -1460,7 +1463,13 @@ impl Highlighter {
+                                 || (definition.semantic_refinements
+                                     && matches!(
+                                         capture_name.split('.').next(),
+-                                        Some("function" | "type" | "constructor" | "constant")
++                                        Some(
++                                            "function"
++                                                | "type"
++                                                | "constructor"
++                                                | "constant"
++                                                | "keyword"
++                                        )
+                                     ))
+                             {
+                                 refinement_colors.push(captured);
+@@ -2291,6 +2300,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "hcl",
++            extensions: &["tf", "tfvars", "hcl"],
++            filenames: &[],
++            language: Some(|| tree_sitter_hcl::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/hcl.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "sql",
+             extensions: &["sql"],
+@@ -5314,6 +5333,7 @@ mod tests {
+                 "css",
+                 "fish",
+                 "gitcommit",
++                "hcl",
+                 "html",
+                 "husk",
+                 "javascript",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index 17b3e1b5c8bb7600355efa2a72713cc7a00481ac..112db9df184872f628abc5901241e44e73351fff 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -9,6 +9,43 @@ struct Fixture {
+ }
+ 
+ const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "hcl",
++        filename: "example.auto.tfvars",
++        source: include_str!("../queries/highlights/smoke/example.tfvars"),
++        tokens: &[
++            ("# café", "comment"),
++            ("region", "property"),
++            ("earth", "string"),
++            ("3", "number"),
++            ("true", "boolean"),
++            ("null", "constant"),
++        ],
++    },
++    Fixture {
++        language: "hcl",
++        filename: "example.TF",
++        source: include_str!("../queries/highlights/smoke/example.tf"),
++        tokens: &[
++            ("# café", "comment"),
++            ("variable", "keyword"),
++            ("message", "property"),
++            ("hello", "string"),
++            ("upper", "function"),
++            ("lower", "function"),
++            ("not_an_expression", "string"),
++            ("true", "boolean"),
++            ("null", "constant"),
++            ("42", "number"),
++            ("for n", "keyword.repeat"),
++            ("if", "keyword.conditional"),
++            ("endfor", "keyword.repeat"),
++            ("endif", "keyword.conditional"),
++            ("// line", "comment"),
++            ("/* block", "comment"),
++            ("after", "property"),
++        ],
++    },
+     Fixture {
+         language: "sql",
+         filename: "example.SQL",
+@@ -220,11 +257,65 @@ mod tests {
+     use super::*;
+     use crate::theme::parse_vscode_theme_contents;
+ 
++    #[test]
++    fn hcl_routing_fences_and_incremental_edits() {
++        let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        for file in [
++            "main.TF",
++            "main.hcl",
++            "terraform.tfvars",
++            "example.auto.tfvars",
++            ".terraform.lock.hcl",
++        ] {
++            assert_eq!(highlighter.language_id_for_file(Some(file)), Some("hcl"));
++        }
++        for file in ["main.tf.json", "example.tfvars.json"] {
++            assert_eq!(highlighter.language_id_for_file(Some(file)), Some("json"));
++        }
++        for alias in ["hcl", "terraform"] {
++            assert_eq!(highlighter.language_id_for_name(alias), Some("hcl"));
++            let source = format!("```{alias}\nvalue = 42\n```\n");
++            let spans = highlighter.highlight("markdown", &source).unwrap();
++            let byte = source.find("42").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                theme.get_style("number").as_ref()
++            );
++        }
++        for code in [
++            "value = \"café ${upper(var.name)}\"\n",
++            "value = \"${",
++            "text = <<-EOT\n${var.name}\nEOT\n",
++            "value = 42\n",
++        ] {
++            let shape = |spans: Vec<StyleInfo>| {
++                spans
++                    .into_iter()
++                    .map(|s| (s.start, s.end, s.style))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(
++                shape(highlighter.highlight("hcl", code).unwrap()),
++                shape(
++                    Highlighter::new(&theme)
++                        .unwrap()
++                        .highlight("hcl", code)
++                        .unwrap()
++                )
++            );
++        }
++    }
++
+     #[test]
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 12);
++        assert_eq!(checked.len(), 13);
+     }
+ 
+     #[test]
+@@ -234,7 +325,7 @@ mod tests {
+             LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
+         let theme = Theme::default();
+         let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
+-        for definition in language_definitions().iter().take(11) {
++        for definition in language_definitions().iter().take(12) {
+             for extension in definition.extensions {
+                 assert_eq!(
+                     highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
+diff --git a/src/queries/highlights/hcl.scm b/src/queries/highlights/hcl.scm
+new file mode 100644
+index 0000000000000000000000000000000000000000..a5398bc9428f50d888364a4efa8d342fdea8f6f0
+--- /dev/null
++++ b/src/queries/highlights/hcl.scm
+@@ -0,0 +1,119 @@
++; Adapted for RedVim: member captures use property; special punctuation uses delimiter.
++; highlights.scm
++[
++  "!"
++  "*"
++  "/"
++  "%"
++  "+"
++  "-"
++  ">"
++  ">="
++  "<"
++  "<="
++  "=="
++  "!="
++  "&&"
++  "||"
++] @operator
++
++[
++  "{"
++  "}"
++  "["
++  "]"
++  "("
++  ")"
++] @punctuation.bracket
++
++[
++  "."
++  ".*"
++  ","
++  "[*]"
++] @punctuation.delimiter
++
++[
++  (ellipsis)
++  "?"
++  "=>"
++] @punctuation.delimiter
++
++[
++  ":"
++  "="
++] @none
++
++[
++  "for"
++  "endfor"
++  "in"
++] @keyword.repeat
++
++[
++  "if"
++  "else"
++  "endif"
++] @keyword.conditional
++
++[
++  (quoted_template_start) ; "
++  (quoted_template_end) ; "
++  (template_literal) ; non-interpolation/directive content
++] @string
++
++[
++  (heredoc_identifier) ; END
++  (heredoc_start) ; << or <<-
++] @punctuation.delimiter
++
++[
++  (template_interpolation_start) ; ${
++  (template_interpolation_end) ; }
++  (template_directive_start) ; %{
++  (template_directive_end) ; }
++  (strip_marker) ; ~
++] @punctuation.delimiter
++
++(numeric_lit) @number
++
++(bool_lit) @boolean
++
++(null_lit) @constant
++
++(comment) @comment @spell
++
++(identifier) @variable
++
++(body
++  (block
++    (identifier) @keyword))
++
++(body
++  (block
++    (body
++      (block
++        (identifier) @type))))
++
++(function_call
++  (identifier) @function)
++
++(attribute
++  (identifier) @property)
++
++; { key: val }
++;
++; highlight identifier keys as though they were block attributes
++(object_elem
++  key: (expression
++    (variable_expr
++      (identifier) @property)))
++
++; var.foo, data.bar
++;
++; first element in get_attr is a variable.builtin or a reference to a variable.builtin
++(expression
++  (variable_expr
++    (identifier) @variable.builtin)
++  (get_attr
++    (identifier) @property))
+diff --git a/src/queries/highlights/smoke/example.tf b/src/queries/highlights/smoke/example.tf
+new file mode 100644
+index 0000000000000000000000000000000000000000..a3380a86adb55114806d043a1b9f544b5ad32713
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.tf
+@@ -0,0 +1,31 @@
++# café: Terraform and HCL, never executed
++variable "region" {
++  type    = string
++  default = "earth"
++}
++locals {
++  message = "hello ${upper(var.region)}"
++  literal = "literal $${not_an_expression} and \"quotes\""
++  enabled = true
++  absent  = null
++  count   = 42
++  numbers = [for n in [1, 2] : n * 2 if n > 0]
++  mapping = { for k, v in { a = 1 } : k => v }
++  choice  = true ? "yes" : "no"
++  ids     = var.items[*].id
++  raw     = <<EOT
++raw café ${lower(var.region)}
++EOT
++  text = <<-END
++    %{ if true ~}
++    %{ for item in var.items ~}
++    item ${item}
++    %{ endfor ~}
++    %{ else ~}
++    empty
++    %{ endif ~}
++  END
++  // line comment
++  /* block comment */
++  after = "still highlighted"
++}
+diff --git a/src/queries/highlights/smoke/example.tfvars b/src/queries/highlights/smoke/example.tfvars
+new file mode 100644
+index 0000000000000000000000000000000000000000..95ec4e50ef5b33f077de4982bea4a96980fb8c83
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.tfvars
+@@ -0,0 +1,5 @@
++# café: synthetic values only
++region = "earth"
++enabled = true
++replicas = 3
++labels = { name = "demo", owner = null }
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index 5b4b630c869d0388d471dddc1b667959224a3e36..3e40b6e9b3488c9fcc1d2f4e1cbd7a13e6cad9fa 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -60,6 +60,7 @@ fn assert_self_check_report(output: Output) {
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     for language in [
+         "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make", "sql",
++        "hcl",
+     ] {
+         assert!(
+             lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),

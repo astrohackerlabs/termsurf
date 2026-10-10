@@ -1,0 +1,276 @@
+From ee105f18c3df92d0685fc48efd03a6553c992996 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Wed, 23 Sep 2026 05:55:30 -0500
+Subject: [PATCH] Color Markdown inline spans
+
+Parse each block-grammar inline range with tree-sitter-md's inline
+grammar and map its captures onto Austin Night's existing styles.
+---
+ src/highlighter.rs | 152 +++++++++++++++++++++++++++++++++++++++++++++
+ src/theme/mod.rs   |  32 ++++++++++
+ 2 files changed, 184 insertions(+)
+
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index 66a60503976bc617915912f963c97a5c9adf4de5..5ad83d53d12d425b3415b7f5df5828462d13d2be 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -541,8 +541,14 @@ struct CachedHighlight {
+     styles: Vec<StyleInfo>,
+ }
+ 
++struct MarkdownInlineHighlighter {
++    parser: Parser,
++    query: Query,
++}
++
+ pub struct Highlighter {
+     highlighters: HashMap<String, LanguageHighlighter>,
++    markdown_inline: Option<MarkdownInlineHighlighter>,
+     cached_highlight: Option<CachedHighlight>,
+     registry: Arc<LanguageRegistry>,
+     theme: Theme,
+@@ -711,6 +717,7 @@ impl Highlighter {
+     pub fn with_registry(theme: &Theme, registry: Arc<LanguageRegistry>) -> anyhow::Result<Self> {
+         Ok(Self {
+             highlighters: HashMap::new(),
++            markdown_inline: None,
+             cached_highlight: None,
+             registry,
+             theme: theme.clone(),
+@@ -719,6 +726,61 @@ impl Highlighter {
+         })
+     }
+ 
++    /// Colors emphasis, strong text, code spans, links, and images inside
++    /// Markdown `(inline)` nodes. The block grammar does not contain those nodes.
++    fn highlight_markdown_inline(
++        &mut self,
++        code: &str,
++        ranges: &[(usize, usize)],
++        colors: &mut Vec<StyleInfo>,
++    ) {
++        if ranges.is_empty() {
++            return;
++        }
++        if self.markdown_inline.is_none() {
++            let language: Language = tree_sitter_md::INLINE_LANGUAGE.into();
++            let mut parser = Parser::new();
++            if parser.set_language(&language).is_err() {
++                return;
++            }
++            let Ok(query) = Query::new(&language, tree_sitter_md::HIGHLIGHT_QUERY_INLINE) else {
++                return;
++            };
++            self.markdown_inline = Some(MarkdownInlineHighlighter { parser, query });
++        }
++        let Some(inline) = self.markdown_inline.as_mut() else {
++            return;
++        };
++        let theme = &self.theme;
++        for &(start, end) in ranges {
++            let Some(slice) = code.get(start..end) else {
++                continue;
++            };
++            let Some(tree) = inline.parser.parse(slice, None) else {
++                continue;
++            };
++            let mut cursor = QueryCursor::new();
++            let mut matches = cursor.matches(&inline.query, tree.root_node(), slice.as_bytes());
++            while let Some(mat) = matches.next() {
++                for cap in mat.captures {
++                    let name = inline.query.capture_names()[cap.index as usize];
++                    let Some(style) = markdown_inline_style(theme, name, cap.node.kind()) else {
++                        continue;
++                    };
++                    let cap_start = start.saturating_add(cap.node.start_byte());
++                    let cap_end = start.saturating_add(cap.node.end_byte());
++                    if cap_start < cap_end && cap_end <= code.len() {
++                        colors.push(StyleInfo {
++                            start: cap_start,
++                            end: cap_end,
++                            style,
++                        });
++                    }
++                }
++            }
++        }
++    }
++
+     /// Returns the immutable language snapshot used by this rendering surface.
+     #[must_use]
+     pub fn registry(&self) -> Arc<LanguageRegistry> {
+@@ -1449,6 +1511,7 @@ impl Highlighter {
+ 
+         let mut colors = Vec::new();
+         let mut raw_injections = Vec::new();
++        let mut inline_ranges = Vec::new();
+ 
+         {
+             let Some(highlighter) = self.highlighters.get_mut(&definition.id) else {
+@@ -1534,6 +1597,10 @@ impl Highlighter {
+                 }
+             }
+ 
++            if language_id == "markdown" {
++                collect_markdown_inline_ranges(tree.root_node(), &mut inline_ranges);
++            }
++
+             if code.len() <= MAX_CACHED_HIGHLIGHT_BYTES {
+                 highlighter.cached_tree = Some(CachedSyntaxTree {
+                     source: code.to_owned(),
+@@ -1542,6 +1609,10 @@ impl Highlighter {
+             }
+         }
+ 
++        if language_id == "markdown" {
++            self.highlight_markdown_inline(code, &inline_ranges, &mut colors);
++        }
++
+         let injections = raw_injections
+             .into_iter()
+             .filter_map(|injection| {
+@@ -1633,6 +1704,33 @@ fn stable_husk_identifier_token(
+     })
+ }
+ 
++fn collect_markdown_inline_ranges(node: tree_sitter::Node, ranges: &mut Vec<(usize, usize)>) {
++    if node.kind() == "inline" {
++        let start = node.start_byte();
++        let end = node.end_byte();
++        if start < end {
++            ranges.push((start, end));
++        }
++    }
++    let mut cursor = node.walk();
++    if cursor.goto_first_child() {
++        loop {
++            collect_markdown_inline_ranges(cursor.node(), ranges);
++            if !cursor.goto_next_sibling() {
++                break;
++            }
++        }
++    }
++}
++
++fn markdown_inline_style(theme: &Theme, capture: &str, kind: &str) -> Option<Style> {
++    match (capture, kind) {
++        ("text.literal", "code_span") => theme.get_style("markup.inline.raw.string.markdown"),
++        ("text.literal", _) => None,
++        _ => theme.get_style(capture),
++    }
++}
++
+ fn bundled_highlight_definition(definition: &RuntimeLanguageDefinition, language_id: &str) -> bool {
+     let expected_queries = match language_id {
+         "rust" => &[tree_sitter_rust::HIGHLIGHTS_QUERY][..],
+@@ -5705,6 +5803,60 @@ describe("StateStore", async () => {
+         }
+     }
+ 
++    #[test]
++    fn markdown_highlights_inline_spans_with_austin_night() {
++        let theme = parse_vscode_theme("themes/austin-night.json").unwrap();
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        let code = "# Title\n\nplain *em* _also_ **strong** `code` [label](https://example.com) ![alt](https://example.com/a.png)\n";
++        let styles = highlighter
++            .highlight_for_file(Some("note.md"), code)
++            .unwrap();
++        let italic = theme.get_style("markup.italic").unwrap();
++        let bold = theme.get_style("markup.bold").unwrap();
++        let raw = theme
++            .get_style("markup.inline.raw.string.markdown")
++            .unwrap();
++        let link = theme.get_style("markup.underline.link").unwrap();
++
++        assert_eq!(style_covering(&styles, code, "em"), Some(&italic));
++        assert_eq!(style_covering(&styles, code, "also"), Some(&italic));
++        assert_eq!(style_covering(&styles, code, "strong"), Some(&bold));
++        assert_eq!(style_covering(&styles, code, "code"), Some(&raw));
++        assert_eq!(style_covering(&styles, code, "label"), Some(&link));
++        assert_eq!(style_covering(&styles, code, "alt"), Some(&link));
++
++        let plain = code.find("plain").unwrap();
++        assert!(
++            styles
++                .iter()
++                .all(|style| style.end <= plain || style.start >= plain + "plain".len()),
++            "plain paragraph words should stay unstyled"
++        );
++        assert!(
++            styles
++                .iter()
++                .any(|style| style.start == 0 && style.end == 1),
++            "markdown heading marker should still be highlighted"
++        );
++        let title = code.find("Title").unwrap();
++        assert!(
++            styles
++                .iter()
++                .all(|style| style.end <= title || style.start >= title + "Title".len()),
++            "plain heading words stay unstyled"
++        );
++    }
++
++    fn style_covering<'a>(styles: &'a [StyleInfo], code: &str, token: &str) -> Option<&'a Style> {
++        let start = code.find(token).unwrap();
++        let end = start + token.len();
++        styles
++            .iter()
++            .filter(|style| style.start <= start && style.end >= end)
++            .min_by_key(|style| style.end - style.start)
++            .map(|style| &style.style)
++    }
++
+     #[test]
+     fn markdown_uses_theme_compatible_scopes() {
+         let mut highlighter = highlighter();
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index e9efe913669755d3ab4e48dc5d00a9e11f8a9b7d..999cfa08090eda241f8016ad2e9e9e2ee7af2464 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -593,6 +593,9 @@ fn markdown_scope_aliases(scope: &str) -> &'static [&'static str] {
+         "markup.underline.link.markdown" => {
+             &["string.other.link.title.markdown", "markup.underline"]
+         }
++        "text.emphasis" => &["markup.italic"],
++        "text.strong" => &["markup.bold"],
++        "text.uri" | "text.reference" => &["markup.underline.link"],
+         _ => &[],
+     }
+ }
+@@ -1391,6 +1394,35 @@ mod tests {
+         assert!(resolved.italic);
+     }
+ 
++    #[test]
++    fn get_style_matches_markdown_inline_aliases() {
++        let italic = style(192, 202, 245);
++        let bold = style(192, 202, 246);
++        let link = style(125, 207, 255);
++        let theme = theme_with_token_styles(vec![
++            TokenStyle {
++                name: None,
++                scope: vec!["markup.italic".to_string()],
++                style: italic.clone(),
++            },
++            TokenStyle {
++                name: None,
++                scope: vec!["markup.bold".to_string()],
++                style: bold.clone(),
++            },
++            TokenStyle {
++                name: None,
++                scope: vec!["markup.underline.link".to_string()],
++                style: link.clone(),
++            },
++        ]);
++
++        assert_eq!(theme.get_style("text.emphasis"), Some(italic));
++        assert_eq!(theme.get_style("text.strong"), Some(bold));
++        assert_eq!(theme.get_style("text.uri"), Some(link.clone()));
++        assert_eq!(theme.get_style("text.reference"), Some(link));
++    }
++
+     #[test]
+     fn get_style_matches_markdown_textmate_heading_aliases() {
+         let markdown_heading = style(139, 164, 176);

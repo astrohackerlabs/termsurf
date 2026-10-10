@@ -1,0 +1,121 @@
+From 5d45d33f575cf22bbc55b95fdabbbc4d0c09bc2e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 17:05:42 -0500
+Subject: [PATCH 42/45] Look up roamari-chromiumd on PATH and prefix
+
+Product Chromium no longer lives at
+astrohacker-terminal-ah-chromiumd. Resolve chromium
+to PATH roamari-chromiumd, then the roamari formula
+libexec helper. Keep env overrides. No ah-chromiumd
+fallback.
+---
+ src/apprt/termsurf.zig | 50 ++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index dff42c34156a406517ea0c8a0f8f11c41289942a..84c47d8ea68ea4a46fce132aa398ec176a93ea37 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -173,7 +173,9 @@ const chromium_path_env = "ASTROHACKER_CHROMIUM_PATH";
+ // Legacy dual-read aliases (deprecated codenames; still accepted one cycle).
+ const chromium_path_env_legacy = "TERMSURF_ROAMIUM_PATH";
+ const chromium_path_env_legacy_installed = "TERMSURF_INSTALLED_ROAMIUM_PATH";
+-const installed_chromium_path = "/opt/homebrew/opt/astrohacker-terminal-ah-chromiumd/ah-chromiumd";
++const installed_chromium_path = "/opt/homebrew/opt/roamari/libexec/roamari-chromiumd/roamari-chromiumd";
++const chromium_helper_basename = "roamari-chromiumd";
++var chromium_path_search_buf: [std.fs.max_path_bytes]u8 = undefined;
+ // Compat names used by older test helpers (same values as installed_*).
+ const installed_roamium_path = installed_chromium_path;
+ const roamium_path_env = chromium_path_env_legacy;
+@@ -2118,6 +2120,14 @@ fn resolveEnginePathFromEnv(
+         return resolved;
+     }
+ 
++    if (whichChromiumHelper()) |resolved| {
++        log.info(
++            "SetOverlay: named browser resolved browser={s} path={s}",
++            .{ browser, resolved },
++        );
++        return resolved;
++    }
++
+     log.info(
+         "SetOverlay: named browser resolved browser={s} installed_path={s}",
+         .{ browser, installed_default },
+@@ -2125,6 +2135,22 @@ fn resolveEnginePathFromEnv(
+     return installed_default;
+ }
+ 
++fn whichChromiumHelper() ?[]const u8 {
++    const path_env = processGetenv("PATH") orelse return null;
++    var it = std.mem.splitScalar(u8, path_env, ':');
++    while (it.next()) |dir| {
++        if (dir.len == 0) continue;
++        const joined = std.fmt.bufPrint(&chromium_path_search_buf, "{s}/{s}", .{ dir, chromium_helper_basename }) catch continue;
++        if (!isAbsolutePath(joined)) continue;
++        if (joined.len + 1 > chromium_path_search_buf.len) continue;
++        chromium_path_search_buf[joined.len] = 0;
++        const joined_z: [:0]u8 = chromium_path_search_buf[0..joined.len :0];
++        if (c.access(joined_z, c.X_OK) != 0) continue;
++        return joined_z;
++    }
++    return null;
++}
++
+ fn resolveBrowserExecutableForBuild(browser: []const u8, is_debug: bool) ?[]const u8 {
+     if (isAbsolutePath(browser)) {
+         log.info("SetOverlay: browser executable absolute path={s}", .{browser});
+@@ -6191,6 +6217,10 @@ test "termsurf render surface accepts opaque absolute browser selector" {
+ }
+ 
+ fn testBrowserResolutionWithRestoredEnv() !void {
++    try testWithRestoredEnv("PATH", testBrowserResolutionRestoreChromiumPrimary);
++}
++
++fn testBrowserResolutionRestoreChromiumPrimary() !void {
+     try testWithRestoredEnv(chromium_path_env, testBrowserResolutionRestoreRoamiumLegacy);
+ }
+ 
+@@ -6209,10 +6239,12 @@ fn testBrowserResolution() !void {
+     const fake_roamium_path: [:0]const u8 = "/tmp/termsurf-test-chromium";
+     const installed_roamium_override: [:0]const u8 = "/tmp/termsurf-installed-chromium";
+     const invalid_override: [:0]const u8 = "relative-browser";
++    const isolated_path: [:0]const u8 = "/usr/bin:/bin";
+ 
+     _ = c.unsetenv(chromium_path_env);
+     _ = c.unsetenv(roamium_path_env);
+     _ = c.unsetenv(installed_roamium_path_env);
++    if (c.setenv("PATH", isolated_path, 1) != 0) return error.SetenvFailed;
+ 
+     // Named WebKit / Ladybird are no longer product path targets.
+     try testing.expect(resolveBrowserExecutableForBuild("webkit", true) == null);
+@@ -6249,6 +6281,20 @@ fn testBrowserResolution() !void {
+     if (c.setenv(installed_roamium_path_env, installed_roamium_override, 1) != 0) return error.SetenvFailed;
+     try testing.expect(resolveBrowserExecutableForBuild(roamium, true) == null);
+     try testing.expectEqualStrings(installed_roamium_override, resolveBrowserExecutableForBuild(roamium, false).?);
++
++    _ = c.unsetenv(installed_roamium_path_env);
++    const path_dir = "/tmp/roamari-chromiumd-path-test";
++    const path_helper = path_dir ++ "/roamari-chromiumd";
++    std.fs.cwd().makeDir(path_dir) catch {};
++    defer removeTmpTree(path_dir);
++    {
++        const file = try std.fs.cwd().createFile(path_helper, .{ .mode = 0o755 });
++        file.close();
++    }
++    if (c.setenv("PATH", path_dir, 1) != 0) return error.SetenvFailed;
++    try testing.expectEqualStrings(path_helper, resolveBrowserExecutableForBuild(roamium, false).?);
++    if (c.setenv("PATH", isolated_path, 1) != 0) return error.SetenvFailed;
++    try testing.expectEqualStrings(installed_chromium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+ }
+ 
+ test "browser spawn argv carries one render surface service for every selector" {
+@@ -6259,7 +6305,7 @@ test "browser spawn argv carries one render surface service for every selector"
+         selector: []const u8,
+         listen_socket: []const u8,
+     }{
+-        .{ .executable = "/tmp/ah-chromiumd", .selector = "chromium", .listen_socket = "/tmp/termsurf-chromium.sock" },
++        .{ .executable = "/tmp/roamari-chromiumd", .selector = "chromium", .listen_socket = "/tmp/termsurf-chromium.sock" },
+         .{ .executable = "/tmp/build/renamed-chromium", .selector = "/tmp/build/renamed-chromium", .listen_socket = "/tmp/termsurf-direct-chromium.sock" },
+         .{ .executable = "/tmp/build/arbitrary-engine", .selector = "/tmp/build/arbitrary-engine", .listen_socket = "/tmp/termsurf-direct-engine.sock" },
+     };

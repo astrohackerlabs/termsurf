@@ -19,11 +19,79 @@ Preparation preserves original branches and caches and refuses divergent state.
 Linked checkouts use their own local forks, with no fallback to main.
 For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
 export verifies a new issue archive and proposes pins; README, manifest and
-experiment updates remain explicit. Existing archive directories refuse.
+experiment updates remain explicit. Use `--append` for a later experiment in
+the same issue and `--base <commit>` for a rebased series; see `ah patch help`.
 Older pin recipes below are historical reconstruction context; the manifest
 and these commands select current inputs.
 
-## Active Pin (Issue 26092000444652 Exp 1 roamari cask artifact)
+## Active Pin (Issue 26101009137900 Exp 5 Ghostty `main` tip)
+
+- **Upstream policy:** latest commit on **`main`** (via series base)
+- **Upstream base:** `246f702876b924a1cb7cade1e99274d1470302fc` (2026-10-09,
+  "cli/list-themes: add ctrl-d/u paging (#14607)"; 874 commits past `0ba62503`)
+- **Product branch:** `issue-26101009137900-exp5-ghostty-main`
+- **Product HEAD:** `7b42a3fc4f2aadcb4c166cb9b2b1456f00c06635`
+- **Product tree:** `db5de2eaa39db69d31a54d9ee3e00f87c275d97b`
+- **Issue archives:** cumulative `issue-26101009137900-exp5/` (**45** from
+  `base..HEAD`), exported with `ah patch export --base`; prior archives stay
+  historical on old base `0ba62503…`
+- **Patches:** **45** total; all 45 carried, three with resolved conflicts
+  (0001, 0003, 0013), none dropped. Ledgers: Issue 26101009137900 Experiment 5.
+- **Archive SHA-256:** `a4bcef0639284b60c700194ca458bb7a67ce1033f3ddef3f85e5561f1602aa0e`
+- **Toolchain:** Zig selected from `build.zig.zon` (0.16.0 via `zig@0.16`).
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Tests:** full `zig build test` (Zig + Xcode) exit 0 twice: 3956 pass,
+  25 skip (same set as unpatched `246f7028`).
+- **Verification:** `ah patch check ghostty`; `ah fork check ghostty`.
+
+## Prior Active Pin (Issue 26101009137900 Exp 3 suite green)
+
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26101009137900-exp3-suite-green`
+- **Product parent:** `ce23169e612fc16e76e9612926cab8c582928543`
+- **Product HEAD:** `948be39dd7912760ec8111197fcbb912d06274c7`
+- **Product tree:** `47673f2614709dc9695f64a09b048de140be153c`
+- **Patches:** prior 44 plus
+  `issue-26101009137900/0002-Fit-upstream-tests-to-TermSurf-defaults.patch`
+  (45 total; patch SHA-256
+  `a264757f53cb5490e14677502b9de30a54de9fb8693d03d8faf6bc896c1dae07`).
+  Appended manually (export refuses existing directories) with the exporter's
+  `format-patch --no-signature --binary --full-index`, `--start-number 2`.
+- **Archive SHA-256:** `6b6c3e99f6cf0f9d1e385d74239663e3de8153792d642bdd8e9f99de9aab0d63`
+- **Toolchain:** Zig selected from `build.zig.zon` (0.16.0 via `zig@0.16`).
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Scope:** test code only. The BOM config test clears TermSurf's bundled
+  default theme, and the menu unbind test accounts for TermSurf's `super+l`
+  Split Right binding. Full `zig build test` (Zig + Xcode) passes: 3407 pass,
+  16 skip (same set as unpatched base), 0 fail.
+- **Verification:** `ah patch check ghostty`; `ah fork check ghostty`; full
+  suite via `^(nu ../../scripts/lib/zig-toolchain.nu) build test` in
+  `forks/ghostty`.
+
+## Prior Active Pin (Issue 26101009137900 Exp 2 Zig 0.16 tests)
+
+- **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
+- **Product branch:** `issue-26101009137900-exp2-zig016-tests`
+- **Product parent:** `15437c7eb0e3e8a8e56fc44482169e81cdd48726` (replayed
+  equivalent of the prior pin's `52163ef9…`, same tree `6a375c3d…`)
+- **Product HEAD:** `ce23169e612fc16e76e9612926cab8c582928543`
+- **Product tree:** `6ec1ac08fc5554f47b7bdd395fa7d35e2ca99f36`
+- **Patches:** prior 43 plus
+  `issue-26101009137900/0001-Port-TermSurf-tests-to-Zig-0.16.patch`
+  (44 total; patch SHA-256
+  `4a6ff4743d694f97f242e92a5c6686197fcb18c3e861afa873d1ded5d2aa86ab`).
+- **Archive SHA-256:** `4e230d0e82c565dd736bec9c01830d27e38c08f64d0e840ea3b65a75341252e3`
+- **Toolchain:** Zig selected from `build.zig.zon` (0.16.0 via `zig@0.16`).
+- **Release authority:** `patches/release-manifest.json` ghostty entry.
+- **Scope:** test code only. Port the roamari helper tests off removed
+  `std.fs.cwd()`, give `browse_chrome`'s `open_config` its payload, and move
+  libc `environ` off the startup envp before tests mutate the environment.
+  The unit suite compiles again. Two TermSurf-induced test failures remain
+  (`handle bom in config files`, Xcode `MenuShortcutManagerTests.unbindShouldDiscardDefault`);
+  unpatched base passes both. See Issue 26101009137900 Experiment 2.
+- **Verification:** `ah patch check ghostty`; `ah fork check ghostty`.
+
+## Prior Active Pin (Issue 26092000444652 Exp 1 roamari cask artifact)
 
 - **Upstream base:** `0ba6250388641f52135414b38c4259aa682c489b`
 - **Product branch:** `issue-26092000444652-exp1-roamari-cask-artifact`
@@ -1145,13 +1213,16 @@ git -C forks/ghostty format-patch -1 HEAD \
 
 ## Build / verify
 
-```sh
-scripts/build.sh ahterm --release
+Zig is selected from `forks/ghostty/build.zig.zon`; see `AGENTS.md`. Never
+run a bare `zig`.
+
+```nu
+scripts/build.nu ahterm --release
 # identity
-"./forks/ghostty/macos/build/Release/Astrohacker Terminal.app/Contents/MacOS/ahterm" +version
+^"./forks/ghostty/macos/build/Release/Astrohacker TermSurf.app/Contents/MacOS/ahterm" +version
 # host TermSurf browser-resolution unit test
-cd forks/ghostty && zig build test \
-  -Dtest-filter="termsurf server register matches profile and browser"
+cd forks/ghostty
+^(nu ../../scripts/lib/zig-toolchain.nu) build test -Dtest-filter="termsurf server register matches profile and browser"
 ```
 
 ## Merge-upstream checklist
@@ -1159,6 +1230,8 @@ cd forks/ghostty && zig build test \
 1. Discover tip: `git ls-remote https://github.com/ghostty-org/ghostty.git refs/heads/main`
 2. Fetch; create `issue-NNNN-ghostty-upstream` from the tip SHA.
 3. `git am` current archive (or re-apply prior product commit); resolve conflicts.
+   If the new `build.zig.zon` changes `minimum_zig_version`'s major.minor,
+   `brew install zig@<major>.<minor>`; the build names it if missing.
 4. Build `ahterm` Release; run `+version` and TermSurf unit filters.
 5. `git format-patch -1` into `patches/ghostty/patches/issue-NNNN/`.
 6. Update this README Current State (base SHA, branch, archive path, date).

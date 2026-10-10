@@ -1,0 +1,2217 @@
+From 15fd9f8627e153c1644be165b8ee7979d8ebe0f2 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 14:09:06 -0500
+Subject: [PATCH] Make Austin Night the RedVim default
+
+Tokyo lends its syntax, Austin lends the glow,
+Sodium lights the numbers as the night winds blow.
+Lost themes come home; your chosen colors stay,
+And readable comments finally get their say.
+---
+ default_config.toml       |    2 +-
+ src/assets.rs             |   42 +-
+ src/config.rs             |    4 +-
+ src/main.rs               |   88 +-
+ src/theme/austin_night.rs |  198 +++++
+ src/theme/mod.rs          |    2 +
+ themes/AUSTIN_NIGHT.md    |   70 ++
+ themes/THIRD_PARTY.md     |    7 +
+ themes/austin-night.json  | 1644 +++++++++++++++++++++++++++++++++++++
+ 9 files changed, 2033 insertions(+), 24 deletions(-)
+ create mode 100644 src/theme/austin_night.rs
+ create mode 100644 themes/AUSTIN_NIGHT.md
+ create mode 100644 themes/austin-night.json
+
+diff --git a/default_config.toml b/default_config.toml
+index 5fa054b..c9e2864 100644
+--- a/default_config.toml
++++ b/default_config.toml
+@@ -9,7 +9,7 @@
+ 
+ # Name of the VSCode theme to use. The theme file should be present in the
+ # themes directory: $XDG_CONFIG_HOME/astrohacker/redvim/themes or $HOME/.config/astrohacker/redvim/themes
+-theme = "red.json"
++theme = "austin-night.json"
+ 
+ # The number of lines to scroll when using the mouse wheel
+ mouse_scroll_lines = 3
+diff --git a/src/assets.rs b/src/assets.rs
+index b5b13e5..b537eb5 100644
+--- a/src/assets.rs
++++ b/src/assets.rs
+@@ -18,6 +18,7 @@ use include_dir::{include_dir, Dir};
+ 
+ /// Complete configuration defaults embedded in the Red binary.
+ pub const DEFAULT_CONFIG: &str = include_str!("../default_config.toml");
++pub const DEFAULT_THEME_FILENAME: &str = "austin-night.json";
+ 
+ static THEMES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/themes");
+ static PLUGINS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/plugins");
+@@ -648,7 +649,7 @@ mod tests {
+     fn starter_config_is_loadable_as_user_overrides() {
+         let config = Config::from_user_toml_with_overrides(&starter_config(), &[]).unwrap();
+ 
+-        assert_eq!(config.theme, "red.json");
++        assert_eq!(config.theme, crate::assets::DEFAULT_THEME_FILENAME);
+         assert!(config.plugins.contains_key("theme_browser"));
+         assert!(config.keys.normal.contains_key("Ctrl-t"));
+     }
+@@ -692,6 +693,45 @@ mod tests {
+         assert!(bundled_plugin_specifier("../plugins/theme_browser.hk").is_none());
+     }
+ 
++    #[test]
++    fn austin_night_user_and_runtime_overrides_preserve_effective_colors() {
++        let config = tempfile::tempdir().unwrap();
++        let runtime = tempfile::tempdir().unwrap();
++        fs::create_dir(config.path().join("themes")).unwrap();
++        fs::create_dir(runtime.path().join("themes")).unwrap();
++        let runtime_path = runtime.path().join("themes").join(DEFAULT_THEME_FILENAME);
++        let user_path = config.path().join("themes").join(DEFAULT_THEME_FILENAME);
++        let tokyo = bundled_theme("tokyo-night.json").unwrap();
++        let mocha = bundled_theme("mocha.json").unwrap();
++        fs::write(&runtime_path, tokyo).unwrap();
++        let _guard = RedRuntimeGuard::set(runtime.path());
++        let asset = resolve_theme(DEFAULT_THEME_FILENAME, config.path()).unwrap();
++        assert_eq!(asset.source, RuntimeAssetSource::Runtime);
++        let parsed =
++            crate::theme::parse_vscode_theme_contents(&asset.read_to_string().unwrap()).unwrap();
++        assert_eq!(
++            parsed.style.bg,
++            crate::theme::parse_vscode_theme_contents(tokyo)
++                .unwrap()
++                .style
++                .bg
++        );
++        fs::write(&user_path, mocha).unwrap();
++        let asset = resolve_theme(DEFAULT_THEME_FILENAME, config.path()).unwrap();
++        assert_eq!(asset.source, RuntimeAssetSource::User);
++        let parsed =
++            crate::theme::parse_vscode_theme_contents(&asset.read_to_string().unwrap()).unwrap();
++        assert_eq!(
++            parsed.style.bg,
++            crate::theme::parse_vscode_theme_contents(mocha)
++                .unwrap()
++                .style
++                .bg
++        );
++        assert_eq!(fs::read_to_string(runtime_path).unwrap(), tokyo);
++        assert_eq!(fs::read_to_string(user_path).unwrap(), mocha);
++    }
++
+     #[test]
+     fn resolver_prefers_user_then_runtime_then_embedded() {
+         let config_dir = unique_temp_dir("resolver-config");
+diff --git a/src/config.rs b/src/config.rs
+index 4ecd4a7..06781b5 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -2026,7 +2026,7 @@ fn try_merge_valid_user_config(base: &toml::Value, user: &toml::Value) -> Option
+ 
+ fn safe_loaded_config(path: &Path, code: &str, message: String) -> anyhow::Result<LoadedConfig> {
+     let mut config = deserialize_config(embedded_config_value()?)?;
+-    config.theme = "red.json".to_string();
++    config.theme = crate::assets::DEFAULT_THEME_FILENAME.to_string();
+     config.log_file = None;
+     config.plugins.clear();
+     config.disabled_plugins.clear();
+@@ -3307,7 +3307,7 @@ unknown_setting = true
+         assert!(!loaded.config.formatting.on_save);
+         assert!(loaded.config.lsp.servers.is_empty());
+         assert!(loaded.config.log_file.is_none());
+-        assert_eq!(loaded.config.theme, "red.json");
++        assert_eq!(loaded.config.theme, crate::assets::DEFAULT_THEME_FILENAME);
+     }
+ 
+     #[test]
+diff --git a/src/main.rs b/src/main.rs
+index 88c521f..962202e 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1040,8 +1040,8 @@ fn format_error(error: &anyhow::Error) -> String {
+     }
+ }
+ 
+-fn load_theme(theme_name: &str) -> anyhow::Result<Theme> {
+-    let Some(theme_asset) = assets::resolve_theme(theme_name, &Config::config_dir()) else {
++fn load_theme(theme_name: &str, config_dir: &Path) -> anyhow::Result<Theme> {
++    let Some(theme_asset) = assets::resolve_theme(theme_name, config_dir) else {
+         anyhow::bail!("Theme file {} not found", theme_name);
+     };
+ 
+@@ -1052,6 +1052,26 @@ fn load_theme(theme_name: &str) -> anyhow::Result<Theme> {
+     }
+ }
+ 
++fn load_configured_theme(loaded: &mut LoadedConfig, config_dir: &Path) -> anyhow::Result<Theme> {
++    match load_theme(&loaded.config.theme, config_dir) {
++        Ok(theme) => Ok(theme),
++        Err(error) => {
++            loaded.add_runtime_diagnostic(
++                "CFG302",
++                ConfigDiagnosticSeverity::Error,
++                &["theme".to_string()],
++                format!("configured theme could not be loaded: {error}"),
++                "used the embedded default theme",
++            );
++            loaded.config.theme = assets::DEFAULT_THEME_FILENAME.to_string();
++            let contents = assets::bundled_theme(assets::DEFAULT_THEME_FILENAME)
++                .ok_or_else(|| anyhow::anyhow!("embedded default theme is missing"))?;
++            parse_vscode_theme_contents(contents)
++                .map_err(|error| anyhow::anyhow!("embedded default theme is invalid: {error}"))
++        }
++    }
++}
++
+ fn finalize_runtime_config(
+     mut loaded: LoadedConfig,
+ ) -> anyhow::Result<(LoadedConfig, Theme, Option<Logger>)> {
+@@ -1090,23 +1110,7 @@ fn finalize_runtime_config(
+         );
+     }
+ 
+-    let theme = match load_theme(&loaded.config.theme) {
+-        Ok(theme) => theme,
+-        Err(error) => {
+-            loaded.add_runtime_diagnostic(
+-                "CFG302",
+-                ConfigDiagnosticSeverity::Error,
+-                &["theme".to_string()],
+-                format!("configured theme could not be loaded: {error}"),
+-                "used the embedded default theme",
+-            );
+-            loaded.config.theme = "red.json".to_string();
+-            let contents = assets::bundled_theme("red.json")
+-                .ok_or_else(|| anyhow::anyhow!("embedded default theme is missing"))?;
+-            parse_vscode_theme_contents(contents)
+-                .map_err(|error| anyhow::anyhow!("embedded default theme is invalid: {error}"))?
+-        }
+-    };
++    let theme = load_configured_theme(&mut loaded, &config_dir)?;
+ 
+     let logger = match loaded.config.log_file.clone() {
+         Some(configured_path) => {
+@@ -1397,6 +1401,50 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn austin_night_recovery_bypasses_malformed_shadow_and_preserves_user_theme() {
++        let dir = tempfile::tempdir().unwrap();
++        let themes = dir.path().join("themes");
++        std::fs::create_dir(&themes).unwrap();
++        let shadow = themes.join(assets::DEFAULT_THEME_FILENAME);
++        std::fs::write(&shadow, "{ invalid").unwrap();
++        let custom = themes.join("custom.json");
++        let custom_bytes = assets::bundled_theme("tokyo-night.json").unwrap();
++        std::fs::write(&custom, custom_bytes).unwrap();
++        for name in [
++            "missing-theme.json",
++            assets::DEFAULT_THEME_FILENAME,
++            "custom.json",
++        ] {
++            let mut loaded = Config::load_user_toml(
++                &format!("theme = {name:?}"),
++                &dir.path().join("config.toml"),
++                &[],
++            )
++            .unwrap();
++            let theme = load_configured_theme(&mut loaded, dir.path()).unwrap();
++            if name == "custom.json" {
++                assert_eq!(theme.name, "Tokyo Night");
++                assert!(loaded.diagnostics.is_empty());
++                assert_eq!(loaded.config.theme, name);
++            } else {
++                assert_eq!(theme.name, "Austin Night");
++                assert_eq!(
++                    theme.style.bg,
++                    Some(red::color::Color::Rgb {
++                        r: 17,
++                        g: 18,
++                        b: 25
++                    })
++                );
++                assert_eq!(loaded.config.theme, assets::DEFAULT_THEME_FILENAME);
++                assert!(loaded.diagnostics.iter().any(|d| d.code == "CFG302"));
++            }
++        }
++        assert_eq!(std::fs::read_to_string(shadow).unwrap(), "{ invalid");
++        assert_eq!(std::fs::read_to_string(custom).unwrap(), custom_bytes);
++    }
++
+     #[test]
+     fn runtime_config_falls_back_for_missing_theme_and_invalid_log_path() {
+         let directory = tempfile::tempdir().unwrap();
+@@ -1409,7 +1457,7 @@ mod tests {
+ 
+         let (loaded, _, logger) = finalize_runtime_config(loaded).unwrap();
+ 
+-        assert_eq!(loaded.config.theme, "red.json");
++        assert_eq!(loaded.config.theme, crate::assets::DEFAULT_THEME_FILENAME);
+         assert!(loaded.config.log_file.is_none());
+         assert!(logger.is_none());
+         assert!(loaded
+diff --git a/src/theme/austin_night.rs b/src/theme/austin_night.rs
+new file mode 100644
+index 0000000..da8255b
+--- /dev/null
++++ b/src/theme/austin_night.rs
+@@ -0,0 +1,198 @@
++//! Regression contract for the embedded product default, independent of Mocha fixtures.
++use super::*;
++use crate::{assets, config::Config, highlighter::Highlighter};
++
++fn theme() -> Theme {
++    parse_vscode_theme_contents(assets::bundled_theme(assets::DEFAULT_THEME_FILENAME).unwrap())
++        .unwrap()
++}
++
++fn rgb(hex: &str) -> Color {
++    crate::color::parse_rgb(hex).unwrap()
++}
++
++#[test]
++fn default_config_and_recovery_select_austin_night() {
++    let dir = tempfile::tempdir().unwrap();
++    let path = dir.path().join("config.toml");
++    let missing = Config::load_user_file(&path, &[]).unwrap();
++    assert_eq!(missing.config.theme, assets::DEFAULT_THEME_FILENAME);
++    for source in [
++        "",
++        "relative_line_numbers = true",
++        &assets::starter_config(),
++        "invalid = [",
++    ] {
++        std::fs::write(&path, source).unwrap();
++        let loaded = Config::load_user_file(&path, &[]).unwrap();
++        assert_eq!(loaded.config.theme, assets::DEFAULT_THEME_FILENAME);
++        assert_eq!(std::fs::read_to_string(&path).unwrap(), source);
++        assert_eq!(loaded.diagnostics.is_empty(), source != "invalid = [");
++    }
++    for name in ["red.json", "mocha.json", "tokyo-night.json"] {
++        let source = format!("theme = {name:?}");
++        let loaded = Config::load_user_toml(&source, &path, &[]).unwrap();
++        assert_eq!(loaded.config.theme, name);
++        let selected = parse_vscode_theme_contents(assets::bundled_theme(name).unwrap()).unwrap();
++        assert_ne!(selected.style.bg, theme().style.bg);
++    }
++}
++
++#[test]
++fn palette_scope_coverage_and_effective_contrast() {
++    let theme = theme();
++    assert_eq!(theme.name, "Austin Night");
++    assert_eq!(theme.style.bg, Some(rgb("#111219")));
++    assert_eq!(theme.style.fg, Some(rgb("#c0caf5")));
++    let palette = [
++        "#111219", "#060608", "#292e42", "#c0caf5", "#a9b1d6", "#9aa5ce", "#3b4261", "#7aa2f7",
++        "#bb9af7", "#7dcfff", "#9ece6a", "#e8a84a", "#f7768e", "#33467c", "#15161e", "#414868",
++    ]
++    .map(rgb);
++    for color in theme.colors.values().copied().chain(
++        theme
++            .token_styles
++            .iter()
++            .flat_map(|s| [s.style.fg, s.style.bg].into_iter().flatten()),
++    ) {
++        assert!(palette.contains(&color), "off-palette {color:?}");
++    }
++    let base = parse_vscode_theme_contents(include_str!("../../themes/tokyo-night.json")).unwrap();
++    assert_eq!(base.token_styles.len(), 114);
++    for (a, b) in base
++        .token_styles
++        .iter()
++        .zip(theme.token_styles.iter().skip(9))
++    {
++        assert_eq!(a.scope, b.scope);
++        assert_eq!(
++            (a.style.bold, a.style.italic, a.style.underline),
++            (b.style.bold, b.style.italic, b.style.underline)
++        );
++    }
++    for (scope, color) in [
++        ("comment", "#9aa5ce"),
++        ("keyword", "#bb9af7"),
++        ("function", "#7aa2f7"),
++        ("type", "#7dcfff"),
++        ("operator", "#7dcfff"),
++        ("number", "#e8a84a"),
++        ("string", "#9ece6a"),
++        ("variable.parameter", "#e8a84a"),
++    ] {
++        let style = theme.get_style(scope).unwrap();
++        assert_eq!(style.fg, Some(rgb(color)), "{scope}");
++        for bg in [
++            theme.style.bg.unwrap(),
++            theme.line_highlight_style.as_ref().unwrap().bg.unwrap(),
++        ] {
++            assert!(
++                contrast_ratio(style.fg.unwrap(), bg) >= 4.5,
++                "{scope} on {bg:?}"
++            );
++        }
++    }
++    for style in [
++        &theme.style,
++        &theme.gutter_style,
++        &theme.ui_style.popup,
++        &theme.ui_style.dialog,
++        &theme.ui_style.muted,
++        &theme.ui_style.picker_selected_item,
++        &theme.statusline_style.inner_style,
++        &theme.statusline_style.outer_style,
++        theme.selection_style.as_ref().unwrap(),
++    ] {
++        assert!(
++            contrast_ratio(style.fg.unwrap(), style.bg.unwrap()) >= 4.5,
++            "{style:?}"
++        );
++    }
++    for bg in [
++        theme.find_match_style.as_ref().unwrap().bg.unwrap(),
++        theme
++            .find_match_highlight_style
++            .as_ref()
++            .unwrap()
++            .bg
++            .unwrap(),
++    ] {
++        let adjusted = theme.ensure_text_contrast(&Style {
++            bg: Some(bg),
++            ..theme.style.clone()
++        });
++        assert!(contrast_ratio(adjusted.fg.unwrap(), bg) >= 4.5);
++    }
++}
++
++#[test]
++fn actual_language_content_uses_austin_night_colors() {
++    let theme = theme();
++    let mut highlighter = Highlighter::new(&theme).unwrap();
++    for (language, source, tokens) in [
++        (
++            "nu",
++            "# Austin\nlet count = 42\nprint \"hello\"\n",
++            vec![
++                ("# Austin", "#9aa5ce"),
++                ("let", "#bb9af7"),
++                ("42", "#e8a84a"),
++                ("hello", "#9ece6a"),
++            ],
++        ),
++        (
++            "sql",
++            "-- Austin\nSELECT 42, 'hello' FROM users;\n",
++            vec![
++                ("-- Austin", "#9aa5ce"),
++                ("SELECT", "#bb9af7"),
++                ("42", "#e8a84a"),
++                ("hello", "#9ece6a"),
++            ],
++        ),
++        (
++            "rust",
++            "// Austin\nfn answer() -> u32 { 42 }\n",
++            vec![
++                ("// Austin", "#9aa5ce"),
++                ("fn", "#bb9af7"),
++                ("answer", "#7aa2f7"),
++                ("u32", "#7dcfff"),
++                ("42", "#e8a84a"),
++            ],
++        ),
++        (
++            "c",
++            "// Austin\nint answer(void) { return 42; }\n",
++            vec![
++                ("// Austin", "#9aa5ce"),
++                ("int", "#7dcfff"),
++                ("answer", "#7aa2f7"),
++                ("return", "#bb9af7"),
++                ("42", "#e8a84a"),
++            ],
++        ),
++        (
++            "wgsl",
++            "// Austin\nfn answer() -> u32 { return 42u; }\n",
++            vec![
++                ("// Austin", "#9aa5ce"),
++                ("fn", "#bb9af7"),
++                ("answer", "#7aa2f7"),
++                ("u32", "#7dcfff"),
++                ("42u", "#e8a84a"),
++            ],
++        ),
++    ] {
++        let spans = highlighter.highlight(language, source).unwrap();
++        for (token, color) in tokens {
++            let byte = source.find(token).unwrap();
++            let actual = spans
++                .iter()
++                .rev()
++                .find(|s| s.start <= byte && byte < s.end)
++                .and_then(|s| s.style.fg);
++            assert_eq!(actual, Some(rgb(color)), "{language}: {token}");
++        }
++    }
++}
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index c2f7966..e9efe91 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -6,6 +6,8 @@
+ //! comments through the VS Code adapter but produces the same internal model as bundled
+ //! native themes.
+ 
++#[cfg(test)]
++mod austin_night;
+ mod surface;
+ mod vscode;
+ pub(crate) use surface::{DiffPalette, SurfaceCardColors, SurfaceCardPalette, SurfacePalette};
+diff --git a/themes/AUSTIN_NIGHT.md b/themes/AUSTIN_NIGHT.md
+new file mode 100644
+index 0000000..6306765
+--- /dev/null
++++ b/themes/AUSTIN_NIGHT.md
+@@ -0,0 +1,70 @@
++# Austin Night
++
++RedVim's embedded normal and recovery default is `austin-night.json`.
++An existing explicit choice continues to win. Select
++`theme = "austin-night.json"` in your config, or remove the theme override,
++to adopt the default. No configuration files are migrated or rewritten.
++
++Astrohacker adapted Enkia's MIT Tokyo Night, retaining all 114 token rules,
++their scope lists and font styles. Original `tokyo-night.json` SHA-256:
++`4ef4134792f0411ee6852a52716b306d24dd344c5883fc831488ad8d44b8bbfb`.
++See `licenses/enkia-tokyo-night.txt` for the original copyright and license.
++Nine leading rules specify RedVim's effective Tree-sitter capture colors;
++this is necessary because scope lookup takes the first matching rule.
++Unused VS Code semantic-token metadata is omitted: RedVim does not consume it.
++
++## Palette provenance
++
++These are existing Astrohacker palette values, not a new color scheme.
++Source paths below are relative to the Astrohacker business repository.
++
++| Source | SHA-256 |
++| --- | --- |
++| `code/astrohacker/ts/ui/src/styles/tokens.css` | `496faf92dc5e2ab184f86ec0b1b4949fd99fbb7b637da939a0d389f47fd15b76` |
++| `code/termplot/ts/termplot/app/lib/austin-night-template.ts` | `db55b8382fd7a1c2d8ea6a03e6642b47db37222c1139084b028abfed800c7b97` |
++| `patches/ghostty/patches/issue-26081616315182/0031-Austin-Night-theme-and-product-sodium-yellow.patch` | `6863e82327e52a8f4c664eace75c9e8a73cb77f054c1ba8e1e0675aa1580d8b2` |
++| `patches/ghostty/patches/issue-26081616315182/0032-Dock-AppIcon-plate-and-Austin-Night-111219-ground.patch` | `fb033021676e8549202dd4ddae3abd27eca2ddaddad689cdbd4e78803163cda2` |
++
++## Effective roles
++
++| Roles | Color |
++| --- | --- |
++| Editor ground | `#111219` |
++| Inactive tabs, inputs, inner status | `#060608` |
++| Current line, popup/dialog, active tab, inline comment | `#292e42` |
++| Main text, variables, cursor, selected text | `#c0caf5` |
++| Properties, secondary text, ANSI white | `#a9b1d6` |
++| Comments, gutter, placeholders | `#9aa5ce` |
++| Separators | `#3b4261` |
++| Functions, focus, links, modified Git indicators, outer status background | `#7aa2f7` |
++| Keywords | `#bb9af7` |
++| Types, operators, escapes | `#7dcfff` |
++| Strings, added Git indicators | `#9ece6a` |
++| Constants, numbers, parameters, warnings, active search | `#e8a84a` |
++| Tags, errors, deleted Git indicators | `#f7768e` |
++| Selection, other search matches | `#33467c` |
++| Cursor text and ANSI black | `#15161e` |
++| ANSI bright black | `#414868` |
++
++Normal and bright ANSI accents share the six accent colors; bright white uses
++main text. Outer status text is explicitly editor ground on blue. The intro's
++existing red period is preserved by the renderer.
++
++The remaining inherited workbench fields are consolidated to the nearest RGB
++palette value, then important editor roles are assigned explicitly as above.
++Inherited token colors are consolidated to the nearest of the ten text colors
++from main foreground through red. For example, orange `#ff9e64` and gold
++`#e0af68` become sodium, cyan variants become `#7dcfff`, and dark comment
++variants are superseded by the readable leading comment rule. The JSON is the
++complete per-key/per-scope mapping; no runtime color generation is required.
++All authored colors are opaque. Tokyo Night's alpha overlays are replaced by
++opaque palette colors, so there is no inherited alpha-compositing dependency.
++
++RedVim's existing renderer still adjusts text contrast for cursor, selection,
++brackets and search. In particular, active sodium search needs a dark adjusted
++foreground; it must not retain light syntax foreground. Unit tests check actual
++parsed styles and at least 4.5:1 normal/current-line syntax, gutter, menu,
++selected, status and contrast-adjusted search text. Separator and ANSI swatches
++are not treated as ordinary editor text. The existing surface renderer may
++derive additional colors for cards and state separation; this theme does not
++change that shared rendering behavior.
+diff --git a/themes/THIRD_PARTY.md b/themes/THIRD_PARTY.md
+index cc3f166..7be003d 100644
+--- a/themes/THIRD_PARTY.md
++++ b/themes/THIRD_PARTY.md
+@@ -4,6 +4,13 @@ This folder includes VS Code color-theme JSON files imported from
+ Marketplace extension packages. Included themes are flattened so Red can
+ load them directly without following extension-local `include` paths.
+ 
++## Astrohacker Adaptations
++
++`austin-night.json` (Austin Night) is Astrohacker's adaptation of Enkia's
++`tokyo-night.json`. The original MIT copyright and permission notice is retained
++in `licenses/enkia-tokyo-night.txt`. Palette provenance and the adaptation's
++role assignments are documented in `AUSTIN_NIGHT.md`.
++
+ ## Imported Packages
+ 
+ | Package | License | Source | Notice |
+diff --git a/themes/austin-night.json b/themes/austin-night.json
+new file mode 100644
+index 0000000..2df3a47
+--- /dev/null
++++ b/themes/austin-night.json
+@@ -0,0 +1,1644 @@
++{
++  "name": "Austin Night",
++  "author": "Astrohacker, adapted from Enkia Tokyo Night (MIT)",
++  "type": "dark",
++  "colors": {
++    "foreground": "#9aa5ce",
++    "descriptionForeground": "#9aa5ce",
++    "disabledForeground": "#414868",
++    "focusBorder": "#7aa2f7",
++    "errorForeground": "#414868",
++    "widget.shadow": "#c0caf5",
++    "scrollbar.shadow": "#060608",
++    "badge.background": "#9aa5ce",
++    "badge.foreground": "#a9b1d6",
++    "icon.foreground": "#9aa5ce",
++    "settings.headerForeground": "#9aa5ce",
++    "window.activeBorder": "#111219",
++    "window.inactiveBorder": "#111219",
++    "sash.hoverBorder": "#3b4261",
++    "toolbar.activeBackground": "#292e42",
++    "toolbar.hoverBackground": "#292e42",
++    "extensionButton.prominentBackground": "#33467c",
++    "extensionButton.prominentHoverBackground": "#33467c",
++    "extensionButton.prominentForeground": "#c0caf5",
++    "extensionBadge.remoteBackground": "#33467c",
++    "extensionBadge.remoteForeground": "#c0caf5",
++    "button.background": "#33467c",
++    "button.hoverBackground": "#33467c",
++    "button.secondaryBackground": "#3b4261",
++    "button.foreground": "#c0caf5",
++    "progressBar.background": "#33467c",
++    "input.background": "#060608",
++    "input.foreground": "#c0caf5",
++    "input.border": "#111219",
++    "input.placeholderForeground": "#9aa5ce",
++    "inputOption.activeForeground": "#c0caf5",
++    "inputOption.activeBackground": "#33467c",
++    "inputValidation.infoForeground": "#c0caf5",
++    "inputValidation.infoBackground": "#33467c",
++    "inputValidation.infoBorder": "#33467c",
++    "inputValidation.warningForeground": "#060608",
++    "inputValidation.warningBackground": "#e8a84a",
++    "inputValidation.warningBorder": "#e8a84a",
++    "inputValidation.errorForeground": "#c0caf5",
++    "inputValidation.errorBackground": "#414868",
++    "inputValidation.errorBorder": "#414868",
++    "dropdown.foreground": "#9aa5ce",
++    "dropdown.background": "#15161e",
++    "dropdown.listBackground": "#15161e",
++    "activityBar.background": "#15161e",
++    "activityBar.foreground": "#9aa5ce",
++    "activityBar.inactiveForeground": "#3b4261",
++    "activityBar.border": "#15161e",
++    "activityBarBadge.background": "#33467c",
++    "activityBarBadge.foreground": "#c0caf5",
++    "activityBarTop.foreground": "#9aa5ce",
++    "activityBarTop.inactiveForeground": "#3b4261",
++    "tree.indentGuidesStroke": "#292e42",
++    "sideBar.foreground": "#9aa5ce",
++    "sideBar.background": "#15161e",
++    "sideBar.border": "#111219",
++    "sideBarTitle.foreground": "#9aa5ce",
++    "sideBarSectionHeader.background": "#15161e",
++    "sideBarSectionHeader.foreground": "#a9b1d6",
++    "sideBarSectionHeader.border": "#111219",
++    "sideBar.dropBackground": "#15161e",
++    "list.dropBackground": "#15161e",
++    "list.deemphasizedForeground": "#9aa5ce",
++    "list.activeSelectionBackground": "#292e42",
++    "list.activeSelectionForeground": "#a9b1d6",
++    "list.inactiveSelectionBackground": "#15161e",
++    "list.inactiveSelectionForeground": "#a9b1d6",
++    "list.focusBackground": "#15161e",
++    "list.focusForeground": "#a9b1d6",
++    "list.hoverBackground": "#111219",
++    "list.hoverForeground": "#a9b1d6",
++    "list.highlightForeground": "#9aa5ce",
++    "list.invalidItemForeground": "#e8a84a",
++    "list.errorForeground": "#f7768e",
++    "list.warningForeground": "#e8a84a",
++    "listFilterWidget.background": "#111219",
++    "listFilterWidget.outline": "#33467c",
++    "listFilterWidget.noMatchesOutline": "#414868",
++    "pickerGroup.foreground": "#a9b1d6",
++    "pickerGroup.border": "#111219",
++    "scrollbarSlider.background": "#9aa5ce",
++    "scrollbarSlider.hoverBackground": "#9aa5ce",
++    "scrollbarSlider.activeBackground": "#9aa5ce",
++    "editorBracketHighlight.foreground1": "#7aa2f7",
++    "editorBracketHighlight.foreground2": "#7aa2f7",
++    "editorBracketHighlight.foreground3": "#9aa5ce",
++    "editorBracketHighlight.foreground4": "#7aa2f7",
++    "editorBracketHighlight.foreground5": "#9ece6a",
++    "editorBracketHighlight.foreground6": "#e8a84a",
++    "editorBracketHighlight.unexpectedBracket.foreground": "#f7768e",
++    "editorBracketPairGuide.activeBackground1": "#7aa2f7",
++    "editorBracketPairGuide.activeBackground2": "#7aa2f7",
++    "editorBracketPairGuide.activeBackground3": "#9aa5ce",
++    "editorBracketPairGuide.activeBackground4": "#7aa2f7",
++    "editorBracketPairGuide.activeBackground5": "#9ece6a",
++    "editorBracketPairGuide.activeBackground6": "#e8a84a",
++    "selection.background": "#414868",
++    "editor.background": "#111219",
++    "editor.foreground": "#c0caf5",
++    "editor.foldBackground": "#111219",
++    "editorLink.activeForeground": "#a9b1d6",
++    "editor.selectionBackground": "#33467c",
++    "editor.inactiveSelectionBackground": "#414868",
++    "editor.findMatchBackground": "#e8a84a",
++    "editor.findMatchBorder": "#e8a84a",
++    "editor.findMatchHighlightBackground": "#33467c",
++    "editor.findRangeHighlightBackground": "#414868",
++    "editor.rangeHighlightBackground": "#414868",
++    "editor.wordHighlightBackground": "#414868",
++    "editor.wordHighlightStrongBackground": "#414868",
++    "editor.selectionHighlightBackground": "#414868",
++    "editorCursor.foreground": "#c0caf5",
++    "editorIndentGuide.background1": "#292e42",
++    "editorIndentGuide.activeBackground1": "#3b4261",
++    "editorLineNumber.foreground": "#9aa5ce",
++    "editorLineNumber.activeForeground": "#c0caf5",
++    "editor.lineHighlightBackground": "#292e42",
++    "editorWhitespace.foreground": "#3b4261",
++    "editorMarkerNavigation.background": "#15161e",
++    "editorHoverWidget.background": "#292e42",
++    "editorHoverWidget.border": "#7aa2f7",
++    "editorBracketMatch.background": "#292e42",
++    "editorBracketMatch.border": "#3b4261",
++    "editorOverviewRuler.border": "#111219",
++    "editorOverviewRuler.errorForeground": "#f7768e",
++    "editorOverviewRuler.warningForeground": "#e8a84a",
++    "editorOverviewRuler.infoForeground": "#33467c",
++    "editorOverviewRuler.bracketMatchForeground": "#111219",
++    "editorOverviewRuler.findMatchForeground": "#a9b1d6",
++    "editorOverviewRuler.rangeHighlightForeground": "#a9b1d6",
++    "editorOverviewRuler.selectionHighlightForeground": "#a9b1d6",
++    "editorOverviewRuler.wordHighlightForeground": "#bb9af7",
++    "editorOverviewRuler.wordHighlightStrongForeground": "#bb9af7",
++    "editorOverviewRuler.modifiedForeground": "#414868",
++    "editorOverviewRuler.addedForeground": "#292e42",
++    "editorOverviewRuler.deletedForeground": "#3b4261",
++    "editorRuler.foreground": "#111219",
++    "editorError.foreground": "#f7768e",
++    "editorWarning.foreground": "#e8a84a",
++    "editorInfo.foreground": "#7dcfff",
++    "editorHint.foreground": "#9aa5ce",
++    "editorGutter.modifiedBackground": "#7aa2f7",
++    "editorGutter.addedBackground": "#9ece6a",
++    "editorGutter.deletedBackground": "#f7768e",
++    "editorGhostText.foreground": "#9aa5ce",
++    "minimapGutter.modifiedBackground": "#33467c",
++    "minimapGutter.addedBackground": "#3b4261",
++    "minimapGutter.deletedBackground": "#414868",
++    "editorGroup.border": "#111219",
++    "editorGroup.dropBackground": "#15161e",
++    "editorGroupHeader.tabsBorder": "#111219",
++    "editorGroupHeader.tabsBackground": "#15161e",
++    "editorGroupHeader.noTabsBackground": "#15161e",
++    "editorGroupHeader.border": "#111219",
++    "editorPane.background": "#15161e",
++    "editorWidget.foreground": "#9aa5ce",
++    "editorWidget.background": "#15161e",
++    "editorWidget.border": "#111219",
++    "editorWidget.resizeBorder": "#414868",
++    "editorSuggestWidget.background": "#15161e",
++    "editorSuggestWidget.border": "#111219",
++    "editorSuggestWidget.selectedBackground": "#15161e",
++    "editorSuggestWidget.highlightForeground": "#9aa5ce",
++    "editorCodeLens.foreground": "#9aa5ce",
++    "editorLightBulb.foreground": "#e8a84a",
++    "editorLightBulbAutoFix.foreground": "#e8a84a",
++    "editorInlayHint.foreground": "#9aa5ce",
++    "peekView.border": "#111219",
++    "peekViewEditor.background": "#15161e",
++    "peekViewEditor.matchHighlightBackground": "#33467c",
++    "peekViewTitle.background": "#111219",
++    "peekViewTitleLabel.foreground": "#a9b1d6",
++    "peekViewTitleDescription.foreground": "#9aa5ce",
++    "peekViewResult.background": "#111219",
++    "peekViewResult.selectionForeground": "#a9b1d6",
++    "peekViewResult.selectionBackground": "#33467c",
++    "peekViewResult.lineForeground": "#a9b1d6",
++    "peekViewResult.fileForeground": "#9aa5ce",
++    "peekViewResult.matchHighlightBackground": "#33467c",
++    "diffEditor.insertedTextBackground": "#7aa2f7",
++    "diffEditor.removedTextBackground": "#f7768e",
++    "diffEditor.insertedLineBackground": "#7aa2f7",
++    "diffEditor.removedLineBackground": "#f7768e",
++    "diffEditorGutter.insertedLineBackground": "#7aa2f7",
++    "diffEditorGutter.removedLineBackground": "#f7768e",
++    "diffEditorOverview.insertedForeground": "#7aa2f7",
++    "diffEditorOverview.removedForeground": "#f7768e",
++    "diffEditor.diagonalFill": "#292e42",
++    "diffEditor.unchangedCodeBackground": "#292e42",
++    "multiDiffEditor.headerBackground": "#15161e",
++    "multiDiffEditor.border": "#15161e",
++    "breadcrumb.background": "#15161e",
++    "breadcrumbPicker.background": "#15161e",
++    "breadcrumb.foreground": "#414868",
++    "breadcrumb.focusForeground": "#a9b1d6",
++    "breadcrumb.activeSelectionForeground": "#a9b1d6",
++    "tab.activeBackground": "#292e42",
++    "tab.inactiveBackground": "#060608",
++    "tab.activeForeground": "#c0caf5",
++    "tab.hoverForeground": "#a9b1d6",
++    "tab.activeBorder": "#33467c",
++    "tab.inactiveForeground": "#9aa5ce",
++    "tab.border": "#3b4261",
++    "tab.unfocusedActiveForeground": "#a9b1d6",
++    "tab.unfocusedInactiveForeground": "#9aa5ce",
++    "tab.unfocusedHoverForeground": "#a9b1d6",
++    "tab.activeModifiedBorder": "#15161e",
++    "tab.inactiveModifiedBorder": "#15161e",
++    "tab.unfocusedActiveBorder": "#15161e",
++    "tab.lastPinnedBorder": "#292e42",
++    "panel.background": "#15161e",
++    "panel.border": "#111219",
++    "panelTitle.activeForeground": "#9aa5ce",
++    "panelTitle.inactiveForeground": "#3b4261",
++    "panelTitle.activeBorder": "#15161e",
++    "panelInput.border": "#15161e",
++    "statusBar.foreground": "#c0caf5",
++    "statusBar.background": "#060608",
++    "statusBar.border": "#111219",
++    "statusBar.noFolderBackground": "#15161e",
++    "statusBar.debuggingBackground": "#15161e",
++    "statusBar.debuggingForeground": "#9aa5ce",
++    "statusBarItem.activeBackground": "#111219",
++    "statusBarItem.hoverBackground": "#15161e",
++    "statusBarItem.prominentBackground": "#7aa2f7",
++    "statusBarItem.prominentHoverBackground": "#15161e",
++    "titleBar.activeForeground": "#9aa5ce",
++    "titleBar.inactiveForeground": "#9aa5ce",
++    "titleBar.activeBackground": "#15161e",
++    "titleBar.inactiveBackground": "#15161e",
++    "titleBar.border": "#111219",
++    "walkThrough.embeddedEditorBackground": "#15161e",
++    "textLink.foreground": "#7aa2f7",
++    "textLink.activeForeground": "#7aa2f7",
++    "textPreformat.foreground": "#9aa5ce",
++    "textBlockQuote.background": "#15161e",
++    "textCodeBlock.background": "#15161e",
++    "textSeparator.foreground": "#3b4261",
++    "debugExceptionWidget.border": "#414868",
++    "debugExceptionWidget.background": "#111219",
++    "debugToolBar.background": "#111219",
++    "debugConsole.infoForeground": "#9aa5ce",
++    "debugConsole.errorForeground": "#f7768e",
++    "debugConsole.sourceForeground": "#9aa5ce",
++    "debugConsole.warningForeground": "#e8a84a",
++    "debugConsoleInputIcon.foreground": "#7dcfff",
++    "editor.stackFrameHighlightBackground": "#e8a84a",
++    "editor.focusedStackFrameHighlightBackground": "#7dcfff",
++    "debugView.stateLabelForeground": "#9aa5ce",
++    "debugView.stateLabelBackground": "#15161e",
++    "debugView.valueChangedHighlight": "#33467c",
++    "debugTokenExpression.name": "#7dcfff",
++    "debugTokenExpression.value": "#9aa5ce",
++    "debugTokenExpression.string": "#9ece6a",
++    "debugTokenExpression.boolean": "#e8a84a",
++    "debugTokenExpression.number": "#e8a84a",
++    "debugTokenExpression.error": "#f7768e",
++    "debugIcon.breakpointForeground": "#f7768e",
++    "debugIcon.breakpointDisabledForeground": "#414868",
++    "debugIcon.breakpointUnverifiedForeground": "#f7768e",
++    "terminal.background": "#111219",
++    "terminal.foreground": "#c0caf5",
++    "terminal.selectionBackground": "#33467c",
++    "terminal.ansiBlack": "#15161e",
++    "terminal.ansiRed": "#f7768e",
++    "terminal.ansiGreen": "#9ece6a",
++    "terminal.ansiYellow": "#e8a84a",
++    "terminal.ansiBlue": "#7aa2f7",
++    "terminal.ansiMagenta": "#bb9af7",
++    "terminal.ansiCyan": "#7dcfff",
++    "terminal.ansiWhite": "#a9b1d6",
++    "terminal.ansiBrightBlack": "#414868",
++    "terminal.ansiBrightRed": "#f7768e",
++    "terminal.ansiBrightGreen": "#9ece6a",
++    "terminal.ansiBrightYellow": "#e8a84a",
++    "terminal.ansiBrightBlue": "#7aa2f7",
++    "terminal.ansiBrightMagenta": "#bb9af7",
++    "terminal.ansiBrightCyan": "#7dcfff",
++    "terminal.ansiBrightWhite": "#c0caf5",
++    "gitDecoration.modifiedResourceForeground": "#7aa2f7",
++    "gitDecoration.ignoredResourceForeground": "#414868",
++    "gitDecoration.deletedResourceForeground": "#f7768e",
++    "gitDecoration.renamedResourceForeground": "#9aa5ce",
++    "gitDecoration.addedResourceForeground": "#9ece6a",
++    "gitDecoration.untrackedResourceForeground": "#9ece6a",
++    "gitDecoration.conflictingResourceForeground": "#e8a84a",
++    "gitDecoration.stageDeletedResourceForeground": "#f7768e",
++    "gitDecoration.stageModifiedResourceForeground": "#7aa2f7",
++    "notebook.editorBackground": "#15161e",
++    "notebook.cellEditorBackground": "#15161e",
++    "notebook.cellBorderColor": "#111219",
++    "notebook.focusedCellBorder": "#3b4261",
++    "notebook.cellStatusBarItemHoverBackground": "#15161e",
++    "charts.red": "#f7768e",
++    "charts.blue": "#7aa2f7",
++    "charts.yellow": "#e8a84a",
++    "charts.orange": "#e8a84a",
++    "charts.green": "#7aa2f7",
++    "charts.purple": "#9aa5ce",
++    "charts.foreground": "#9aa5ce",
++    "charts.lines": "#15161e",
++    "scmGraph.historyItemHoverLabelForeground": "#15161e",
++    "scmGraph.foreground1": "#e8a84a",
++    "scmGraph.foreground2": "#e8a84a",
++    "scmGraph.foreground3": "#7aa2f7",
++    "scmGraph.foreground4": "#7aa2f7",
++    "scmGraph.foreground5": "#bb9af7",
++    "scmGraph.historyItemHoverAdditionsForeground": "#7aa2f7",
++    "scmGraph.historyItemHoverDeletionsForeground": "#f7768e",
++    "scmGraph.historyItemRefColor": "#7aa2f7",
++    "scmGraph.historyItemRemoteRefColor": "#7aa2f7",
++    "scmGraph.historyItemBaseRefColor": "#9aa5ce",
++    "scmGraph.historyItemHoverDefaultLabelForeground": "#a9b1d6",
++    "merge.currentHeaderBackground": "#7aa2f7",
++    "merge.currentContentBackground": "#33467c",
++    "merge.incomingHeaderBackground": "#33467c",
++    "merge.incomingContentBackground": "#33467c",
++    "mergeEditor.change.background": "#7aa2f7",
++    "mergeEditor.change.word.background": "#7aa2f7",
++    "mergeEditor.conflict.unhandledUnfocused.border": "#e8a84a",
++    "mergeEditor.conflict.unhandledFocused.border": "#e8a84a",
++    "mergeEditor.conflict.handledUnfocused.border": "#7aa2f7",
++    "mergeEditor.conflict.handledFocused.border": "#7aa2f7",
++    "mergeEditor.conflict.handled.minimapOverViewRuler": "#9aa5ce",
++    "mergeEditor.conflict.unhandled.minimapOverViewRuler": "#e8a84a",
++    "gitlens.trailingLineForegroundColor": "#33467c",
++    "gitlens.gutterUncommittedForegroundColor": "#7aa2f7",
++    "gitlens.gutterForegroundColor": "#9aa5ce",
++    "gitlens.gutterBackgroundColor": "#15161e",
++    "notificationCenterHeader.background": "#111219",
++    "notifications.background": "#111219",
++    "notificationLink.foreground": "#9aa5ce",
++    "notificationsErrorIcon.foreground": "#f7768e",
++    "notificationsWarningIcon.foreground": "#e8a84a",
++    "notificationsInfoIcon.foreground": "#33467c",
++    "menubar.selectionForeground": "#a9b1d6",
++    "menubar.selectionBackground": "#15161e",
++    "menubar.selectionBorder": "#15161e",
++    "menu.foreground": "#9aa5ce",
++    "menu.background": "#15161e",
++    "menu.selectionForeground": "#a9b1d6",
++    "menu.selectionBackground": "#15161e",
++    "menu.separatorBackground": "#111219",
++    "menu.border": "#111219",
++    "chat.requestBorder": "#111219",
++    "chat.avatarBackground": "#33467c",
++    "chat.avatarForeground": "#a9b1d6",
++    "chat.slashCommandBackground": "#15161e",
++    "chat.slashCommandForeground": "#7aa2f7",
++    "inlineChat.foreground": "#a9b1d6",
++    "inlineChatInput.background": "#15161e",
++    "inlineChatDiff.inserted": "#7aa2f7",
++    "inlineChatDiff.removed": "#f7768e",
++    "editorLineNumber.background": "#111219",
++    "editor.selectionForeground": "#c0caf5",
++    "editorCursor.background": "#15161e",
++    "editorBracketMatch.foreground": "#7dcfff",
++    "editorError.background": "#111219",
++    "statusBarItem.prominentForeground": "#111219",
++    "quickInput.background": "#292e42",
++    "quickInput.foreground": "#c0caf5",
++    "quickInputTitle.background": "#7aa2f7",
++    "quickInputList.focusBackground": "#33467c",
++    "quickInputList.focusForeground": "#c0caf5",
++    "editorHoverWidget.foreground": "#c0caf5",
++    "red.inlineCommentBackground": "#292e42",
++    "red.inlineCommentForeground": "#9aa5ce",
++    "red.inlineCommentActiveBackground": "#292e42",
++    "red.inlineCommentActiveBorder": "#7aa2f7",
++    "terminalCursor.foreground": "#c0caf5",
++    "terminalCursor.background": "#15161e"
++  },
++  "tokenColors": [
++    {
++      "scope": "comment",
++      "settings": {
++        "foreground": "#9aa5ce",
++        "fontStyle": "italic"
++      }
++    },
++    {
++      "scope": [
++        "keyword",
++        "keyword.control"
++      ],
++      "settings": {
++        "foreground": "#bb9af7",
++        "fontStyle": "italic"
++      }
++    },
++    {
++      "scope": [
++        "entity.name.function",
++        "entity.name.function.member",
++        "entity.name.function.macro",
++        "support.function.macro"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "scope": [
++        "entity.name.type",
++        "support.type",
++        "support.type.primitive",
++        "keyword.type",
++        "keyword.operator",
++        "constant.character.escape"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "scope": [
++        "constant",
++        "constant.numeric",
++        "constant.language",
++        "variable.parameter"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "scope": [
++        "string.quoted.double",
++        "string.quoted.single"
++      ],
++      "settings": {
++        "foreground": "#9ece6a"
++      }
++    },
++    {
++      "scope": [
++        "variable",
++        "variable.language"
++      ],
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "scope": [
++        "variable.other.member",
++        "variable.other.property"
++      ],
++      "settings": {
++        "foreground": "#a9b1d6"
++      }
++    },
++    {
++      "scope": "entity.name.tag",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Italics - Comments, Storage, Keyword Flow, Vue attributes, Decorators",
++      "scope": [
++        "comment",
++        "meta.var.expr storage.type",
++        "keyword.control.flow",
++        "keyword.control.return",
++        "meta.directive.vue punctuation.separator.key-value.html",
++        "meta.directive.vue entity.other.attribute-name.html",
++        "tag.decorator.js entity.name.tag.js",
++        "tag.decorator.js punctuation.definition.tag.js",
++        "storage.modifier",
++        "string.quoted.docstring.multi",
++        "string.quoted.docstring.multi.python punctuation.definition.string.begin",
++        "string.quoted.docstring.multi.python punctuation.definition.string.end",
++        "string.quoted.docstring.multi.python constant.character.escape"
++      ],
++      "settings": {
++        "fontStyle": "italic"
++      }
++    },
++    {
++      "name": "Fix YAML block scalar, Python Logical",
++      "scope": [
++        "keyword.control.flow.block-scalar.literal",
++        "keyword.control.flow.python"
++      ],
++      "settings": {
++        "fontStyle": ""
++      }
++    },
++    {
++      "name": "Comment",
++      "scope": [
++        "comment",
++        "comment.block.documentation",
++        "punctuation.definition.comment",
++        "comment.block.documentation punctuation",
++        "string.quoted.docstring.multi",
++        "string.quoted.docstring.multi.python punctuation.definition.string.begin",
++        "string.quoted.docstring.multi.python punctuation.definition.string.end",
++        "string.quoted.docstring.multi.python constant.character.escape"
++      ],
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Comment Doc",
++      "scope": [
++        "keyword.operator.assignment.jsdoc",
++        "comment.block.documentation variable",
++        "comment.block.documentation storage",
++        "comment.block.documentation keyword",
++        "comment.block.documentation support",
++        "comment.block.documentation markup",
++        "comment.block.documentation markup.inline.raw.string.markdown",
++        "meta.other.type.phpdoc.php keyword.other.type.php",
++        "meta.other.type.phpdoc.php support.other.namespace.php",
++        "meta.other.type.phpdoc.php punctuation.separator.inheritance.php",
++        "meta.other.type.phpdoc.php support.class",
++        "keyword.other.phpdoc.php",
++        "log.date"
++      ],
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Comment Doc Emphasized",
++      "scope": [
++        "meta.other.type.phpdoc.php support.class",
++        "comment.block.documentation storage.type",
++        "comment.block.documentation punctuation.definition.block.tag",
++        "comment.block.documentation entity.name.type.instance"
++      ],
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Number, Boolean, Undefined, Null",
++      "scope": [
++        "variable.other.constant",
++        "punctuation.definition.constant",
++        "constant.language",
++        "constant.numeric",
++        "support.constant",
++        "constant.other.caps"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "String, Symbols",
++      "scope": [
++        "string",
++        "constant.other.symbol",
++        "constant.other.key",
++        "meta.attribute-selector",
++        "string constant.character"
++      ],
++      "settings": {
++        "fontStyle": "",
++        "foreground": "#9ece6a"
++      }
++    },
++    {
++      "name": "Colors",
++      "scope": [
++        "constant.other.color",
++        "constant.other.color.rgb-value.hex punctuation.definition.constant"
++      ],
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Invalid",
++      "scope": [
++        "invalid",
++        "invalid.illegal"
++      ],
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Invalid deprecated",
++      "scope": "invalid.deprecated",
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Storage Type",
++      "scope": "storage.type",
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Storage - modifier, var, const, let",
++      "scope": [
++        "meta.var.expr storage.type",
++        "storage.modifier"
++      ],
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Interpolation, PHP tags, Smarty tags",
++      "scope": [
++        "punctuation.definition.template-expression",
++        "punctuation.section.embedded",
++        "meta.embedded.line.tag.smarty",
++        "support.constant.handlebars",
++        "punctuation.section.tag.twig"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Blade, Twig, Smarty Handlebars keywords",
++      "scope": [
++        "keyword.control.smarty",
++        "keyword.control.twig",
++        "support.constant.handlebars keyword.control",
++        "keyword.operator.comparison.twig",
++        "keyword.blade",
++        "entity.name.function.blade",
++        "meta.tag.blade keyword.other.type.php"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Spread",
++      "scope": [
++        "keyword.operator.spread",
++        "keyword.operator.rest"
++      ],
++      "settings": {
++        "foreground": "#f7768e",
++        "fontStyle": "bold"
++      }
++    },
++    {
++      "name": "Operator, Misc",
++      "scope": [
++        "keyword.operator",
++        "keyword.control.as",
++        "keyword.other",
++        "keyword.operator.bitwise.shift",
++        "punctuation",
++        "expression.embbeded.vue punctuation.definition.tag",
++        "text.html.twig meta.tag.inline.any.html",
++        "meta.tag.template.value.twig meta.function.arguments.twig",
++        "meta.directive.vue punctuation.separator.key-value.html",
++        "punctuation.definition.constant.markdown",
++        "punctuation.definition.string",
++        "punctuation.support.type.property-name",
++        "text.html.vue-html meta.tag",
++        "meta.attribute.directive",
++        "punctuation.definition.keyword",
++        "punctuation.terminator.rule",
++        "punctuation.definition.entity",
++        "punctuation.separator.inheritance.php",
++        "keyword.other.template",
++        "keyword.other.substitution",
++        "entity.name.operator",
++        "meta.property-list punctuation.separator.key-value",
++        "meta.at-rule.mixin punctuation.separator.key-value",
++        "meta.at-rule.function variable.parameter.url",
++        "meta.embedded.inline.phpx punctuation.definition.tag.begin.html",
++        "meta.embedded.inline.phpx punctuation.definition.tag.end.html"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Import, Export, From, Default",
++      "scope": [
++        "keyword.control.module.js",
++        "keyword.control.import",
++        "keyword.control.export",
++        "keyword.control.from",
++        "keyword.control.default",
++        "meta.import keyword.other"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Keyword",
++      "scope": [
++        "keyword",
++        "keyword.control",
++        "keyword.other.important"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Keyword SQL",
++      "scope": "keyword.other.DML",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Keyword Operator Logical, Arrow, Ternary, Comparison",
++      "scope": [
++        "keyword.operator.logical",
++        "storage.type.function",
++        "keyword.operator.bitwise",
++        "keyword.operator.ternary",
++        "keyword.operator.comparison",
++        "keyword.operator.relational",
++        "keyword.operator.or.regexp"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Tag",
++      "scope": "entity.name.tag",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Tag - Custom / Unrecognized",
++      "scope": [
++        "entity.name.tag support.class.component",
++        "meta.tag.custom entity.name.tag",
++        "meta.tag.other.unrecognized.html.derivative entity.name.tag",
++        "meta.tag"
++      ],
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Tag Punctuation",
++      "scope": [
++        "punctuation.definition.tag",
++        "text.html.php meta.embedded.block.html meta.tag.metadata.script.end.html punctuation.definition.tag.begin.html text.html.basic"
++      ],
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Globals, PHP Constants, etc",
++      "scope": [
++        "constant.other.php",
++        "variable.other.global.safer",
++        "variable.other.global.safer punctuation.definition.variable",
++        "variable.other.global",
++        "variable.other.global punctuation.definition.variable",
++        "constant.other"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "Variables",
++      "scope": [
++        "variable",
++        "support.variable",
++        "string constant.other.placeholder",
++        "variable.parameter.handlebars",
++        "variable.other.object",
++        "meta.fstring",
++        "meta.function-call meta.function-call.arguments",
++        "meta.embedded.inline.phpx constant.other.php"
++      ],
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Variable Array Key",
++      "scope": "meta.array.literal variable",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Object Key",
++      "scope": [
++        "meta.object-literal.key",
++        "entity.name.type.hcl",
++        "string.alias.graphql",
++        "string.unquoted.graphql",
++        "string.unquoted.alias.graphql",
++        "meta.group.braces.curly constant.other.object.key.js string.unquoted.label.js",
++        "meta.field.declaration.ts variable.object.property",
++        "meta.block entity.name.label"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Object Property",
++      "scope": [
++        "variable.other.property",
++        "support.variable.property",
++        "support.variable.property.dom",
++        "meta.function-call variable.other.object.property"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Object Property",
++      "scope": "variable.other.object.property",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Object Literal Member lvl 3 (Vue Prop Validation)",
++      "scope": "meta.objectliteral meta.object.member meta.objectliteral meta.object.member meta.objectliteral meta.object.member meta.object-literal.key",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "C-related Block Level Variables",
++      "scope": "source.cpp meta.block variable.other",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Other Variable",
++      "scope": "support.other.variable",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Methods",
++      "scope": [
++        "meta.class-method.js entity.name.function.js",
++        "entity.name.method.js",
++        "variable.function.constructor",
++        "keyword.other.special-method",
++        "storage.type.cs"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Function Definition",
++      "scope": [
++        "entity.name.function",
++        "variable.other.enummember",
++        "meta.function-call",
++        "meta.function-call entity.name.function",
++        "variable.function",
++        "meta.definition.method entity.name.function",
++        "meta.object-literal entity.name.function"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Function Argument",
++      "scope": [
++        "variable.parameter.function.language.special",
++        "variable.parameter",
++        "meta.function.parameters punctuation.definition.variable",
++        "meta.function.parameter variable"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "Constant, Tag Attribute",
++      "scope": [
++        "keyword.other.type.php",
++        "storage.type.php",
++        "constant.character",
++        "constant.escape",
++        "keyword.other.unit"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Variable Definition",
++      "scope": [
++        "meta.definition.variable variable.other.constant",
++        "meta.definition.variable variable.other.readwrite",
++        "variable.declaration.hcl variable.other.readwrite.hcl",
++        "meta.mapping.key.hcl variable.other.readwrite.hcl",
++        "variable.other.declaration"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Inherited Class",
++      "scope": "entity.other.inherited-class",
++      "settings": {
++        "fontStyle": "",
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Class, Support, DOM, etc",
++      "scope": [
++        "support.class",
++        "support.type",
++        "variable.other.readwrite.alias",
++        "support.orther.namespace.use.php",
++        "meta.use.php",
++        "support.other.namespace.php",
++        "support.type.sys-types",
++        "support.variable.dom",
++        "support.constant.math",
++        "support.type.object.module",
++        "support.constant.json",
++        "entity.name.namespace",
++        "meta.import.qualifier",
++        "variable.other.constant.object"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Class Name",
++      "scope": "entity.name",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Support Function",
++      "scope": "support.function",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "CSS Class and Support",
++      "scope": [
++        "source.css support.type.property-name",
++        "source.sass support.type.property-name",
++        "source.scss support.type.property-name",
++        "source.less support.type.property-name",
++        "source.stylus support.type.property-name",
++        "source.postcss support.type.property-name",
++        "support.type.property-name.css",
++        "support.type.vendored.property-name",
++        "support.type.map.key"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "CSS Font",
++      "scope": [
++        "support.constant.font-name",
++        "meta.definition.variable"
++      ],
++      "settings": {
++        "foreground": "#9ece6a"
++      }
++    },
++    {
++      "name": "CSS Class",
++      "scope": [
++        "entity.other.attribute-name.class",
++        "meta.at-rule.mixin.scss entity.name.function.scss"
++      ],
++      "settings": {
++        "foreground": "#9ece6a"
++      }
++    },
++    {
++      "name": "CSS ID",
++      "scope": "entity.other.attribute-name.id",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "CSS Tag",
++      "scope": "entity.name.tag.css",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "CSS Tag Reference, Pseudo & Class Punctuation",
++      "scope": [
++        "entity.other.attribute-name.pseudo-class punctuation.definition.entity",
++        "entity.other.attribute-name.pseudo-element punctuation.definition.entity",
++        "entity.other.attribute-name.class punctuation.definition.entity",
++        "entity.name.tag.reference"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "CSS Punctuation",
++      "scope": "meta.property-list",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "CSS at-rule fix",
++      "scope": [
++        "meta.property-list meta.at-rule.if",
++        "meta.at-rule.return variable.parameter.url",
++        "meta.property-list meta.at-rule.else"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "CSS Parent Selector Entity",
++      "scope": [
++        "entity.other.attribute-name.parent-selector-suffix punctuation.definition.entity.css"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "CSS Punctuation comma fix",
++      "scope": "meta.property-list meta.property-list",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "SCSS @",
++      "scope": [
++        "meta.at-rule.mixin keyword.control.at-rule.mixin",
++        "meta.at-rule.include entity.name.function.scss",
++        "meta.at-rule.include keyword.control.at-rule.include"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "SCSS Mixins, Extends, Include Keyword",
++      "scope": [
++        "keyword.control.at-rule.include punctuation.definition.keyword",
++        "keyword.control.at-rule.mixin punctuation.definition.keyword",
++        "meta.at-rule.include keyword.control.at-rule.include",
++        "keyword.control.at-rule.extend punctuation.definition.keyword",
++        "meta.at-rule.extend keyword.control.at-rule.extend",
++        "entity.other.attribute-name.placeholder.css punctuation.definition.entity.css",
++        "meta.at-rule.media keyword.control.at-rule.media",
++        "meta.at-rule.mixin keyword.control.at-rule.mixin",
++        "meta.at-rule.function keyword.control.at-rule.function",
++        "keyword.control punctuation.definition.keyword"
++      ],
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "SCSS Include Mixin Argument",
++      "scope": "meta.property-list meta.at-rule.include",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "CSS value",
++      "scope": "support.constant.property-value",
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "Sub-methods",
++      "scope": [
++        "entity.name.module.js",
++        "variable.import.parameter.js",
++        "variable.other.class.js"
++      ],
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Language methods",
++      "scope": "variable.language",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Variable punctuation",
++      "scope": "variable.other punctuation.definition.variable",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Keyword this with Punctuation, ES7 Bind Operator",
++      "scope": [
++        "source.js constant.other.object.key.js string.unquoted.label.js",
++        "variable.language.this punctuation.definition.variable",
++        "keyword.other.this"
++      ],
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "HTML Attributes",
++      "scope": [
++        "entity.other.attribute-name",
++        "text.html.basic entity.other.attribute-name.html",
++        "text.html.basic entity.other.attribute-name"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "HTML Character Entity",
++      "scope": "text.html constant.character.entity",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Vue (Vetur / deprecated) Template attributes",
++      "scope": [
++        "entity.other.attribute-name.id.html",
++        "meta.directive.vue entity.other.attribute-name.html"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "CSS ID's",
++      "scope": "source.sass keyword.control",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "CSS psuedo selectors",
++      "scope": [
++        "entity.other.attribute-name.pseudo-class",
++        "entity.other.attribute-name.pseudo-element",
++        "entity.other.attribute-name.placeholder",
++        "meta.property-list meta.property-value"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Inserted",
++      "scope": "markup.inserted",
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Deleted",
++      "scope": "markup.deleted",
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Changed",
++      "scope": "markup.changed",
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Regular Expressions",
++      "scope": "string.regexp",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Regular Expressions - Punctuation",
++      "scope": "punctuation.definition.group",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Regular Expressions - Character Class",
++      "scope": [
++        "constant.other.character-class.regexp"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Regular Expressions - Character Class Set",
++      "scope": [
++        "constant.other.character-class.set.regexp",
++        "punctuation.definition.character-class.regexp"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "Regular Expressions - Quantifier",
++      "scope": "keyword.operator.quantifier.regexp",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Regular Expressions - Backslash",
++      "scope": "constant.character.escape.backslash",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Escape Characters",
++      "scope": "constant.character.escape",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Decorators",
++      "scope": [
++        "tag.decorator.js entity.name.tag.js",
++        "tag.decorator.js punctuation.definition.tag.js"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "CSS Units",
++      "scope": "keyword.other.unit",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "JSON Key - Level 0",
++      "scope": [
++        "source.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "JSON Key - Level 1",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "JSON Key - Level 2",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "JSON Key - Level 3",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "JSON Key - Level 4",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "JSON Key - Level 5",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "JSON Key - Level 6",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "JSON Key - Level 7",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "JSON Key - Level 8",
++      "scope": [
++        "source.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json meta.structure.dictionary.value.json meta.structure.dictionary.json support.type.property-name.json"
++      ],
++      "settings": {
++        "foreground": "#9ece6a"
++      }
++    },
++    {
++      "name": "Plain Punctuation",
++      "scope": "punctuation.definition.list_item.markdown",
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Block Punctuation",
++      "scope": [
++        "meta.block",
++        "meta.brace",
++        "punctuation.definition.block",
++        "punctuation.definition.use",
++        "punctuation.definition.class",
++        "punctuation.definition.begin.bracket",
++        "punctuation.definition.end.bracket",
++        "punctuation.definition.switch-expression.begin.bracket",
++        "punctuation.definition.switch-expression.end.bracket",
++        "punctuation.definition.section.switch-block.begin.bracket",
++        "punctuation.definition.section.switch-block.end.bracket",
++        "punctuation.definition.group.shell",
++        "punctuation.definition.parameters",
++        "punctuation.definition.arguments",
++        "punctuation.definition.dictionary",
++        "punctuation.definition.array",
++        "punctuation.section"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Markdown - Plain",
++      "scope": [
++        "meta.embedded.block"
++      ],
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "HTML text",
++      "scope": [
++        "meta.tag JSXNested",
++        "meta.jsx.children",
++        "text.html",
++        "text.log"
++      ],
++      "settings": {
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Markdown - Markup Raw Inline",
++      "scope": "text.html.markdown markup.inline.raw.markdown",
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Markdown - Markup Raw Inline Punctuation",
++      "scope": "text.html.markdown markup.inline.raw.markdown punctuation.definition.raw.markdown",
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Markdown - Heading 1",
++      "scope": [
++        "heading.1.markdown entity.name",
++        "heading.1.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Markdown - Heading 2",
++      "scope": [
++        "heading.2.markdown entity.name",
++        "heading.2.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Markdown - Heading 3",
++      "scope": [
++        "heading.3.markdown entity.name",
++        "heading.3.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Markdown - Heading 4",
++      "scope": [
++        "heading.4.markdown entity.name",
++        "heading.4.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Markdown - Heading 5",
++      "scope": [
++        "heading.5.markdown entity.name",
++        "heading.5.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Markdown - Heading 6",
++      "scope": [
++        "heading.6.markdown entity.name",
++        "heading.6.markdown punctuation.definition.heading.markdown"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#9aa5ce"
++      }
++    },
++    {
++      "name": "Markup - Italic",
++      "scope": [
++        "markup.italic",
++        "markup.italic punctuation"
++      ],
++      "settings": {
++        "fontStyle": "italic",
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Markup - Bold",
++      "scope": [
++        "markup.bold",
++        "markup.bold punctuation"
++      ],
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Markup - Bold-Italic",
++      "scope": [
++        "markup.bold markup.italic",
++        "markup.bold markup.italic punctuation"
++      ],
++      "settings": {
++        "fontStyle": "bold italic",
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Markup - Underline",
++      "scope": [
++        "markup.underline",
++        "markup.underline punctuation"
++      ],
++      "settings": {
++        "fontStyle": "underline"
++      }
++    },
++    {
++      "name": "Markdown - Blockquote",
++      "scope": "markup.quote punctuation.definition.blockquote.markdown",
++      "settings": {
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Markup - Quote",
++      "scope": "markup.quote",
++      "settings": {
++        "fontStyle": "italic"
++      }
++    },
++    {
++      "name": "Markdown - Link",
++      "scope": [
++        "string.other.link",
++        "markup.underline.link",
++        "constant.other.reference.link.markdown",
++        "string.other.link.description.title.markdown"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Markdown - Fenced Code Block",
++      "scope": [
++        "markup.fenced_code.block.markdown",
++        "markup.inline.raw.string.markdown",
++        "variable.language.fenced.markdown"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "Markdown - Separator",
++      "scope": "meta.separator",
++      "settings": {
++        "fontStyle": "bold",
++        "foreground": "#3b4261"
++      }
++    },
++    {
++      "name": "Markup - Table",
++      "scope": "markup.table",
++      "settings": {
++        "foreground": "#c0caf5"
++      }
++    },
++    {
++      "name": "Token - Info",
++      "scope": "token.info-token",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    },
++    {
++      "name": "Token - Warn",
++      "scope": "token.warn-token",
++      "settings": {
++        "foreground": "#e8a84a"
++      }
++    },
++    {
++      "name": "Token - Error",
++      "scope": "token.error-token",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Token - Debug",
++      "scope": "token.debug-token",
++      "settings": {
++        "foreground": "#bb9af7"
++      }
++    },
++    {
++      "name": "Apache Tag",
++      "scope": "entity.tag.apacheconf",
++      "settings": {
++        "foreground": "#f7768e"
++      }
++    },
++    {
++      "name": "Preprocessor",
++      "scope": [
++        "meta.preprocessor"
++      ],
++      "settings": {
++        "foreground": "#7dcfff"
++      }
++    },
++    {
++      "name": "ENV value",
++      "scope": "source.env",
++      "settings": {
++        "foreground": "#7aa2f7"
++      }
++    }
++  ]
++}
+-- 
+2.54.0 (Apple Git-157)
+

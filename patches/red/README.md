@@ -16,18 +16,43 @@ TermSurf and NuTorch do not prepare or package this fork.
 | Default branch observed | `main`, 2026-09-18 23:25:07 UTC |
 | Base | `9e0952767d35d5b8dddd3fa3bb90087938692c52` |
 | Base tree | `40bc8a92d19f9b9fd10145d6cc002a3a04de2fd9` |
-| Product branch | `issue-26091823140848-exp7-storage-paths` |
-| Product HEAD | `b56e93d5d809d3e77b6a0eb24889d7304fb00afc` |
-| Product tree | `1ca2868dc0507ba7868de5bcc935354efef5fe1f` |
+| Product branch | `issue-26092609387958-exp1-bundle-typst` |
+| Product HEAD | `be5a4b86c656b26194715682e1fa841b0737a7f3` |
+| Product tree | `ab21b68d29ebd69ef9b87f226a36c570874025e8` |
 | Checkout | `forks/red` |
-| Package / executable | internal Rust package `red` / `redvim` 0.7.2 |
+| Package / executable | internal Rust package `red` / `redvim` 0.7.9 |
 | License | Upstream `LICENSE`, MIT, copyright 2024 Felipe Coury; preserved unchanged |
-| Product commits / patch count | 8 / 8 |
-| Archive SHA-256 | `5c0ab7f14ba970a4b899d189c24af3a4a8b945438e8a6844af6ca29120f3db00` |
+| Product commits / patch count | 36 / 36 |
+| Archive SHA-256 | `646c129e772b0757bbbf042656ddd1e93d278429301dd59a46d8b61ab1251593` |
+
+Issue 26092609387958 Experiment 1 appends
+`patches/issue-26092609387958/0001-Bundle-pinned-Typst-syntax-support.patch`.
+It bundles the pinned SeniorMars Typst parser, adapted highlighting and raw-block
+injection queries, language/default registration, standalone checks, and MIT
+provenance. `ah patch export` independently reconstructed all 35 patches to
+the recorded product tree. Patch SHA-256:
+`837ad59d0090041a6078ba2b264504fcf9f8e278a9df3c005cb7efdab3becf36`;
+stable patch ID: `50a00085929cd651e40e85f3b5ee9528f1e7df06`.
+This is a local 0.7.8 candidate, not a new publication. Human visual acceptance
+and the experiment's completion review remain pending; see its evidence record.
 
 The first, unchanged patch is
 [`0001-Add-Astrohacker-Red-fork-guidance.patch`](patches/issue-26091823140848/0001-Add-Astrohacker-Red-fork-guidance.patch).
 It replaces upstream root guidance with the Astrohacker overlay.
+
+Issue 26091918020609 Experiment 3 appends patches 0003 and 0004 in that
+issue's archive: Austin Night as the embedded normal/recovery default, retained
+Enkia attribution and palette provenance, default/override regression tests,
+and the PTY-driven search/breadcrumb contrast correction. The complete 28-patch
+series independently replays at `c950c4576b13534679d7838ae6552c295a355b3e`
+to the accepted Austin Night candidate tree. Local source projection and binary packaging
+retain theme notices. See the issue's `austin-night-evidence.md` for candidate
+hashes and Ryan's manual visual acceptance (“perfect”). His copy-only follow-up
+adds patch 0005, changing the intro/release-card tagline to “the editor that
+respects your time”. All 29 patches replay at
+`cadb2916c2bbf337c4feeffd85ca722f6157f9f3` to the recorded product tree;
+25 relevant UI tests pass. Version remains 0.7.5;
+this source pin is not a new publication.
 
 - Patch SHA-256: `d26a595a6b48e4d6684491c1568c56f6309c289a17a6b0d8e2632e2f7b08d8b5`
 - Stable patch ID: `8a82fe4a42c8e5cee6cf54b64b8cbb5fa2e98e98`
@@ -72,7 +97,63 @@ The archive digest uses the shared manifest convention: SHA-256 of ordered
 is the machine-readable source authority. It is a source pin, not evidence of
 a shipped RedVim release.
 
+Issue 26091914238740 Experiment 6 appends
+`patches/issue-26091914238740/0009-Bundle-WGSL-syntax-support.patch`, retaining
+the reproducibly generated official WGSL parser, scanner corrections, adapted
+queries, tests and required notices. Patch SHA-256:
+`b3f9e01e10e8dc8faae88a06b5307ae5eb2ceaecd3b6acf167045be4fb487939`.
+That 21-patch series independently replays to WGSL tree
+`3fe419faad01277a6eea55068b4742e8ff9d8662`;
+replay HEAD is `b0212b4ebf54af204a9891c64176ee8e41a47c02`.
+Source remains version 0.7.4 until the normal publisher selects a new version.
+See the automated language issue's WGSL evidence for the qualification boundary.
+
+Issue 26091914238740 Experiment 7 appends
+`patches/issue-26091914238740/0010-Bundle-Caddyfile-syntax-support.patch`, with
+the pinned official native grammar, corrected heredoc scanner, matched queries,
+tab defaults, tests and MIT notice. Patch SHA-256:
+`d2c60865504c7cd276b1ab41b8e42c33e3e3ca8f38cf59b5525c5c047ea359e7`.
+The 22-patch series replays to tree `eee76f1341422e55a4399e41c0a7207ca7dc6da0`
+at reconstruction HEAD `3b2886f5bf474f8c5c28884eb37cbe03247c7458`.
+Source remains 0.7.4 for local qualification; this pin is not a new publication.
+
+Issue 26091914238740 Experiment 8 appends
+`patches/issue-26091914238740/0011-Bundle-AppleScript-syntax-support.patch`, with
+the unchanged pinned native parser/scanner, complete Rust wrapper, adapted
+queries, tests and MIT notice. Patch SHA-256:
+`c8c659bfeb8dce78293a2b0b0805ac695d0390e711437ac635d9a8c7ae9672c4`.
+The 23-patch series replays to tree `c4af0b7b2dd2e2638586fd3020bfe5d1dca2a064`
+at reconstruction HEAD `cb4cd9f8c50b2f46d64b1f58e2f18116dbc384a7`.
+That experiment's pin was a local 0.7.4 candidate pending publication.
+
+Issue 26091914238740 Experiment 9 published and installed RedVim 0.7.5.
+The publisher appended `0024-Release-RedVim-0.7.5.patch` (SHA-256
+`1a272949e6493a4d35f7f6d6ed270d1628ee0c401c67227871540917ab223753`).
+All 24 patches independently reconstruct the recorded shipping tree at replay
+HEAD `8eecb55c3f03f8929777b92be70ebc347d0c2f8e`; earlier patch bytes and the
+ordered stable patch IDs are unchanged. See the automated issue's
+[installed release evidence](../../docs/issues/26091914238740-complete-redvim-language-support/installed-release-evidence.md)
+for publication, Homebrew and all eight installed language checks.
+
 ## Reconstruct from upstream
+
+The current local 0.7.5 candidate adds Issue 26091918020609 Experiment 1's
+`redvim` intro artwork, retaining the red dot and adapting compact layout.
+Its patch is `patches/issue-26091918020609/0001-Extend-intro-wordmark-to-redvim.patch`,
+SHA-256 `b06b20b6bc0966cd220b965a9fc3e96916bb1d0b63bdfcf2561f749b4d83ed7f`.
+`ah patch export` verified reconstruction of all 25 patches and ordered patch
+identities against the recorded tree. Ryan visually accepted this candidate in
+Experiment 1; it has not been published or installed through Homebrew.
+
+Experiment 2 appends
+`patches/issue-26091918020609/0002-Use-RedVim-branding-across-product-surfaces.patch`
+(SHA-256 `a3c4f2968e3bab421c3064066821928851ebb40e3fdcb8216c87b12ee86872c1`).
+It renames the 74 audited product locations, shares Rust identity labels, and
+preserves the legacy palette alias and Git commit-context reader. The full
+26-patch series independently replays at
+`84d216639b2d4fc98e1d242baead7b22a0efeed8` to the pinned tree, with matching
+ordered stable patch IDs. All preceding patch bytes are unchanged. This is an
+unpublished 0.7.5 candidate accepted by Ryan in Experiment 2.
 
 Run from the monorepo root with an absent destination. Existing checkouts and
 caches must be inspected and preserved, never reset or removed to follow this
@@ -87,8 +168,9 @@ if ($destination | path exists) { error make {msg: 'Destination already exists'}
 let base = '9e0952767d35d5b8dddd3fa3bb90087938692c52'
 git clone --origin upstream https://github.com/codersauce/red.git $destination
 git -C $destination fetch upstream $base
-git -C $destination switch -c issue-26091823140848-exp7-storage-paths $base
-let series = (glob ($root | path join patches/red/patches/issue-26091823140848/*.patch) | sort)
+git -C $destination switch -c issue-26092311060249-exp1-color-each-heading-level $base
+let manifest = (open patches/release-manifest.json | get forks | where name == red | first)
+let series = ($manifest.patch_directories | each {|dir| glob ($root | path join $dir '*.patch') | sort } | flatten)
 git -C $destination am ...$series
 
 use scripts/lib/archive-digest.nu [patch-files compute-archive-digest]
@@ -133,18 +215,69 @@ executable. Nushell needs no runtime parser/query files or trust action.
 
 ## Maintain the series
 
-Select a new issue/experiment branch before edits. Generate a new cumulative
-archive from the recorded base into that issue's directory, leaving prior
-archives intact, then update README and manifest identities/digests together:
+Issue 26091914238740 Experiment 1 appends its HCL integration delta in
+`patches/issue-26091914238740/0001-Bundle-Terraform-HCL-highlighting.patch`.
+Its SHA-256 is `5824ab120e41f480c3d9be41096c40c9b2b11a573b61749157d4a3fc774d6b59`.
+The twelve predecessor patches remain unchanged. `ah patch export` independently
+reconstructed the complete thirteen-patch series and verified the pinned tree.
+This is local HCL qualification; the final multi-language release remains pending.
+Result-review corrections append `0002-Check-HCL-template-and-splat-colors.patch`
+(SHA-256 `b073d0399d65a7a2dc54e722f54cfa1565d84b87b6d29d6c784dde46d2fc079a`).
+It strengthens exact template/collection/traversal color assertions and fixes
+property colors following splats. The fourteen-patch reconstruction produced
+HEAD `e7d09521170e09b3d34a549809f1d16d1eb736f8` and matched the current tree.
+
+Experiment 2 adds Objective-C in patches `0003-Bundle-Objective-C-highlighting.patch`
+and `0004-Restore-the-complete-Objective-C-query.patch` of that same issue directory.
+Their SHA-256 values are `6fcb57a158629a4f4bca07aacb97ee36e1fd19d97aefc5c7634bcc2a76b4eea5`
+and `3bdc43daf11474b308fe4838c6fd6687b033fb80da05c38871d975d3a43da781`.
+The second preserves the complete query after a staging-time streaming trim
+error; no incomplete query is qualified. The full sixteen-patch reconstruction
+at `f443171af0eee594a0590b700cc1831b18045cb0` matches that experiment's pinned tree.
+Earlier archives are unchanged. Objective-C++ is not claimed by this grammar.
+
+Experiment 3 appends `0005-Bundle-Protocol-Buffers-highlighting.patch` and
+`0006-Distinguish-named-protobuf-types-in-checks.patch` in the same directory.
+SHA-256 values: `d78faf503e99854c0534486ec718e07f59def909821f3975b15e6ddde166a417`
+and `06cb964b1f8c5a1f13fb0c8ecc263d3ff209d3b0cd2a79c5e44ec0bfd3e0ac48`.
+The eighteen-patch replay at `cc9c81b4a82a931cbb33da428ccd9b06bbf9821a`
+matches that experiment's tree and stable patch IDs. Proto2/proto3 and an edition-2023
+syntax fixture are checked; no protobuf semantic validation is claimed.
+
+Experiment 4 appends `0007-Bundle-Dockerfile-highlighting.patch`, SHA-256
+`47aa8ed42474eee0f7d255dc5dac19c8b26e6939248458ff472da6b6b96d8e9a`.
+The nineteen-patch replay at `810e731061bcca485fb687552088984032def5f2`
+matches tree `227d27e5f969d1f69953621e49dd33a95b062248` and stable patch IDs.
+It bundles the parser/scanner, adapted query and both MIT notices. Dockerfile
+host highlighting includes flags and heredocs; embedded shell execution and
+language injections are outside scope. Publication remains pending.
+
+Experiment 5 appends `0008-Bundle-GN-highlighting-and-native-grammar.patch`,
+SHA-256 `a693db42d5f9073f6718cdad3921e9fc570dfdd962036a88f26c61523dd3835e`.
+The twenty-patch replay at `de2e54b51b03186eafa4f80398edb8e8279fe52b`
+matches tree `a2e68bd9deac0d48a3cd3885711d8cb81189e3e5` and stable patch IDs.
+The local grammar crate retains pinned generated sources, adds LanguageFn
+bindings and corrects the scanner's byte-escape lookahead with regression proof.
+No GN build is executed. Publication remains separate from this local integration.
+
+Select a new issue/experiment branch before edits. For a new issue directory,
+use `ah patch export red --issue <id> --experiment <n> --from <previous-tip>`
+to append a verified delta, then adopt its proposed manifest entry and refresh
+this README. Preserve the selected preceding directories in manifest order.
+For subsequent commits within an existing issue archive, append only the new
+commits with the next unused filename number; never overwrite an old patch:
 
 ```nu
 let archive = ($env.PWD | path join patches/red/patches/issue-ISSUE_ID)
 mkdir $archive
-git -C forks/red format-patch --output-directory $archive 9e0952767d35d5b8dddd3fa3bb90087938692c52..HEAD
+git -C forks/red format-patch --start-number NEXT_NUMBER --output-directory $archive PREVIOUS_TIP..HEAD
 git -C forks/red rev-parse HEAD 'HEAD^{tree}'
 ```
 
-Replace `ISSUE_ID` with the current issue ID. Record provenance explicitly for
+Replace `ISSUE_ID`, `NEXT_NUMBER` and `PREVIOUS_TIP` with the current issue,
+next unused number in that directory and last archived tip. Recompute the
+complete manifest digest and independently reconstruct before recording success.
+Record provenance explicitly for
 future upstream updates; never silently advance this base to a moving tip.
 
 Release 0.7.1 appends `patches/red/patches/issue-26091823140848/0006-Release-RedVim-0.7.1.patch`; patch SHA-256 `a2d520efc6e7309dc2e61db221f923e43fbf836a787e98e28e06a3822293a370`.
@@ -165,3 +298,59 @@ version for the next actual release. See the issue's storage-path evidence for
 local validation and Ryan's accepted TermSurf use.
 
 Release 0.7.2 appends `patches/red/patches/issue-26091823140848/0008-Release-RedVim-0.7.2.patch`; patch SHA-256 `c3fcc01bdeb23936ed8d67d177cf47fb43583152a3427ac68f408faaa882d606`.
+
+Experiment 8 appends `0009-Bundle-common-languages-in-RedVim.patch`, adding C,
+C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Makefile parsers, embedded
+queries, defaults, provenance/licenses and release self-checks. Patch SHA-256:
+`9e2a2d0a8e8fb3b7f239141ddaf623284a00fa1a4f486e5acaa5341a596a6bca`.
+The source still reports 0.7.2 until the normal publisher prepares the next
+patch version; this pin does not claim a new publication. See Experiment 8's
+language-release evidence for reconstruction, package verification and the
+remaining human publication/installed-use boundary.
+
+Release 0.7.3 appends `patches/red/patches/issue-26091823140848/0010-Release-RedVim-0.7.3.patch`; patch SHA-256 `d700b187a5acaa031bba638317576570f1a2b49aa990da1a0b7e26f13ff884a4`.
+
+Experiment 9 appends `0011-Bundle-SQL-highlighting-in-RedVim.patch`. It bundles
+the pinned SQL parser, adapted queries, documented MySQL/SQLite recovery colors,
+default metadata, tests and MIT attribution. Patch SHA-256:
+`69084268fe8d1f538cc3102a80c3a184ad1f54a82d97e40e9e29c9d266fa8b4e`.
+Independent reconstruction HEAD `386a2cb56dce61510a5336c33d23489c218d7527`
+matches tree `04cca965877e7a402621eea6843b7df9a0e1022e`. Source still reports
+0.7.3 until the automatic publisher prepares the next version. This is a local
+SQL release candidate, not replacement bytes for the published 0.7.3 release.
+See the issue's SQL release evidence for automated and human qualification.
+
+Release 0.7.4 appends `patches/red/patches/issue-26091823140848/0012-Release-RedVim-0.7.4.patch`; patch SHA-256 `dbe6fb2bfaf779424619bb97cdfde2326be2443ae5e80a5f3478cd98515a1af7`.
+
+Release 0.7.5 appends `patches/red/patches/issue-26091914238740/0024-Release-RedVim-0.7.5.patch`; patch SHA-256 `1a272949e6493a4d35f7f6d6ed270d1628ee0c401c67227871540917ab223753`.
+
+Release 0.7.6 appends `patches/red/patches/issue-26091918020609/0030-Release-RedVim-0.7.6.patch`; patch SHA-256 `9eadd86bfd8437b0ddfe7ca2794a0c3425f2f55e5a9b958e7a5cbff12cb60244`.
+
+Issue 26092310328880 Experiment 1 appends
+`patches/issue-26092310328880/0001-Color-Markdown-inline-spans.patch`.
+It parses each Markdown `(inline)` range with tree-sitter-md's inline grammar
+and maps those captures onto Austin Night's existing italic, bold, inline-code,
+and link styles. Patch SHA-256
+`e4537a76599b3e1d64648a923aae20cf58ba96adf8c92716d5d7da27cacb9b9f`;
+stable patch ID `2cd8df14162564c9fa5b48407c5cfc801c4db4d9`.
+`ah patch export` reconstructed all 31 patches to tree
+`b5ad91fa7c34d0a59fc0dbee4896f9ad712b35be` at fork HEAD
+`ee105f18c3df92d0685fc48efd03a6553c992996`. Source remains 0.7.6; this pin
+is not a new publication. Ryan accepted the running editor.
+
+Release 0.7.7 appends `patches/red/patches/issue-26092310328880/0032-Release-RedVim-0.7.7.patch`; patch SHA-256 `1dccd14d7a240bc106995fbc85bd3362cdefeddeb4d16aaebc2d6ee4dfaf7126`.
+
+Issue 26092311060249 Experiment 1 appends
+`patches/issue-26092311060249/0001-Color-each-Markdown-heading-level.patch`.
+It gives each ATX heading marker and title a distinct bold Austin Night color,
+and uses the level 1 and level 2 colors for setext headings. Patch SHA-256
+`9733189150840e337fee4312bbd294a49f544c5ddb7c76183a49153eb00b3613`;
+stable patch ID `4292240356cd79e7608de457111d990a365ba560`.
+`ah patch export` reconstructed all 33 patches to tree
+`f6cb29dae297f27b74ecdb7c454d7e322b6d0c0a` at fork HEAD
+`fcd8f89292f06d00745714eb1b4def7d08368d22`. Source remains 0.7.7; this pin
+is not a new publication. Ryan accepted the running editor.
+
+Release 0.7.8 appends `patches/red/patches/issue-26092311060249/0034-Release-RedVim-0.7.8.patch`; patch SHA-256 `293aa6b77d762d68a11131da32831abdd5800314aa7d53b9036fd79c81b05526`.
+
+Release 0.7.9 appends `patches/red/patches/issue-26092609387958/0036-Release-RedVim-0.7.9.patch`; patch SHA-256 `69b35069078372119b80279daba4e612d8a48620965171f36a18c9ff386a212f`.

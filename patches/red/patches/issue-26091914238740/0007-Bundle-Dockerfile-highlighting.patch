@@ -1,0 +1,850 @@
+From 78a8f3bb88290217bc27bc3c6451fa54677126db Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 10:37:42 -0500
+Subject: [PATCH] Bundle Dockerfile highlighting
+
+The whale wears colors, flags and all,
+While heredocs heed their closing call.
+No ship sets sail, no shell takes flight;
+The build instructions merely light.
+---
+ Cargo.lock                                    |  11 +
+ Cargo.toml                                    |   1 +
+ docs/BUNDLED_LANGUAGES.md                     |  24 ++-
+ docs/languages-provenance.json                |  19 ++
+ .../tree-sitter-containerfile-upstream.txt    |  21 ++
+ docs/licenses/tree-sitter-containerfile.txt   |  21 ++
+ examples/check_dockerfile_files.rs            |  85 ++++++++
+ src/config.rs                                 |   1 +
+ src/editor.rs                                 |  57 +++++
+ src/highlighter.rs                            |  18 ++
+ src/highlighter/bundled_checks.rs             | 203 +++++++++++++++++-
+ src/queries/highlights/dockerfile.scm         |  87 ++++++++
+ src/queries/highlights/smoke/Dockerfile       |  32 +++
+ tests/self_check.rs                           |  18 +-
+ 14 files changed, 593 insertions(+), 5 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-containerfile-upstream.txt
+ create mode 100644 docs/licenses/tree-sitter-containerfile.txt
+ create mode 100644 examples/check_dockerfile_files.rs
+ create mode 100644 src/queries/highlights/dockerfile.scm
+ create mode 100644 src/queries/highlights/smoke/Dockerfile
+
+diff --git a/Cargo.lock b/Cargo.lock
+index f444347..57c9493 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2365,6 +2365,7 @@ dependencies = [
+  "tree-sitter",
+  "tree-sitter-bash",
+  "tree-sitter-c",
++ "tree-sitter-containerfile",
+  "tree-sitter-cpp",
+  "tree-sitter-css",
+  "tree-sitter-fish",
+@@ -3203,6 +3204,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-containerfile"
++version = "0.9.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f4811d55a5a2c32bb024b441c32b7417c3ec1af1a080a25fa20d321627b65a2b"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-cpp"
+ version = "0.23.4"
+diff --git a/Cargo.toml b/Cargo.toml
+index 5f3dbb7..05d0a3b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -142,6 +142,7 @@ tree-sitter-xml = "=0.7.0"
+ tree-sitter-make = "=1.1.1"
+ tree-sitter-objc = "=3.0.2"
+ tree-sitter-proto = "=0.6.0"
++tree-sitter-containerfile = "=0.9.2"
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ base64 = "0.22.1"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 3b9686c..41b5c98 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,12 +1,13 @@
+ # Bundled language expansion
+ 
+-RedVim compiles Protocol Buffers, Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles Dockerfile, Protocol Buffers, Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+ 
+ | Language | Files | Default indentation |
+ | --- | --- | --- |
++| Dockerfile | Dockerfile/Containerfile (also lowercase), Dockerfile.*/Containerfile.*, .dockerfile/.containerfile; dockerfile/containerfile syntax and fences | 2 spaces |
+ | C | .c, .h | 4 spaces |
+ | Objective-C | .m (case-insensitive); objc/objective-c syntax and fences | 4 spaces |
+ | Protocol Buffers | .proto (case-insensitive); proto/protobuf syntax and fences | 2 spaces |
+@@ -118,6 +119,27 @@ schemas parse without errors and pass token-color checks without protoc or
+ service execution. User grammar, theme, indentation and comment overrides remain
+ available.
+ 
++## Dockerfile boundary
++
++Dockerfile uses exact `tree-sitter-containerfile =0.9.2`, including its generated
++parser, native scanner and matching query. The checksummed crate is the exact
++source authority: its published VCS metadata reports a dirty tree. Both the
++WharfLab and Camden Cheek MIT notices are retained.
++
++The copied query translates special punctuation, removes the spell annotation,
++colors generic flag nodes (their names are hidden tokens in the generated parser),
++matches anonymous mount names, and adds image names, stage aliases and line
++continuations. Variables use the constant color regardless of letter case.
++Heredoc string captures cover the content node, leaving delimiters distinct
++with a constant capture instead of the unsupported label theme scope.
++Exact configured filenames take precedence over Dockerfile/Containerfile prefix
++variants. Comments use `#`. Configuration and theme overrides remain supported.
++
++This is host-language highlighting, including BuildKit flags and heredocs.
++Shell command text and arbitrary heredoc content have no Bash/JSON/Python
++injections; a custom SHELL is not assumed to be Bash. No container build or
++embedded command is executed by the corpus checker.
++
+ ## SQL dialect boundary
+ 
+ SQL uses the checksummed `tree-sitter-sequel =0.3.11` crate. Its published VCS
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index 45d7cc2..d82e9fa 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -205,5 +205,24 @@
+     "license_file": "tree-sitter-proto.txt",
+     "license_sha256": "1cc17f880ff4fa68079a72b98b89d42e8ce16b1bdbb1ec7b6f33465241e41003",
+     "license_source": "published crate LICENSE"
++  },
++  {
++    "name": "tree-sitter-containerfile",
++    "version": "0.9.2",
++    "crate_sha256": "f4811d55a5a2c32bb024b441c32b7417c3ec1af1a080a25fa20d321627b65a2b",
++    "repository": "https://github.com/wharflab/tree-sitter-containerfile",
++    "revision": "1df9124b22a72dde8683aab6f762ff4857acfeab",
++    "published_vcs_dirty": true,
++    "source_authority": "The checksummed published crate; its VCS metadata reports dirty, so the revision alone is not exact source reconstruction.",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "da1e19d2cc36e99dc7c571f44e8260d076ee57aaa03cb5627efbc6f422659cde",
++    "bundled_query_sha256": "55ab1f2296b360ac9668035504525a117298f053aa74c0626ca6b7a80f312fb8",
++    "license": "MIT",
++    "license_file": "tree-sitter-containerfile.txt",
++    "license_sha256": "cf292ce6d84e3e1b55bd8b830bf7643423aa49dde66b8cc3b57a986d2a2b6538",
++    "license_source": "published crate LICENSE (WharfLab)",
++    "upstream_license_file": "tree-sitter-containerfile-upstream.txt",
++    "upstream_license_sha256": "8d0d92d615b090961cf85b58bccf4cdd435959bf56c7ebbfeaf08cbb9518a8e0",
++    "upstream_license_source": "published crate LICENSE-MIT-CamdenCheek"
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-containerfile-upstream.txt b/docs/licenses/tree-sitter-containerfile-upstream.txt
+new file mode 100644
+index 0000000..cd51032
+--- /dev/null
++++ b/docs/licenses/tree-sitter-containerfile-upstream.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2021 Camden Cheek
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/docs/licenses/tree-sitter-containerfile.txt b/docs/licenses/tree-sitter-containerfile.txt
+new file mode 100644
+index 0000000..62121d0
+--- /dev/null
++++ b/docs/licenses/tree-sitter-containerfile.txt
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2026 WharfLab
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/examples/check_dockerfile_files.rs b/examples/check_dockerfile_files.rs
+new file mode 100644
+index 0000000..70a879d
+--- /dev/null
++++ b/examples/check_dockerfile_files.rs
+@@ -0,0 +1,85 @@
++//! Parse tracked Dockerfiles and verify host-language colors without executing them.
++use anyhow::Context;
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn main() -> anyhow::Result<()> {
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let mut parser = tree_sitter::Parser::new();
++    parser.set_language(&tree_sitter_containerfile::LANGUAGE.into())?;
++    let files = std::env::args().skip(1).collect::<Vec<_>>();
++    anyhow::ensure!(!files.is_empty(), "supply tracked Dockerfiles");
++    for file in files {
++        let source = std::fs::read_to_string(&file)?;
++        anyhow::ensure!(
++            highlighter.language_id_for_file(Some(&file)) == Some("dockerfile"),
++            "wrong detection: {file}"
++        );
++        let tree = parser.parse(&source, None).context("no tree")?;
++        anyhow::ensure!(
++            !tree.root_node().has_error(),
++            "{file}: {}",
++            tree.root_node().to_sexp()
++        );
++        let spans = highlighter.highlight("dockerfile", &source)?;
++        let mut cursor = tree.walk();
++        let mut checked = 0;
++        loop {
++            let node = cursor.node();
++            let scope = match node.kind() {
++                "comment" => Some("comment"),
++                "FROM" | "AS" | "WORKDIR" | "ENV" | "RUN" | "COPY" | "EXPOSE" | "CMD" => {
++                    Some("keyword")
++                }
++                "image_name" => Some("string.special"),
++                "image_alias" => Some("type"),
++                "param" => Some("property"),
++                "expose_port" => Some("number"),
++                "line_continuation" => Some("punctuation.delimiter"),
++                "double_quoted_string" | "json_string" => Some("string"),
++                _ if node.parent().is_some_and(|parent| {
++                    matches!(parent.kind(), "env_pair" | "param")
++                        && parent.child_by_field_name("name") == Some(node)
++                }) =>
++                {
++                    Some("property")
++                }
++                _ => None,
++            };
++            if let Some(scope) = scope {
++                let expected = theme.get_style(scope).context("missing theme scope")?;
++                anyhow::ensure!(
++                    expected.fg.is_some() && expected.fg != theme.style.fg,
++                    "invisible {scope}"
++                );
++                for byte in node.start_byte()..node.end_byte() {
++                    let actual = spans
++                        .iter()
++                        .rev()
++                        .find(|s| s.start <= byte && byte < s.end)
++                        .map(|s| &s.style);
++                    anyhow::ensure!(
++                        actual == Some(&expected),
++                        "{file}: {} at {byte}: expected {scope}, got {actual:?}",
++                        node.kind()
++                    );
++                }
++                checked += 1;
++            }
++            if cursor.goto_first_child() {
++                continue;
++            }
++            while !cursor.goto_next_sibling() {
++                if !cursor.goto_parent() {
++                    anyhow::ensure!(checked > 0, "no colors checked");
++                    println!("{file}: error-free, {checked} whole-token colors checked");
++                    break;
++                }
++            }
++            if cursor.node() == tree.root_node() {
++                break;
++            }
++        }
++    }
++    Ok(())
++}
+diff --git a/src/config.rs b/src/config.rs
+index 92c81e3..4afa4a4 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -739,6 +739,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("hcl", "# %s"),
+         ("objc", "// %s"),
+         ("proto", "// %s"),
++        ("dockerfile", "# %s"),
+         ("powershell", "# %s"),
+         ("python", "# %s"),
+         ("ruby", "# %s"),
+diff --git a/src/editor.rs b/src/editor.rs
+index fa20dd6..ccd1a89 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6661,6 +6661,7 @@ impl Editor {
+                 ("hcl", 2),
+                 ("objc", 4),
+                 ("proto", 2),
++                ("dockerfile", 2),
+                 ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+@@ -34512,6 +34513,7 @@ builtin = "rust"
+             ("example.sql", 4, "--"),
+             ("example.m", 4, "//"),
+             ("example.proto", 2, "//"),
++            ("Dockerfile", 2, "#"),
+             ("example.tf", 2, "#"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+@@ -34754,6 +34756,61 @@ builtin = "rust"
+             .starts_with("// custom syntax"));
+     }
+ 
++    #[tokio::test]
++    async fn dockerfile_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        let source = "FROM alpine # café\n";
++        editor.buffer_manager[0] = Buffer::new(Some("notes.txt".into()), source.into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("dockerfile".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("dockerfile"));
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('#'),
++            Action::InsertCharAtCursorPos('#'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), source);
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.dockerfile]\nindent_width = 6\ncomment = '# custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 6);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("# custom FROM"));
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index 3c37858..6302aab 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -154,6 +154,7 @@ impl LanguageRegistry {
+                         | "hcl"
+                         | "objc"
+                         | "proto"
++                        | "dockerfile"
+                 ),
+             });
+         }
+@@ -604,6 +605,8 @@ const MAX_CACHED_HIGHLIGHT_BYTES: usize = 64 * 1024;
+ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ 
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
++    ("dockerfile", "dockerfile"),
++    ("containerfile", "dockerfile"),
+     ("hcl", "hcl"),
+     ("objc", "objc"),
+     ("proto", "proto"),
+@@ -830,6 +833,10 @@ impl Highlighter {
+             if let Some(language) = self.registry.filenames.get(filename) {
+                 return Some(language.as_str());
+             }
++            let lower = filename.to_ascii_lowercase();
++            if lower.starts_with("dockerfile.") || lower.starts_with("containerfile.") {
++                return Some("dockerfile");
++            }
+         }
+         let extension = file_extension(file)?;
+         self.language_id_for_extension(&extension)
+@@ -2311,6 +2318,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "dockerfile",
++            extensions: &["dockerfile", "containerfile"],
++            filenames: &["Dockerfile", "dockerfile", "Containerfile", "containerfile"],
++            language: Some(|| tree_sitter_containerfile::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/dockerfile.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "proto",
+             extensions: &["proto"],
+@@ -5362,6 +5379,7 @@ mod tests {
+                 "c",
+                 "cpp",
+                 "css",
++                "dockerfile",
+                 "fish",
+                 "gitcommit",
+                 "hcl",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index 384f4ae..10b76a6 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -9,6 +9,63 @@ struct Fixture {
+ }
+ 
+ const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "dockerfile",
++        filename: "Dockerfile.dev",
++        source: include_str!("../queries/highlights/smoke/Dockerfile"),
++        tokens: &[
++            ("# syntax", "comment"),
++            ("# café FROM", "comment"),
++            ("ARG", "keyword"),
++            ("BASE=", "property"),
++            ("FROM --", "keyword"),
++            ("platform", "property"),
++            ("${BASE}", "punctuation.delimiter"),
++            ("AS builder", "keyword"),
++            ("builder", "type"),
++            ("ENV TITLE", "keyword"),
++            ("TITLE=", "property"),
++            ("hello", "string"),
++            ("lower=", "property"),
++            ("'value'", "string"),
++            ("LABEL", "keyword"),
++            ("org.example.name", "property"),
++            ("WORKDIR", "keyword"),
++            ("USER", "keyword"),
++            ("RUN --", "keyword"),
++            ("mount", "property"),
++            ("type=cache", "property"),
++            ("target=/cache", "property"),
++            ("\\\n", "punctuation.delimiter"),
++            ("COPY --chown", "keyword"),
++            ("chown", "property"),
++            ("ADD", "keyword"),
++            ("checksum", "property"),
++            ("EXPOSE", "keyword"),
++            ("8080", "number"),
++            ("SHELL", "keyword"),
++            ("python3", "string"),
++            ("ONBUILD", "keyword"),
++            ("HEALTHCHECK", "keyword"),
++            ("interval", "property"),
++            ("VOLUME", "keyword"),
++            ("STOPSIGNAL", "keyword"),
++            ("<<EOF", "constant"),
++            ("echo heredoc", "string"),
++            ("literal heredoc", "string"),
++            ("from alpine", "keyword"),
++            ("alpine:3.21 as", "string.special"),
++            ("as final", "keyword"),
++            ("final", "type"),
++            ("AFTER=", "property"),
++            ("after heredoc", "string"),
++            ("ENTRYPOINT", "keyword"),
++            ("/app/start", "string"),
++            ("CMD [", "keyword"),
++            ("--help", "string"),
++            ("\\nvalue", "string.escape"),
++        ],
++    },
+     Fixture {
+         language: "proto",
+         filename: "example.PROTO",
+@@ -377,6 +434,39 @@ pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str
+                 );
+             }
+         }
++        if id == "dockerfile" {
++            for (anchor, offset, length, scope) in [
++                ("${BASE}", 2, 4, "constant"),
++                ("${MODE}", 2, 4, "constant"),
++                ("$lower", 1, 5, "constant"),
++                ("${MODE}", 0, 2, "punctuation.delimiter"),
++                ("${MODE}", 6, 1, "punctuation.delimiter"),
++                ("\nEOF\n", 1, 3, "constant"),
++                ("\nEND\n", 1, 3, "constant"),
++                ("<<'END'", 0, 7, "constant"),
++                ("from alpine", 0, 4, "keyword"),
++                ("ENV AFTER", 0, 3, "keyword"),
++                ("# café FROM", 8, 4, "comment"),
++            ] {
++                let start = fixture
++                    .source
++                    .find(anchor)
++                    .context("missing Dockerfile anchor")?
++                    + offset;
++                let expected = theme.get_style(scope).context("missing Dockerfile scope")?;
++                for byte in start..start + length {
++                    let actual = styles
++                        .iter()
++                        .rev()
++                        .find(|s| s.start <= byte && byte < s.end)
++                        .map(|s| &s.style);
++                    anyhow::ensure!(
++                        actual == Some(&expected),
++                        "dockerfile: {anchor:?} at {byte}: expected {scope}, got {actual:?}"
++                    );
++                }
++            }
++        }
+         if id == "objc" {
+             for (anchor, offset, length, scope) in [
+                 ("ordinary = 42", 0, 8, "variable"),
+@@ -464,6 +554,115 @@ mod tests {
+     use super::*;
+     use crate::theme::parse_vscode_theme_contents;
+ 
++    #[test]
++    fn dockerfile_routing_predicates_overrides_and_incremental_edits() {
++        let mut theme =
++            parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let query = Query::new(
++            &tree_sitter_containerfile::LANGUAGE.into(),
++            include_str!("../queries/highlights/dockerfile.scm"),
++        )
++        .unwrap();
++        for pattern in 0..query.pattern_count() {
++            assert!(query.general_predicates(pattern).is_empty());
++        }
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        for file in [
++            "Dockerfile",
++            "dockerfile",
++            "Containerfile",
++            "containerfile",
++            "Dockerfile.dev",
++            "Containerfile.test",
++            "x.DOCKERFILE",
++            "x.CONTAINERFILE",
++        ] {
++            assert_eq!(
++                highlighter.language_id_for_file(Some(file)),
++                Some("dockerfile")
++            );
++        }
++        assert_ne!(
++            highlighter.language_id_for_file(Some("myDockerfile.txt")),
++            Some("dockerfile")
++        );
++        for alias in ["dockerfile", "containerfile"] {
++            assert_eq!(highlighter.language_id_for_name(alias), Some("dockerfile"));
++            let source = format!("```{alias}\nEXPOSE 8080\n```\n");
++            let spans = highlighter.highlight("markdown", &source).unwrap();
++            let byte = source.find("8080").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                theme.get_style("number").as_ref()
++            );
++        }
++        for source in [
++            "FROM alpine\n# café\n",
++            "FROM ${BA",
++            "RUN <<EOF\ncafé\n",
++            "RUN <<EOF\ncafé\nEOF\nENV AFTER=ok\n",
++        ] {
++            let shape = |spans: Vec<StyleInfo>| {
++                spans
++                    .into_iter()
++                    .map(|s| (s.start, s.end, s.style))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(
++                shape(highlighter.highlight("dockerfile", source).unwrap()),
++                shape(
++                    Highlighter::new(&theme)
++                        .unwrap()
++                        .highlight("dockerfile", source)
++                        .unwrap()
++                )
++            );
++        }
++        let directory = tempfile::tempdir().unwrap();
++        let config = HashMap::from([(
++            "recipe".into(),
++            LanguageConfig {
++                extensions: vec!["recipe".into()],
++                filenames: vec!["Dockerfile.special".into()],
++                grammar: Some(LanguageGrammarConfig {
++                    builtin: Some("dockerfile".into()),
++                    ..LanguageGrammarConfig::default()
++                }),
++                ..LanguageConfig::default()
++            },
++        )]);
++        let registry = Arc::new(LanguageRegistry::from_config(&config, directory.path()).unwrap());
++        let mut custom = theme.get_style("property").unwrap();
++        custom.bold = !custom.bold;
++        theme.token_styles.insert(
++            0,
++            crate::theme::TokenStyle {
++                name: None,
++                scope: vec!["property".into()],
++                style: custom.clone(),
++            },
++        );
++        let mut highlighter = Highlighter::with_registry(&theme, registry).unwrap();
++        for file in ["main.recipe", "Dockerfile.special"] {
++            assert_eq!(highlighter.language_id_for_file(Some(file)), Some("recipe"));
++        }
++        for id in ["dockerfile", "recipe"] {
++            let spans = highlighter.highlight(id, "ARG MODE=release\n").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= 4 && 4 < s.end)
++                    .map(|s| &s.style),
++                Some(&custom)
++            );
++        }
++    }
++
+     #[test]
+     fn proto_routing_predicates_overrides_and_incremental_edits() {
+         let mut theme =
+@@ -758,7 +957,7 @@ mod tests {
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 15);
++        assert_eq!(checked.len(), 16);
+     }
+ 
+     #[test]
+@@ -768,7 +967,7 @@ mod tests {
+             LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
+         let theme = Theme::default();
+         let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
+-        for definition in language_definitions().iter().take(14) {
++        for definition in language_definitions().iter().take(15) {
+             for extension in definition.extensions {
+                 assert_eq!(
+                     highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
+diff --git a/src/queries/highlights/dockerfile.scm b/src/queries/highlights/dockerfile.scm
+new file mode 100644
+index 0000000..4c5293d
+--- /dev/null
++++ b/src/queries/highlights/dockerfile.scm
+@@ -0,0 +1,87 @@
++[
++  "FROM"
++  "AS"
++  "RUN"
++  "CMD"
++  "LABEL"
++  "EXPOSE"
++  "ENV"
++  "ADD"
++  "COPY"
++  "ENTRYPOINT"
++  "VOLUME"
++  "USER"
++  "WORKDIR"
++  "ARG"
++  "ONBUILD"
++  "STOPSIGNAL"
++  "HEALTHCHECK"
++  "SHELL"
++  "MAINTAINER"
++  "CROSS_BUILD"
++] @keyword
++
++[
++  ":"
++  "@"
++] @operator
++
++(comment) @comment
++
++(image_spec
++  (image_tag
++    ":" @punctuation.delimiter)
++  (image_digest
++    "@" @punctuation.delimiter))
++
++[
++  (double_quoted_string)
++  (single_quoted_string)
++  (json_string)
++] @string
++
++(heredoc_content) @string
++
++[
++  (heredoc_marker)
++  (heredoc_end)
++] @constant
++
++(escape_sequence) @string.escape
++
++(expansion
++  [
++    "$"
++    "{"
++    "}"
++  ] @punctuation.delimiter
++)
++
++(expansion_operator) @operator
++
++(variable) @constant
++
++(arg_pair
++  name: (unquoted_string) @property)
++
++(env_pair
++  name: (unquoted_string) @property)
++
++(label_pair
++  key: (_) @property)
++
++; Generic flag names are hidden tokens in the published generated parser.
++; Color the complete flag; nested variable constants retain their own color.
++(param) @property
++
++(mount_param
++  name: _ @property)
++
++(mount_param_param) @property
++
++(expose_port) @number
++
++; RedVim host-language additions; no shell-language injection.
++(image_name) @string.special
++(image_alias) @type
++(line_continuation) @punctuation.delimiter
+diff --git a/src/queries/highlights/smoke/Dockerfile b/src/queries/highlights/smoke/Dockerfile
+new file mode 100644
+index 0000000..324304d
+--- /dev/null
++++ b/src/queries/highlights/smoke/Dockerfile
+@@ -0,0 +1,32 @@
++# syntax=docker/dockerfile:1.7
++# café FROM is a comment
++ARG BASE=alpine:3.21
++FROM --platform=linux/arm64 ${BASE} AS builder
++ARG MODE=release
++ENV TITLE="hello ${MODE}" lower='value'
++ENV AGAIN=$lower
++LABEL org.example.name="café"
++WORKDIR /workspace
++USER nobody
++RUN --mount=type=cache,target=/cache echo "$TITLE" \
++  && echo continued
++COPY --chown=1000:1000 . /workspace
++ADD --checksum=sha256:abc https://example.com/file /file
++EXPOSE 8080/tcp
++SHELL ["python3", "-c"]
++RUN print('host language only')
++ONBUILD COPY . /child
++HEALTHCHECK --interval=30s CMD true
++VOLUME ["/data"]
++STOPSIGNAL SIGTERM
++RUN <<EOF
++echo heredoc café
++EOF
++COPY <<'END' /message
++literal heredoc
++END
++from alpine:3.21 as final
++COPY --from=builder /workspace /app
++ENV AFTER="after heredoc"
++ENTRYPOINT ["/app/start"]
++CMD ["--help", "escaped\nvalue"]
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index ebf5ade..39d3002 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -59,8 +59,22 @@ fn assert_self_check_report(output: Output) {
+     let lines = stdout.lines().collect::<Vec<_>>();
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     for language in [
+-        "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make", "sql",
+-        "hcl", "objc", "proto",
++        "nu",
++        "c",
++        "cpp",
++        "python",
++        "html",
++        "css",
++        "ruby",
++        "zig",
++        "swift",
++        "xml",
++        "make",
++        "sql",
++        "hcl",
++        "objc",
++        "proto",
++        "dockerfile",
+     ] {
+         assert!(
+             lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),
+-- 
+2.54.0 (Apple Git-157)
+

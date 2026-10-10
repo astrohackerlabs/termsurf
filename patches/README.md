@@ -14,12 +14,16 @@ ah fork check nushell
 ```
 
 PWD selects the monorepo checkout and its local forks. Linked branches never
-borrow main's clones. Listing and archive checks work without clones; prepare
-requires an existing clone with its recorded base. It reconstructs a recognized
-prefix in isolation, verifies ordered patch IDs/count/tree, then activates the
-selected branch. Original branches, ignored caches and pinned nested checkouts
-are preserved. Dirty/divergent histories, occupied branches, active Git
-operations, locks and path collisions refuse with diagnostics.
+borrow main's clones. Listing and archive checks work without clones. Prepare
+clones a missing checkout from its manifest `upstream` URL, then reconstructs
+a recognized prefix in isolation, verifies ordered patch IDs/count/tree, and
+activates the selected branch. Chromium's `gclient` provision installs
+depot_tools, shallow-fetches the recorded base and nested pins, applies the
+series, and syncs dependencies. Original branches, ignored caches and pinned
+nested checkouts are preserved. Existing checkouts are not fetched, replaced,
+or synced.
+Dirty/divergent histories, occupied branches, active Git operations, locks and
+path collisions refuse with diagnostics.
 
 Status reports each fork independently; check requires readiness and raises a
 catchable error on failures. Exact HEAD equality is reported separately because
@@ -37,9 +41,10 @@ Use the selected upstream base for a cumulative replacement series, or a tip
 proven equivalent to the complete selected series for a delta. The issue must
 be open and the experiment unfinished. Export reconstructs the proposed series
 in a scratch clone, verifies its tree and ordered identities, and creates a new
-`patches/<fork>/patches/issue-<id>/` directory. Existing directories refuse;
-manual archive work is still needed to extend an existing issue directory or
-change upstream bases. Do not delete historical archives to bypass this limit.
+`patches/<fork>/patches/issue-<id>/` directory. `--append` extends that issue
+directory when it is the last selected one, and `--base <commit>` exports a
+series rebased onto a new upstream base (see `ah patch help`). Existing archive
+bytes are never rewritten. Do not delete historical archives to bypass a refusal.
 
 The returned record contains source HEAD/tree, ordered paths and digests, and
 a proposed manifest entry. Explicitly update the fork reconstruction README,

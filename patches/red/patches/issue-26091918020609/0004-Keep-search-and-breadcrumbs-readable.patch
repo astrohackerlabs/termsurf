@@ -1,0 +1,146 @@
+From 95a3def0156d3870ed3b7bba574d80383620461e Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 14:13:22 -0500
+Subject: [PATCH] Keep search and breadcrumbs readable
+
+Sodium met a string of green,
+A barely legible search scene.
+Blue dims the ground; the letters shine,
+And breadcrumbs find a brighter line.
+---
+ src/theme/austin_night.rs | 28 ++++++++++++++++++++++------
+ themes/AUSTIN_NIGHT.md    | 21 +++++++++++++--------
+ themes/austin-night.json  | 12 +++++++-----
+ 3 files changed, 42 insertions(+), 19 deletions(-)
+
+diff --git a/src/theme/austin_night.rs b/src/theme/austin_night.rs
+index da8255b..ea4946b 100644
+--- a/src/theme/austin_night.rs
++++ b/src/theme/austin_night.rs
+@@ -55,7 +55,11 @@ fn palette_scope_coverage_and_effective_contrast() {
+             .iter()
+             .flat_map(|s| [s.style.fg, s.style.bg].into_iter().flatten()),
+     ) {
+-        assert!(palette.contains(&color), "off-palette {color:?}");
++        let opaque = match color {
++            Color::Rgba { r, g, b, a: 128 } => Color::Rgb { r, g, b },
++            _ => color,
++        };
++        assert!(palette.contains(&opaque), "off-palette {color:?}");
+     }
+     let base = parse_vscode_theme_contents(include_str!("../../themes/tokyo-night.json")).unwrap();
+     assert_eq!(base.token_styles.len(), 114);
+@@ -117,12 +121,24 @@ fn palette_scope_coverage_and_effective_contrast() {
+             .bg
+             .unwrap(),
+     ] {
+-        let adjusted = theme.ensure_text_contrast(&Style {
+-            bg: Some(bg),
+-            ..theme.style.clone()
+-        });
+-        assert!(contrast_ratio(adjusted.fg.unwrap(), bg) >= 4.5);
++        // Search overlays replace only the background; they do not adjust text.
++        let rendered_bg = blend_color(bg, theme.style.bg.unwrap());
++        for scope in [
++            "comment", "keyword", "function", "type", "number", "string", "variable",
++        ] {
++            let fg = theme.get_style(scope).unwrap().fg.unwrap();
++            assert!(
++                contrast_ratio(fg, rendered_bg) >= 4.5,
++                "search {scope}: {rendered_bg:?}"
++            );
++        }
+     }
++    assert!(
++        contrast_ratio(
++            theme.colors["breadcrumb.foreground"],
++            theme.colors["breadcrumb.background"]
++        ) >= 4.5
++    );
+ }
+ 
+ #[test]
+diff --git a/themes/AUSTIN_NIGHT.md b/themes/AUSTIN_NIGHT.md
+index 6306765..807fb4b 100644
+--- a/themes/AUSTIN_NIGHT.md
++++ b/themes/AUSTIN_NIGHT.md
+@@ -40,9 +40,10 @@ Source paths below are relative to the Astrohacker business repository.
+ | Keywords | `#bb9af7` |
+ | Types, operators, escapes | `#7dcfff` |
+ | Strings, added Git indicators | `#9ece6a` |
+-| Constants, numbers, parameters, warnings, active search | `#e8a84a` |
++| Constants, numbers, parameters, warnings | `#e8a84a` |
+ | Tags, errors, deleted Git indicators | `#f7768e` |
+-| Selection, other search matches | `#33467c` |
++| Selection; active search at 128/255 opacity | `#33467c` |
++| Other search matches | `#292e42` |
+ | Cursor text and ANSI black | `#15161e` |
+ | ANSI bright black | `#414868` |
+ 
+@@ -57,14 +58,18 @@ from main foreground through red. For example, orange `#ff9e64` and gold
+ `#e0af68` become sodium, cyan variants become `#7dcfff`, and dark comment
+ variants are superseded by the readable leading comment rule. The JSON is the
+ complete per-key/per-scope mapping; no runtime color generation is required.
+-All authored colors are opaque. Tokyo Night's alpha overlays are replaced by
+-opaque palette colors, so there is no inherited alpha-compositing dependency.
++Tokyo Night's alpha overlays are replaced by opaque palette colors. The sole
++intentional alpha is active search `#33467c80`: selection blue at 128/255,
++composited by RedVim against the editor ground (`#111219`), producing
++`#222c4a` (the renderer truncates channels). Other matches use raised `#292e42`.
+ 
+-RedVim's existing renderer still adjusts text contrast for cursor, selection,
+-brackets and search. In particular, active sodium search needs a dark adjusted
+-foreground; it must not retain light syntax foreground. Unit tests check actual
++RedVim's existing renderer adjusts text contrast for cursor, selection and
++brackets, but search changes only backgrounds. The first PTY check caught
++unreadable green text on the initial sodium search background. Search now uses
++a dark blue overlay that preserves readable syntax colors. Unit tests check actual
+ parsed styles and at least 4.5:1 normal/current-line syntax, gutter, menu,
+-selected, status and contrast-adjusted search text. Separator and ANSI swatches
++selected, status and unadjusted search text after compositing. Breadcrumb text
++is explicitly muted foreground on editor ground. Separator and ANSI swatches
+ are not treated as ordinary editor text. The existing surface renderer may
+ derive additional colors for cards and state separation; this theme does not
+ change that shared rendering behavior.
+diff --git a/themes/austin-night.json b/themes/austin-night.json
+index 2df3a47..06a16da 100644
+--- a/themes/austin-night.json
++++ b/themes/austin-night.json
+@@ -106,9 +106,9 @@
+     "editorLink.activeForeground": "#a9b1d6",
+     "editor.selectionBackground": "#33467c",
+     "editor.inactiveSelectionBackground": "#414868",
+-    "editor.findMatchBackground": "#e8a84a",
++    "editor.findMatchBackground": "#33467c80",
+     "editor.findMatchBorder": "#e8a84a",
+-    "editor.findMatchHighlightBackground": "#33467c",
++    "editor.findMatchHighlightBackground": "#292e42",
+     "editor.findRangeHighlightBackground": "#414868",
+     "editor.rangeHighlightBackground": "#414868",
+     "editor.wordHighlightBackground": "#414868",
+@@ -194,9 +194,9 @@
+     "diffEditor.unchangedCodeBackground": "#292e42",
+     "multiDiffEditor.headerBackground": "#15161e",
+     "multiDiffEditor.border": "#15161e",
+-    "breadcrumb.background": "#15161e",
++    "breadcrumb.background": "#111219",
+     "breadcrumbPicker.background": "#15161e",
+-    "breadcrumb.foreground": "#414868",
++    "breadcrumb.foreground": "#9aa5ce",
+     "breadcrumb.focusForeground": "#a9b1d6",
+     "breadcrumb.activeSelectionForeground": "#a9b1d6",
+     "tab.activeBackground": "#292e42",
+@@ -373,7 +373,9 @@
+     "red.inlineCommentActiveBackground": "#292e42",
+     "red.inlineCommentActiveBorder": "#7aa2f7",
+     "terminalCursor.foreground": "#c0caf5",
+-    "terminalCursor.background": "#15161e"
++    "terminalCursor.background": "#15161e",
++    "symbolIcon.fileForeground": "#9aa5ce",
++    "symbolIcon.folderForeground": "#9aa5ce"
+   },
+   "tokenColors": [
+     {
+-- 
+2.54.0 (Apple Git-157)
+

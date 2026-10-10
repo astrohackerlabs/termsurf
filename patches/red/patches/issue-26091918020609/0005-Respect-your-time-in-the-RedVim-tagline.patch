@@ -1,0 +1,50 @@
+From 1a19821edcc278eec3f3b63622a0b506e451012c Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 14:23:10 -0500
+Subject: [PATCH] Respect your time in the RedVim tagline
+
+Muscle memory can take a seat,
+Your time now gets the front-page beat.
+---
+ src/splash.rs       | 2 +-
+ src/ui/whats_new.rs | 4 ++--
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/splash.rs b/src/splash.rs
+index bb3f008..da554e9 100644
+--- a/src/splash.rs
++++ b/src/splash.rs
+@@ -123,7 +123,7 @@ fn full_block(version: &str) -> Vec<Line> {
+         width,
+     ));
+     lines.push(centered(
+-        "the editor that respects your muscle memory",
++        "the editor that respects your time",
+         Role::Muted,
+         width,
+     ));
+diff --git a/src/ui/whats_new.rs b/src/ui/whats_new.rs
+index 8525e9f..07af2e1 100644
+--- a/src/ui/whats_new.rs
++++ b/src/ui/whats_new.rs
+@@ -381,7 +381,7 @@ impl WhatsNewPanel {
+             self.centered_text(
+                 buffer,
+                 tagline_row,
+-                "the editor that respects your muscle memory",
++                "the editor that respects your time",
+                 palette.style(Role::Muted),
+             );
+         }
+@@ -693,7 +693,7 @@ mod tests {
+         let text = rendered_text(&buffer);
+         assert!(text.contains("RELEASE NOTES"));
+         assert!(text.contains(crate::identity::WHATS_NEW));
+-        assert!(text.contains("the editor that respects your muscle memory"));
++        assert!(text.contains("the editor that respects your time"));
+         assert!(text.contains(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+         assert!(text.contains("●"));
+         assert!(text.contains("Highlights"));
+-- 
+2.54.0 (Apple Git-157)
+

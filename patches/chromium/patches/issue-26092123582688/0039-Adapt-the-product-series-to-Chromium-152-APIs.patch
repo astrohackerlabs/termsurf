@@ -1,0 +1,616 @@
+From f1967e1fd5e573a2aac72fe7ad6d3f362a55302d Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 21 Sep 2026 21:25:30 -0500
+Subject: [PATCH 39/39] Adapt the product series to Chromium 152 APIs
+
+Keep the 26.5 SDK through an in-tree symlink. Solid-color layers,
+extension resource loading, PDF helper frames, print preview ids,
+and datalist key handling follow the 152 signatures.
+---
+ .../content/renderer/autofill_agent.cc        | 15 ++++
+ .../web_menu_runner_mac.mm                    | 10 ---
+ .../render_widget_host_view_mac.mm            | 82 -------------------
+ ...ts_component_extension_resource_manager.cc | 26 +++++-
+ .../ts_component_extension_resource_manager.h | 19 ++++-
+ .../ts_extension_resource_loader.cc           |  2 +-
+ .../ts_extensions_browser_client.cc           |  3 +-
+ .../extensions/ts_extensions_browser_client.h |  3 +-
+ .../libtermsurf_chromium/ts_browser_client.cc | 14 ++--
+ .../libtermsurf_chromium/ts_browser_client.h  |  5 +-
+ .../ts_browser_main_parts.cc                  | 10 ++-
+ .../ts_content_renderer_client.cc             |  3 +-
+ .../ts_download_progress.cc                   |  4 +-
+ .../ts_pdf_document_helper_client.cc          | 16 ++--
+ .../ts_pdf_document_helper_client.h           |  8 +-
+ .../ts_pdf_print_manager.cc                   |  7 +-
+ .../ts_pdf_print_manager.h                    |  2 +-
+ ...esponse_interceptor_url_loader_throttle.cc |  2 +-
+ .../shell_datalist_autofill_client.cc         | 12 +--
+ .../renderer/shell_datalist_autofill_client.h |  6 +-
+ .../html/parser/html_construction_site.cc     |  4 +-
+ 21 files changed, 116 insertions(+), 137 deletions(-)
+
+diff --git a/components/autofill/content/renderer/autofill_agent.cc b/components/autofill/content/renderer/autofill_agent.cc
+index a14c005196..0a4204edde 100644
+--- a/components/autofill/content/renderer/autofill_agent.cc
++++ b/components/autofill/content/renderer/autofill_agent.cc
+@@ -8,6 +8,7 @@
+ #include <stdint.h>
+ 
+ #include <algorithm>
++#include <cstdlib>
+ #include <functional>
+ #include <memory>
+ #include <optional>
+@@ -113,6 +114,20 @@ namespace autofill {
+ 
+ namespace {
+ 
++bool Issue779TraceEnabled() {
++  static const bool enabled =
++      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
++  return enabled;
++}
++
++void Issue779TraceAnnounce() {
++  static bool announced = false;
++  if (!announced) {
++    announced = true;
++    LOG(INFO) << "[issue-779-trace] trace_enabled component=autofill-agent";
++  }
++}
++
+ using enum CallTimerState::CallSite;
+ 
+ // Time to wait in ms to ensure that only a single select or datalist change
+diff --git a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+index 12a17a8a59..98bea99ea0 100644
+--- a/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
++++ b/content/app_shim_remote_cocoa/web_menu_runner_mac.mm
+@@ -181,18 +181,8 @@ - (void)runMenuInView:(NSView*)view
+       item.state =
+           item.tag == index ? NSControlStateValueOn : NSControlStateValueOff;
+     }
+-  } else {
+-    // If the select element doesn't have any options selected, then index will
+-    // be -1. In this case, selectItemWithTag would make the first option look
+-    // checked, but selectItemAtIndex lets us open the picker with no options
+-    // checked. Not calling anything here would also leave the first item
+-    // checked, we have to explicitly uncheck them by calling selectItemAtIndex
+-    // with -1. https://crbug.com/391648151
+-    [cell selectItemAtIndex:-1];
+   }
+ 
+-  cell.font = [NSFont menuFontOfSize:_fontSize];
+-
+   if (_rightAligned) {
+     _menu.userInterfaceLayoutDirection =
+         NSUserInterfaceLayoutDirectionRightToLeft;
+diff --git a/content/browser/renderer_host/render_widget_host_view_mac.mm b/content/browser/renderer_host/render_widget_host_view_mac.mm
+index 0a710c2bb9..21834af030 100644
+--- a/content/browser/renderer_host/render_widget_host_view_mac.mm
++++ b/content/browser/renderer_host/render_widget_host_view_mac.mm
+@@ -179,88 +179,6 @@ void SendVisibleTimeRequestToDelegatedFrameHost(
+   }
+ }
+ 
+-
+-bool Issue779TraceEnabled() {
+-  static const bool enabled =
+-      std::getenv("TERMSURF_ISSUE_779_TRACE") != nullptr;
+-  return enabled;
+-}
+-
+-void Issue779TraceAnnounce() {
+-  static bool announced = false;
+-  if (!announced) {
+-    announced = true;
+-    LOG(INFO) << "[issue-779-trace] trace_enabled component=chromium-rwhv-mac";
+-  }
+-}
+-
+-void Issue779TraceWebviewBounds(const char* event,
+-                                RenderWidgetHostViewMac* view,
+-                                const gfx::Rect& input,
+-                                const gfx::Rect& view_bounds_in_window,
+-                                const gfx::Rect& window_frame_in_screen,
+-                                const gfx::Rect& computed_view_bounds,
+-                                bool attached_to_window,
+-                                bool is_headless) {
+-  if (!Issue779TraceEnabled()) {
+-    return;
+-  }
+-
+-  Issue779TraceAnnounce();
+-  WebContents* web_contents = view->GetWebContents();
+-  LOG(INFO) << "[issue-779-trace] chromium_webview_bounds event=" << event
+-            << " path="
+-            << (web_contents ? "main-or-owned-webcontents"
+-                             : "date-page-popup-or-transient")
+-            << " view=" << static_cast<void*>(view)
+-            << " widget=" << static_cast<void*>(view->host())
+-            << " webcontents=" << static_cast<void*>(web_contents)
+-            << " has_webcontents=" << static_cast<bool>(web_contents)
+-            << " input=" << input.ToString()
+-            << " view_bounds_in_window=" << view_bounds_in_window.ToString()
+-            << " window_frame_in_screen=" << window_frame_in_screen.ToString()
+-            << " computed_view_bounds=" << computed_view_bounds.ToString()
+-            << " attached_to_window=" << attached_to_window
+-            << " is_headless=" << is_headless;
+-}
+-
+-NSString* Issue779BoolString(BOOL value) {
+-  return value ? @"true" : @"false";
+-}
+-
+-std::string Issue779PagePopupWindowsSummary() {
+-  NSArray<NSWindow*>* windows = NSApp.orderedWindows;
+-  NSMutableArray<NSString*>* parts = [NSMutableArray array];
+-  for (NSWindow* window in windows) {
+-    NSString* class_name = NSStringFromClass(window.class);
+-    if (window.level != 101 &&
+-        [class_name rangeOfString:@"RenderWidgetPopupWindow"].location ==
+-            NSNotFound) {
+-      continue;
+-    }
+-    [parts addObject:[NSString
+-                         stringWithFormat:
+-                             @"window=%p class=%@ number=%ld frame=%@ "
+-                              "level=%ld visible=%@ key=%@ main=%@ "
+-                              "ignoresMouseEvents=%@ parent=%p children=%lu",
+-                             window, class_name,
+-                             static_cast<long>(window.windowNumber),
+-                             NSStringFromRect(window.frame),
+-                             static_cast<long>(window.level),
+-                             Issue779BoolString(window.isVisible),
+-                             Issue779BoolString(window.isKeyWindow),
+-                             Issue779BoolString(window.isMainWindow),
+-                             Issue779BoolString(window.ignoresMouseEvents),
+-                             window.parentWindow,
+-                             static_cast<unsigned long>(
+-                                 window.childWindows.count)]];
+-  }
+-  return base::SysNSStringToUTF8([NSString
+-      stringWithFormat:@"pagepopup_window_count=%lu pagepopup_windows=%@",
+-                       static_cast<unsigned long>(parts.count),
+-                       [parts componentsJoinedByString:@"|"]]);
+-}
+-
+ }  // namespace
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+index a84f507034..cdfd0e64e8 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.cc
+@@ -59,13 +59,37 @@ bool TsComponentExtensionResourceManager::IsComponentExtensionResource(
+ 
+ const ui::TemplateReplacements*
+ TsComponentExtensionResourceManager::GetTemplateReplacementsForExtension(
+-    const extensions::ExtensionId& extension_id) const {
++    const extensions::ExtensionId& extension_id,
++    const content::BrowserContext* /*context*/) const {
+   if (extension_id == extension_misc::kPdfExtensionId) {
+     return &pdf_template_replacements_;
+   }
+   return nullptr;
+ }
+ 
++bool TsComponentExtensionResourceManager::IsDynamicComponentExtensionResource(
++    const extensions::ExtensionId& /*extension_id*/,
++    const std::string& /*path*/,
++    const content::BrowserContext* /*context*/) const {
++  return false;
++}
++
++std::string TsComponentExtensionResourceManager::GetDynamicResourceContent(
++    const extensions::ExtensionId& /*extension_id*/,
++    const std::string& /*path*/,
++    const content::BrowserContext* /*context*/) const {
++  return std::string();
++}
++
++base::ScopedClosureRunner
++TsComponentExtensionResourceManager::RegisterTemplateDataProvider(
++    const extensions::ExtensionId& /*extension_id*/,
++    const content::BrowserContext* /*context*/,
++    extensions::ComponentExtensionResourceManager::TemplateDataProvider
++    /*provider*/) const {
++  return base::ScopedClosureRunner();
++}
++
+ bool TsComponentExtensionResourceManager::SelfTestPdfResource() const {
+   int resource_id = 0;
+   return IsComponentExtensionResource(
+diff --git a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h
+index 7443f3a48d..ac2e08b6b3 100644
+--- a/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h
++++ b/content/libtermsurf_chromium/extensions/ts_component_extension_resource_manager.h
+@@ -6,12 +6,15 @@
+ #define CONTENT_LIBTERMSURF_CHROMIUM_EXTENSIONS_TS_COMPONENT_EXTENSION_RESOURCE_MANAGER_H_
+ 
+ #include <map>
++#include <string>
+ 
+ #include "base/files/file_path.h"
+ #include "extensions/browser/component_extension_resource_manager.h"
+ 
+ namespace content {
+ 
++class BrowserContext;
++
+ class TsComponentExtensionResourceManager
+     : public extensions::ComponentExtensionResourceManager {
+  public:
+@@ -27,7 +30,21 @@ class TsComponentExtensionResourceManager
+                                     int* resource_id) const override;
+ 
+   const ui::TemplateReplacements* GetTemplateReplacementsForExtension(
+-      const extensions::ExtensionId& extension_id) const override;
++      const extensions::ExtensionId& extension_id,
++      const content::BrowserContext* context) const override;
++  bool IsDynamicComponentExtensionResource(
++      const extensions::ExtensionId& extension_id,
++      const std::string& path,
++      const content::BrowserContext* context) const override;
++  std::string GetDynamicResourceContent(
++      const extensions::ExtensionId& extension_id,
++      const std::string& path,
++      const content::BrowserContext* context) const override;
++  [[nodiscard]] base::ScopedClosureRunner RegisterTemplateDataProvider(
++      const extensions::ExtensionId& extension_id,
++      const content::BrowserContext* context,
++      extensions::ComponentExtensionResourceManager::TemplateDataProvider
++          provider) const override;
+ 
+   size_t resource_count() const { return path_to_resource_id_.size(); }
+   bool SelfTestPdfResource() const;
+diff --git a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+index 2ff2b9be5d..dbd4d2b26c 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extension_resource_loader.cc
+@@ -77,7 +77,7 @@ std::string LoadResourceBody(int resource_id,
+               ->GetComponentExtensionResourceManager()
+           ? extensions::ExtensionsBrowserClient::Get()
+                 ->GetComponentExtensionResourceManager()
+-                ->GetTemplateReplacementsForExtension(extension_id)
++                ->GetTemplateReplacementsForExtension(extension_id, nullptr)
+           : nullptr;
+   if (!replacements || replacements->empty()) {
+     return body;
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+index fb11a52125..a5da2fca81 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.cc
+@@ -342,7 +342,8 @@ void TsExtensionsBrowserClient::LoadResourceFromResourceBundle(
+     const base::FilePath& resource_relative_path,
+     int resource_id,
+     scoped_refptr<net::HttpResponseHeaders> headers,
+-    mojo::PendingRemote<network::mojom::URLLoaderClient> client) {
++    mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++    content::BrowserContext* /*browser_context*/) {
+   LoadTsExtensionResourceFromBundle(request, std::move(loader),
+                                     std::move(client), resource_relative_path,
+                                     resource_id, std::move(headers));
+diff --git a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+index c8316ce3cc..796d73ee09 100644
+--- a/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
++++ b/content/libtermsurf_chromium/extensions/ts_extensions_browser_client.h
+@@ -63,7 +63,8 @@ class TsExtensionsBrowserClient : public extensions::ExtensionsBrowserClient {
+       const base::FilePath& resource_relative_path,
+       int resource_id,
+       scoped_refptr<net::HttpResponseHeaders> headers,
+-      mojo::PendingRemote<network::mojom::URLLoaderClient> client) override;
++      mojo::PendingRemote<network::mojom::URLLoaderClient> client,
++      content::BrowserContext* browser_context) override;
+   bool AllowCrossRendererResourceLoad(
+       const network::ResourceRequest& request,
+       network::mojom::RequestDestination destination,
+diff --git a/content/libtermsurf_chromium/ts_browser_client.cc b/content/libtermsurf_chromium/ts_browser_client.cc
+index 2a316c8990..2df4ba6ab3 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.cc
++++ b/content/libtermsurf_chromium/ts_browser_client.cc
+@@ -4,6 +4,8 @@
+ 
+ #include "content/libtermsurf_chromium/ts_browser_client.h"
+ 
++#include "content/public/browser/security_principal.h"
++
+ #include "base/command_line.h"
+ #include "base/logging.h"
+ #include "content/libtermsurf_chromium/ts_browser_main_parts.h"
+@@ -242,13 +244,15 @@ void TsBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+       render_process_id, render_frame_id, request_initiator_origin, factories);
+ }
+ 
+-bool TsBrowserClient::ShouldUseProcessPerSite(BrowserContext* browser_context,
+-                                              const GURL& site_url) {
++bool TsBrowserClient::ShouldUseProcessPerSite(
++    BrowserContext* browser_context,
++    const SecurityPrincipal& security_principal) {
+   bool use_process_per_site = false;
+-  if (!MaybeUseTsPdfProcessPerSite(browser_context, site_url,
++  if (!MaybeUseTsPdfProcessPerSite(browser_context,
++                                   security_principal.GetDeprecatedSiteURL(),
+                                    &use_process_per_site)) {
+-    return ShellContentBrowserClient::ShouldUseProcessPerSite(browser_context,
+-                                                              site_url);
++    return ShellContentBrowserClient::ShouldUseProcessPerSite(
++        browser_context, security_principal);
+   }
+   return use_process_per_site;
+ }
+diff --git a/content/libtermsurf_chromium/ts_browser_client.h b/content/libtermsurf_chromium/ts_browser_client.h
+index 67133a93ae..08abe713be 100644
+--- a/content/libtermsurf_chromium/ts_browser_client.h
++++ b/content/libtermsurf_chromium/ts_browser_client.h
+@@ -97,8 +97,9 @@ class TsBrowserClient : public ShellContentBrowserClient {
+       int render_frame_id,
+       const std::optional<url::Origin>& request_initiator_origin,
+       NonNetworkURLLoaderFactoryMap* factories) override;
+-  bool ShouldUseProcessPerSite(BrowserContext* browser_context,
+-                               const GURL& site_url) override;
++  bool ShouldUseProcessPerSite(
++      BrowserContext* browser_context,
++      const SecurityPrincipal& security_principal) override;
+   bool IsHandledURL(const GURL& url) override;
+   void SiteInstanceGotProcessAndSite(SiteInstance* site_instance) override;
+   bool IsFileSystemAccessApiFilePickerAllowed(
+diff --git a/content/libtermsurf_chromium/ts_browser_main_parts.cc b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+index e20c60ad9d..e411482e34 100644
+--- a/content/libtermsurf_chromium/ts_browser_main_parts.cc
++++ b/content/libtermsurf_chromium/ts_browser_main_parts.cc
+@@ -403,8 +403,9 @@ void* TsBrowserMainParts::CreateTab(void* ctx,
+       false /* enable_pixel_canvas */);
+   tab->compositor->SetAcceleratedWidget(tab->widget_mac->accelerated_widget());
+ 
+-  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+-  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++  tab->root_layer = std::make_unique<ui::LayerSolidColor>();
++  tab->root_layer->AsSolidColor()->SetColor(
++      SkColor4f::FromColor(SK_ColorTRANSPARENT));
+ 
+   // Set initial size.
+   {
+@@ -584,8 +585,9 @@ void* TsBrowserMainParts::CreateDevToolsTab(void* ctx,
+       base::SingleThreadTaskRunner::GetCurrentDefault(), false);
+   tab->compositor->SetAcceleratedWidget(tab->widget_mac->accelerated_widget());
+ 
+-  tab->root_layer = std::make_unique<ui::Layer>(ui::LAYER_SOLID_COLOR);
+-  tab->root_layer->SetColor(SK_ColorTRANSPARENT);
++  tab->root_layer = std::make_unique<ui::LayerSolidColor>();
++  tab->root_layer->AsSolidColor()->SetColor(
++      SkColor4f::FromColor(SK_ColorTRANSPARENT));
+ 
+   {
+     RenderWidgetHostView* view =
+diff --git a/content/libtermsurf_chromium/ts_content_renderer_client.cc b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+index 9a45df542b..f77cdd13fa 100644
+--- a/content/libtermsurf_chromium/ts_content_renderer_client.cc
++++ b/content/libtermsurf_chromium/ts_content_renderer_client.cc
+@@ -18,7 +18,8 @@
+ 
+ namespace content {
+ 
+-TsContentRendererClient::TsContentRendererClient() = default;
++TsContentRendererClient::TsContentRendererClient()
++    : ShellContentRendererClient(false) {}
+ TsContentRendererClient::~TsContentRendererClient() = default;
+ 
+ void TsContentRendererClient::RenderThreadStarted() {
+diff --git a/content/libtermsurf_chromium/ts_download_progress.cc b/content/libtermsurf_chromium/ts_download_progress.cc
+index 3ab5f7800a..7929d0023e 100644
+--- a/content/libtermsurf_chromium/ts_download_progress.cc
++++ b/content/libtermsurf_chromium/ts_download_progress.cc
+@@ -10,7 +10,7 @@
+ 
+ #include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+-#include "base/byte_count.h"
++#include "base/byte_size.h"
+ #include "components/download/public/common/download_item.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/download_item_utils.h"
+@@ -60,7 +60,7 @@ uint64_t ResolveDownloadTotalBytes(download::DownloadItem* item,
+   const scoped_refptr<const net::HttpResponseHeaders> headers =
+       item->GetResponseHeaders();
+   if (headers) {
+-    std::optional<base::ByteCount> content_length = headers->GetContentLength();
++    std::optional<base::ByteSize> content_length = headers->GetContentLength();
+     if (content_length.has_value() && content_length->InBytes() > 0) {
+       return static_cast<uint64_t>(content_length->InBytes());
+     }
+diff --git a/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+index 5a891926b5..fca773a78b 100644
+--- a/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
++++ b/content/libtermsurf_chromium/ts_pdf_document_helper_client.cc
+@@ -13,16 +13,16 @@ TsPDFDocumentHelperClient::TsPDFDocumentHelperClient() = default;
+ TsPDFDocumentHelperClient::~TsPDFDocumentHelperClient() = default;
+ 
+ void TsPDFDocumentHelperClient::OnDocumentLoadComplete(
+-    content::RenderFrameHost* render_frame_host) {
++    content::RenderFrameHost& render_frame_host) {
+   LOG(INFO) << "[termsurf-pdf] pdf-document-load-complete frame_url="
+-            << render_frame_host->GetLastCommittedURL();
++            << render_frame_host.GetLastCommittedURL();
+ }
+ 
+ void TsPDFDocumentHelperClient::UpdateContentRestrictions(
+-    content::RenderFrameHost* render_frame_host,
++    content::RenderFrameHost& render_frame_host,
+     int content_restrictions) {
+   LOG(INFO) << "[termsurf-pdf] pdf-content-restrictions frame_url="
+-            << render_frame_host->GetLastCommittedURL()
++            << render_frame_host.GetLastCommittedURL()
+             << " restrictions=" << content_restrictions;
+ }
+ 
+@@ -31,18 +31,18 @@ void TsPDFDocumentHelperClient::OnSaveURL() {
+ }
+ 
+ void TsPDFDocumentHelperClient::SetPluginCanSave(
+-    content::RenderFrameHost* render_frame_host,
++    content::RenderFrameHost& render_frame_host,
+     bool can_save) {
+   LOG(INFO) << "[termsurf-pdf] pdf-plugin-can-save frame_url="
+-            << render_frame_host->GetLastCommittedURL()
++            << render_frame_host.GetLastCommittedURL()
+             << " can_save=" << can_save;
+ }
+ 
+ #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+ void TsPDFDocumentHelperClient::OnSearchifyStarted(
+-    content::RenderFrameHost* render_frame_host) {
++    content::RenderFrameHost& render_frame_host) {
+   LOG(INFO) << "[termsurf-pdf] pdf-searchify-started frame_url="
+-            << render_frame_host->GetLastCommittedURL();
++            << render_frame_host.GetLastCommittedURL();
+ }
+ #endif
+ 
+diff --git a/content/libtermsurf_chromium/ts_pdf_document_helper_client.h b/content/libtermsurf_chromium/ts_pdf_document_helper_client.h
+index 1088fab617..2ed2451203 100644
+--- a/content/libtermsurf_chromium/ts_pdf_document_helper_client.h
++++ b/content/libtermsurf_chromium/ts_pdf_document_helper_client.h
+@@ -25,15 +25,15 @@ class TsPDFDocumentHelperClient : public PDFDocumentHelperClient {
+ 
+  private:
+   // PDFDocumentHelperClient:
+-  void OnDocumentLoadComplete(content::RenderFrameHost* render_frame_host)
++  void OnDocumentLoadComplete(content::RenderFrameHost& render_frame_host)
+       override;
+-  void UpdateContentRestrictions(content::RenderFrameHost* render_frame_host,
++  void UpdateContentRestrictions(content::RenderFrameHost& render_frame_host,
+                                  int content_restrictions) override;
+   void OnSaveURL() override;
+-  void SetPluginCanSave(content::RenderFrameHost* render_frame_host,
++  void SetPluginCanSave(content::RenderFrameHost& render_frame_host,
+                         bool can_save) override;
+ #if BUILDFLAG(ENABLE_SCREEN_AI_SERVICE)
+-  void OnSearchifyStarted(content::RenderFrameHost* render_frame_host) override;
++  void OnSearchifyStarted(content::RenderFrameHost& render_frame_host) override;
+ #endif
+ };
+ 
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.cc b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+index b1b8e56d2c..83e762284f 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.cc
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.cc
+@@ -241,9 +241,10 @@ void TsPdfPrintManager::ShowScriptedPrintPreview() {}
+ void TsPdfPrintManager::RequestPrintPreview(
+     printing::mojom::RequestPrintPreviewParamsPtr params) {}
+ 
+-void TsPdfPrintManager::CheckForCancel(int32_t preview_ui_id,
+-                                       int32_t request_id,
+-                                       CheckForCancelCallback callback) {
++void TsPdfPrintManager::CheckForCancel(
++    const base::UnguessableToken& /*preview_ui_id*/,
++    int32_t /*request_id*/,
++    CheckForCancelCallback callback) {
+   std::move(callback).Run(true);
+ }
+ 
+diff --git a/content/libtermsurf_chromium/ts_pdf_print_manager.h b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+index 080bc5cbeb..b9d1141102 100644
+--- a/content/libtermsurf_chromium/ts_pdf_print_manager.h
++++ b/content/libtermsurf_chromium/ts_pdf_print_manager.h
+@@ -58,7 +58,7 @@ class TsPdfPrintManager
+   void ShowScriptedPrintPreview() override;
+   void RequestPrintPreview(
+       printing::mojom::RequestPrintPreviewParamsPtr params) override;
+-  void CheckForCancel(int32_t preview_ui_id,
++  void CheckForCancel(const base::UnguessableToken& preview_ui_id,
+                       int32_t request_id,
+                       CheckForCancelCallback callback) override;
+   void SetAccessibilityTree(
+diff --git a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+index ae08e9bcaf..60f0b69938 100644
+--- a/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
++++ b/content/libtermsurf_chromium/ts_plugin_response_interceptor_url_loader_throttle.cc
+@@ -298,7 +298,7 @@ void TsPluginResponseInterceptorURLLoaderThrottle::WillProcessResponse(
+   }
+ 
+   network::URLLoaderCompletionStatus status(net::OK);
+-  status.decoded_body_length = base::checked_cast<int64_t>(payload.size());
++  status.decoded_body_length = base::ByteSize(payload.size());
+   new_client->OnComplete(status);
+ 
+   mojo::PendingRemote<network::mojom::URLLoader> original_loader;
+diff --git a/content/shell/renderer/shell_datalist_autofill_client.cc b/content/shell/renderer/shell_datalist_autofill_client.cc
+index a92f96e782..1533ff7434 100644
+--- a/content/shell/renderer/shell_datalist_autofill_client.cc
++++ b/content/shell/renderer/shell_datalist_autofill_client.cc
+@@ -174,8 +174,8 @@ void ShellDatalistAutofillClient::TextFieldValueChangedImpl(
+   ShowSuggestions(element, {.requires_caret_at_end = true});
+ }
+ 
+-void ShellDatalistAutofillClient::TextFieldDidReceiveKeyDown(
+-    const blink::WebInputElement& element,
++bool ShellDatalistAutofillClient::DidReceiveKeyDown(
++    const blink::WebElement& element,
+     const blink::WebKeyboardEvent& event) {
+   const bool arrow_key = event.windows_key_code == ui::VKEY_DOWN ||
+                          event.windows_key_code == ui::VKEY_UP;
+@@ -187,10 +187,12 @@ void ShellDatalistAutofillClient::TextFieldDidReceiveKeyDown(
+               << " windows_key_code=" << event.windows_key_code
+               << " arrow_key=" << arrow_key;
+   }
+-  if (arrow_key) {
+-    ShowSuggestions(element, {.autofill_on_empty_values = true,
+-                              .requires_caret_at_end = true});
++  if (auto input = element.DynamicTo<blink::WebInputElement>();
++      arrow_key && input) {
++    ShowSuggestions(input, {.autofill_on_empty_values = true,
++                            .requires_caret_at_end = true});
+   }
++  return false;
+ }
+ 
+ void ShellDatalistAutofillClient::OpenTextDataListChooser(
+diff --git a/content/shell/renderer/shell_datalist_autofill_client.h b/content/shell/renderer/shell_datalist_autofill_client.h
+index e2c0b884ae..a6b2dc6989 100644
+--- a/content/shell/renderer/shell_datalist_autofill_client.h
++++ b/content/shell/renderer/shell_datalist_autofill_client.h
+@@ -17,6 +17,7 @@
+ #include "third_party/blink/public/web/web_input_element.h"
+ 
+ namespace blink {
++class WebElement;
+ class WebKeyboardEvent;
+ }
+ 
+@@ -57,9 +58,8 @@ class ShellDatalistAutofillClient : private RenderFrameObserver,
+   void TextFieldValueChanged(
+       const blink::WebFormControlElement& element) override;
+   void TextFieldValueChangedImpl(blink::WebFormControlElement element);
+-  void TextFieldDidReceiveKeyDown(
+-      const blink::WebInputElement& element,
+-      const blink::WebKeyboardEvent& event) override;
++  bool DidReceiveKeyDown(const blink::WebElement& element,
++                         const blink::WebKeyboardEvent& event) override;
+   void OpenTextDataListChooser(const blink::WebInputElement& element) override;
+   void DataListOptionsChanged(const blink::WebInputElement& element) override;
+ 
+diff --git a/third_party/blink/renderer/core/html/parser/html_construction_site.cc b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+index 05904ad10b..a1eafd3434 100644
+--- a/third_party/blink/renderer/core/html/parser/html_construction_site.cc
++++ b/third_party/blink/renderer/core/html/parser/html_construction_site.cc
+@@ -450,12 +450,14 @@ void HTMLConstructionSite::FlushPendingText() {
+ 
+ void HTMLConstructionSite::QueueTask(HTMLConstructionSiteTask& task,
+                                      bool flush_pending_text) {
+-  if (flush_pending_text)
++  if (flush_pending_text) {
+     FlushPendingText();
+   }
+ 
+   if (sanitizer_ && task.child && task.parent &&
+       !task.parent->IsDocumentNode() &&
++      task.operation !=
++          HTMLConstructionSiteTask::Operation::kInsertAlreadyParsedChild &&
+       task.operation != HTMLConstructionSiteTask::Operation::kTakeAllChildren) {
+     CHECK(RuntimeEnabledFeatures::StreamingSanitizerEnabled());
+     if (!sanitizer_->Sanitize(task.child)) {
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,108 @@
+From f5e5ee9266cb9a88bf59452f887aa519b1ab3437 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 09:45:05 -0500
+Subject: [PATCH] Check HCL template and splat colors
+
+The splat had left its property pale;
+Exact token checks now tell the tale.
+---
+ docs/BUNDLED_LANGUAGES.md         |  3 ++-
+ docs/languages-provenance.json    |  2 +-
+ src/highlighter/bundled_checks.rs | 42 +++++++++++++++++++++++++++++++
+ src/queries/highlights/hcl.scm    |  3 +++
+ 4 files changed, 48 insertions(+), 2 deletions(-)
+
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index 3c65650..cc42487 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -72,7 +72,8 @@ Explicit theme styles remain authoritative.
+ 
+ Default indentation is two spaces and line comments use `#`; highlighting also
+ recognizes `//` and block comments. Templates retain distinct expression colors
+-inside strings and heredocs. `.tf.json` and `.tfvars.json` remain JSON.
++inside strings and heredocs. An explicit attribute-access rule preserves property
++colors after splats and compound expressions. `.tf.json` and `.tfvars.json` remain JSON.
+ Standalone `.tftpl` templates, embedded shell/JSON grammars, Terraform execution,
+ LSP and formatting are outside this integration. All tracked infrastructure
+ HCL is checked as text; no provider or infrastructure operations are required.
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index 065a288..a0e82f5 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -165,7 +165,7 @@
+     "query_repository": "https://github.com/nvim-treesitter/nvim-treesitter",
+     "query_revision": "4d9466677a5ceadef104eaa0fe08d60d91c4e9a7",
+     "upstream_query_sha256": "553290666870af8165121a20914d5d3b549f5e3ba250773f06a0f331dcf9fcff",
+-    "bundled_query_sha256": "dac296bb560c11b85e16e3371eaa6b6b9bff790cdd388f7a635ca24a18cca51e",
++    "bundled_query_sha256": "5f432295dbb92bee2a2abdf6fa7783309e96601e03823f368353f906131eea3e",
+     "license": "Apache-2.0",
+     "license_file": "tree-sitter-hcl.txt",
+     "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index 112db9d..745767b 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -245,6 +245,48 @@ pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str
+                 );
+             }
+         }
++        if id == "hcl" && fixture.filename == "example.TF" {
++            // Anchors disambiguate repeated keywords and identifiers. Check every
++            // byte of each target, including expression tokens inside templates.
++            for (anchor, offset, length, scope) in [
++                ("variable \"region\"", 10, 6, "string"),
++                ("var.region", 4, 6, "property"),
++                ("var.region", 3, 1, "punctuation.delimiter"),
++                ("[1, 2]", 0, 1, "punctuation.bracket"),
++                ("[1, 2]", 2, 1, "punctuation.delimiter"),
++                ("{ a = 1 }", 0, 1, "punctuation.bracket"),
++                ("{ a = 1 }", 2, 1, "property"),
++                ("? \"yes\"", 0, 1, "punctuation.delimiter"),
++                ("[*].id", 0, 3, "punctuation.delimiter"),
++                ("[*].id", 4, 2, "property"),
++                ("n * 2", 2, 1, "operator"),
++                ("k => v", 2, 2, "punctuation.delimiter"),
++                ("${upper", 0, 2, "punctuation.delimiter"),
++                ("${upper", 2, 5, "function"),
++                ("%{ if true ~}", 0, 2, "punctuation.delimiter"),
++                ("%{ if true ~}", 3, 2, "keyword.conditional"),
++                ("%{ if true ~}", 6, 4, "boolean"),
++                ("%{ if true ~}", 11, 1, "punctuation.delimiter"),
++                ("%{ for item", 3, 3, "keyword.repeat"),
++                ("%{ else", 3, 4, "keyword.conditional"),
++                ("${item}", 2, 4, "variable"),
++                ("${item}", 6, 1, "punctuation.delimiter"),
++                ("<<EOT", 0, 2, "punctuation.delimiter"),
++                ("<<-END", 0, 3, "punctuation.delimiter"),
++            ] {
++                let start = fixture.source.find(anchor).context("missing HCL anchor")? + offset;
++                let expected = theme.get_style(scope).context("missing HCL scope")?;
++                for byte in start..start + length {
++                    let actual = styles
++                        .iter()
++                        .rev()
++                        .find(|s| s.start <= byte && byte < s.end)
++                        .map(|s| &s.style);
++                    anyhow::ensure!(actual == Some(&expected),
++                        "hcl: {anchor:?} byte {byte} should have {scope}; actual={actual:?}, expected={expected:?}");
++                }
++            }
++        }
+         if !checked.contains(&id) {
+             checked.push(id);
+         }
+diff --git a/src/queries/highlights/hcl.scm b/src/queries/highlights/hcl.scm
+index a5398bc..024880a 100644
+--- a/src/queries/highlights/hcl.scm
++++ b/src/queries/highlights/hcl.scm
+@@ -117,3 +117,6 @@
+     (identifier) @variable.builtin)
+   (get_attr
+     (identifier) @property))
++
++; Also cover attribute access following a splat or another compound expression.
++(get_attr (identifier) @property)
+-- 
+2.54.0 (Apple Git-157)
+

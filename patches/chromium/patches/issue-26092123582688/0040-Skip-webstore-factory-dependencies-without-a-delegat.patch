@@ -1,0 +1,37 @@
+From 186c72208a942e55cba8d1f500227657f14d6c0f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 22 Sep 2026 05:40:46 -0500
+Subject: [PATCH] Skip webstore factory dependencies without a delegate
+
+Chromium 152 builds PendingApprovalsShutdownNotifierFactory for every
+embedder and dereferences GetWebstorePrivateAPIDelegate(). A null
+delegate means the webstore API is unsupported. Skip those dependencies
+and keep the ManagementAPI dependency.
+---
+ .../api/webstore_private/webstore_private_api.cc     | 12 +++++++++---
+ 1 file changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/extensions/browser/api/webstore_private/webstore_private_api.cc b/extensions/browser/api/webstore_private/webstore_private_api.cc
+index 7702598c71..6596508209 100644
+--- a/extensions/browser/api/webstore_private/webstore_private_api.cc
++++ b/extensions/browser/api/webstore_private/webstore_private_api.cc
+@@ -136,10 +136,16 @@ class PendingApprovalsShutdownNotifierFactory
+     // This set of dependencies mirrors the dependencies of the webstore API.
+     // Since this is a helper class for that API, it implicitly depends on the
+     // same set of functionality.
++    // A null delegate means the embedder does not support the webstore API.
++    // Chrome always installs one. Content shell does not, and dereferencing
++    // the null crashes browser startup.
++    auto* client = ExtensionsAPIClient::Get();
+     auto* delegate =
+-        ExtensionsAPIClient::Get()->GetWebstorePrivateAPIDelegate();
+-    for (auto* factory : delegate->GetWebStoreAPIFactoryDependencies()) {
+-      DependsOn(factory);
++        client ? client->GetWebstorePrivateAPIDelegate() : nullptr;
++    if (delegate) {
++      for (auto* factory : delegate->GetWebStoreAPIFactoryDependencies()) {
++        DependsOn(factory);
++      }
+     }
+ 
+     for (auto* factory : GetAdditionalWebstorePrivateAPIFactoryDependencies()) {

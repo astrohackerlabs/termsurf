@@ -19,7 +19,8 @@ Preparation preserves original branches and caches and refuses divergent state.
 Linked checkouts use their own local forks, with no fallback to main.
 For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
 export verifies a new issue archive and proposes pins; README, manifest and
-experiment updates remain explicit. Existing archive directories refuse.
+experiment updates remain explicit. Use `--append` for a later experiment in
+the same issue and `--base <commit>` for a rebased series; see `ah patch help`.
 Older pin recipes below are historical reconstruction context; the manifest
 and these commands select current inputs.
 
@@ -30,22 +31,66 @@ branch notes that are safe to commit.
 
 ## Current State
 
-- **Active pin (Issue 26082217204646 Exp 6):** Electron Chromium
-  **`150.0.7871.224`** + squash series + `ts_capture_png` overlay snapshot
-  (`issue-26081616315182/` **37** + `issue-26082217204646/` **1**)
+- **Active pin (Issue 26092123582688 Exp 2):** Electron **44.4.3** Chromium
+  **`152.0.7977.130`** + rebased product series + webstore-delegate guard
+  (`issue-26092123582688/` **40**)
 - Product branch:
-  `150.0.7871.224-issue-26082217204646-exp6-overlay-screenshot`
-- Product HEAD: `3a81eca94aeed9b087bed4bba161a3b18ef2168e`
-- Product tree: `06eaea2c416aea6c203d5a4a1ca5a1cf9b7c997b`
+  `152.0.7977.130-issue-26092123582688-exp2-webstore-null`
+- Product HEAD: `186c72208a942e55cba8d1f500227657f14d6c0f`
+- Product tree: `b1f3451fb4efd372692bbce188917b797bd0ec50`
 - Main build target: `libtermsurf_chromium`
 - Working tree: `forks/chromium/src`
 - Tooling: `forks/chromium/depot_tools`
 - Patch archives: `patches/chromium/patches`
 - Release authority: `patches/release-manifest.json` chromium entry
-- **Patches:** **38** total. Archive SHA-256
-  `e1ddfafab1de3565b546cc8517349cbc533967240ca3c66b2aa6645a8b006b63`
+- **Patches:** **40** total. Archive SHA-256
+  `06b66bc84f8486b2b92005c53c794d7992990f6991b4f3de7d09d78061be1496`
+- Nested checkouts are unchanged from the 150 pin:
+  `third_party/google_toolbox_for_mac/src`
+  `42b12f10cd8342f5cb41a1e3e3a2f13fd9943b0d` /
+  `f736af6aa811d740ba798c2affbd865db1747039`;
+  `third_party/ink_stroke_modeler/src`
+  `da42d439389c90ec7574f0381ec53e7f5be0c2eb` /
+  `6a848bac1d3fb20e01b1449991b83fd4fe3d2521`;
+  `third_party/libphonenumber/dist`
+  `9d46308f313f2bf8dbce1dfd4f364633ca869ca7` /
+  `9c413a95028c747cfbcc75b976c75a9a00b3efc8`
+- Historical archives `issue-26081616315182/` and `issue-26082217204646/`
+  stay on disk and are not in the active `patch_directories`.
 
-### Issue 26082217204646 Exp 6 / overlay screenshot (current tip)
+### Issue 26092123582688 Exp 2 / null webstore delegate (current tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `152.0.7977.130` / `2c592105bbcd9490a9894df48d0fe59b2c512651` |
+| Parent tip | `f1967e1fd5e573a2aac72fe7ad6d3f362a55302d` (Exp 1) |
+| Product branch | `152.0.7977.130-issue-26092123582688-exp2-webstore-null` |
+| Product HEAD | `186c72208a942e55cba8d1f500227657f14d6c0f` |
+| Product tree | `b1f3451fb4efd372692bbce188917b797bd0ec50` |
+| Archives | `issue-26092123582688/` (40; `0040` appended, `0001`–`0039` unchanged) |
+| Patch count | **40** |
+| Archive aggregate SHA-256 | `06b66bc84f8486b2b92005c53c794d7992990f6991b4f3de7d09d78061be1496` |
+| Nested checkouts | Unchanged from the 150 pin |
+| Scope | Skip webstore factory dependencies when the embedder delegate is null |
+| Build | See Experiment 2 |
+
+### Issue 26092123582688 Exp 1 / Electron 44.4.3 chrome pin (parent tip)
+
+| Field | Value |
+| --- | --- |
+| Target base | `152.0.7977.130` / `2c592105bbcd9490a9894df48d0fe59b2c512651` |
+| Prior base | `150.0.7871.224` / `36bfd07adec25f5027aaecf2023b35821f30ee4e` |
+| Product branch | `152.0.7977.130-issue-26092123582688-exp1-electron-152` |
+| Product HEAD | `f1967e1fd5e573a2aac72fe7ad6d3f362a55302d` |
+| Product tree | `33fd12723b9fd852c6fb109a4935d3ebd44b5ce8` |
+| Archives | `issue-26092123582688/` (39, regenerated `base..HEAD`) |
+| Patch count | **39** |
+| Archive aggregate SHA-256 | `51038b9cf8089902f861720bc77f1d6e322dd3dc07242279ec2359cca6e7e7c3` |
+| Nested checkouts | Unchanged from the 150 pin |
+| Scope | Rebase product series onto Electron **44.4.3** Chromium **152.0.7977.130** |
+| Build | See experiment Results |
+
+### Issue 26082217204646 Exp 6 / overlay screenshot (parent tip)
 
 | Field | Value |
 | --- | --- |

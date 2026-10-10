@@ -1,0 +1,157 @@
+From 8c4e90ee4c16293d1537bd2258be505c02d58e8a Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Mon, 20 Jul 2026 11:49:20 -0500
+Subject: [PATCH 16/45] Replace ghost title defaults with surfer
+
+---
+ macos/Sources/Features/QuickTerminal/QuickTerminal.xib        | 2 +-
+ macos/Sources/Features/Terminal/BaseTerminalController.swift  | 4 ++--
+ macos/Sources/Features/Terminal/Window Styles/Terminal.xib    | 2 +-
+ .../Terminal/Window Styles/TerminalHiddenTitlebar.xib         | 2 +-
+ .../Terminal/Window Styles/TerminalTabsTitlebarTahoe.xib      | 2 +-
+ .../Terminal/Window Styles/TerminalTabsTitlebarVentura.xib    | 2 +-
+ .../Terminal/Window Styles/TerminalTransparentTitlebar.xib    | 2 +-
+ .../Window Styles/TitlebarTabsTahoeTerminalWindow.swift       | 2 +-
+ .../Window Styles/TitlebarTabsVenturaTerminalWindow.swift     | 2 +-
+ src/cli/list_themes.zig                                       | 2 +-
+ 10 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/macos/Sources/Features/QuickTerminal/QuickTerminal.xib b/macos/Sources/Features/QuickTerminal/QuickTerminal.xib
+index b2a99cbf500f832b0250f626114cfcc94ca40c3c..bbc1ac4d473387274495d62b5ba30379d19ef765 100644
+--- a/macos/Sources/Features/QuickTerminal/QuickTerminal.xib
++++ b/macos/Sources/Features/QuickTerminal/QuickTerminal.xib
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" restorable="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="QuickTerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" restorable="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="QuickTerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="196" y="240" width="480" height="270"/>
+diff --git a/macos/Sources/Features/Terminal/BaseTerminalController.swift b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+index 35df6b9a3a31a6632f6dda8c243c9fcc87698c97..f9ade66c81dc646c5cd657101e92f0b25872582c 100644
+--- a/macos/Sources/Features/Terminal/BaseTerminalController.swift
++++ b/macos/Sources/Features/Terminal/BaseTerminalController.swift
+@@ -118,7 +118,7 @@ class BaseTerminalController: NSWindowController,
+     }
+ 
+     /// The last computed title from the focused surface (without the override).
+-    private var lastComputedTitle: String = "👻"
++    private var lastComputedTitle: String = "🏄"
+ 
+     /// The time that undo/redo operations that contain running ptys are valid for.
+     var undoExpiration: Duration {
+@@ -1008,7 +1008,7 @@ class BaseTerminalController: NSWindowController,
+                 .store(in: &focusedSurfaceCancellables)
+         } else {
+             // There is no surface to listen to titles for.
+-            titleDidChange(to: "👻")
++            titleDidChange(to: "🏄")
+         }
+     }
+ 
+diff --git a/macos/Sources/Features/Terminal/Window Styles/Terminal.xib b/macos/Sources/Features/Terminal/Window Styles/Terminal.xib
+index 5b76a9b126e5c2ad62883bd48d0bd72457f0b93c..c6f0a3ec5d4d274ee704b48349275fb741ab6b98 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/Terminal.xib	
++++ b/macos/Sources/Features/Terminal/Window Styles/Terminal.xib	
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="0.0" y="0.0" width="800" height="600"/>
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TerminalHiddenTitlebar.xib b/macos/Sources/Features/Terminal/Window Styles/TerminalHiddenTitlebar.xib
+index eb4675657e36b0b91e1ccdad383868c03edc5cbd..1370ae69b5a54283b6ff2330e2d8cb86bd2ebe9c 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TerminalHiddenTitlebar.xib	
++++ b/macos/Sources/Features/Terminal/Window Styles/TerminalHiddenTitlebar.xib	
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="HiddenTitlebarTerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="HiddenTitlebarTerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="0.0" y="0.0" width="800" height="600"/>
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarTahoe.xib b/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarTahoe.xib
+index ae7751b9cad05e723deafef70bad80a65e6d97f9..e1cb0658053dfc97ac971d883cc00cb35dccbf24 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarTahoe.xib	
++++ b/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarTahoe.xib	
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TitlebarTabsTahoeTerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TitlebarTabsTahoeTerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="0.0" y="0.0" width="800" height="600"/>
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarVentura.xib b/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarVentura.xib
+index bf53a4510ddfc1ed9662a251af8bd2dbce0dca4a..5afda8b64372d081b27ddf200bf425139b022ae8 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarVentura.xib	
++++ b/macos/Sources/Features/Terminal/Window Styles/TerminalTabsTitlebarVentura.xib	
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TitlebarTabsVenturaTerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TitlebarTabsVenturaTerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="0.0" y="0.0" width="800" height="600"/>
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TerminalTransparentTitlebar.xib b/macos/Sources/Features/Terminal/Window Styles/TerminalTransparentTitlebar.xib
+index 25922e2f311c9105da63e3ba7a2fc58f66279315..06c4a5bdd90e2f66d516a4c62f539c8702a10009 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TerminalTransparentTitlebar.xib	
++++ b/macos/Sources/Features/Terminal/Window Styles/TerminalTransparentTitlebar.xib	
+@@ -13,7 +13,7 @@
+         </customObject>
+         <customObject id="-1" userLabel="First Responder" customClass="FirstResponder"/>
+         <customObject id="-3" userLabel="Application" customClass="NSObject"/>
+-        <window title="👻 Ghostty" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TransparentTitlebarTerminalWindow" customModule="Ghostty" customModuleProvider="target">
++        <window title="🏄 TermSurf" allowsToolTipsWhenApplicationIsInactive="NO" autorecalculatesKeyViewLoop="NO" releasedWhenClosed="NO" visibleAtLaunch="NO" animationBehavior="default" id="QvC-M9-y7g" customClass="TransparentTitlebarTerminalWindow" customModule="Ghostty" customModuleProvider="target">
+             <windowStyleMask key="styleMask" titled="YES" closable="YES" miniaturizable="YES" resizable="YES"/>
+             <windowPositionMask key="initialPositionMask" leftStrut="YES" rightStrut="YES" topStrut="YES" bottomStrut="YES"/>
+             <rect key="contentRect" x="0.0" y="0.0" width="800" height="600"/>
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift b/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift
+index cf45e5e4a4f46811eae6a98f166c3d8266c53354..f91cb2588cebe70500ca257916c9c1a5ee27a6e4 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift	
++++ b/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsTahoeTerminalWindow.swift	
+@@ -281,7 +281,7 @@ class TitlebarTabsTahoeTerminalWindow: TransparentTitlebarTerminalWindow, NSTool
+ 
+     class ViewModel: ObservableObject {
+         @Published var titleFont: NSFont?
+-        @Published var title: String = "👻 Ghostty"
++        @Published var title: String = "🏄 TermSurf"
+         @Published var hasTabBar: Bool = false
+         @Published var isMainWindow: Bool = true
+     }
+diff --git a/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsVenturaTerminalWindow.swift b/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsVenturaTerminalWindow.swift
+index eb45c01629bd8c36e44c8932011e3f3398e7384f..bb141e8221d58ec9374548e24754737cde2cb06d 100644
+--- a/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsVenturaTerminalWindow.swift	
++++ b/macos/Sources/Features/Terminal/Window Styles/TitlebarTabsVenturaTerminalWindow.swift	
+@@ -542,7 +542,7 @@ private class WindowButtonsBackdropView: NSView {
+ // Custom NSToolbar subclass that displays a centered window title,
+ // in order to accommodate the titlebar tabs feature.
+ private class TerminalToolbar: NSToolbar, NSToolbarDelegate {
+-    private let titleTextField = CenteredDynamicLabel(labelWithString: "👻 Ghostty")
++    private let titleTextField = CenteredDynamicLabel(labelWithString: "🏄 TermSurf")
+ 
+     var titleText: String {
+         get {
+diff --git a/src/cli/list_themes.zig b/src/cli/list_themes.zig
+index e1c364efcb6ee6c720409a65cbde37fa41e6c695..3bc66f4e85591ac7d7a0cfd75bc672bc028134b1 100644
+--- a/src/cli/list_themes.zig
++++ b/src/cli/list_themes.zig
+@@ -309,7 +309,7 @@ const Preview = struct {
+ 
+         const writer = self.tty.writer();
+         try self.vx.enterAltScreen(writer);
+-        try self.vx.setTitle(writer, "👻 Ghostty Theme Preview 👻");
++        try self.vx.setTitle(writer, "🏄 TermSurf Theme Preview 🏄");
+         try self.vx.queryTerminal(writer, .fromSeconds(1));
+         try self.vx.setMouseMode(writer, true);
+         if (self.vx.caps.color_scheme_updates)

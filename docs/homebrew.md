@@ -148,13 +148,14 @@ Top-level contents:
 - `Astrohacker TermSurf.app/` (with `Contents/MacOS/ahterm` and
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
-- `legal/third_party/` (Chromium credits/LICENSE
-  copyrights, Nushell/Reedline LICENSE copies)
-- `roamari`
+- `legal/`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
 - `ahebx/` (payload: `dist/ahebx`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
-- `roamari-chromiumd/`
+
+The archive never contains `roamari`, `roamari-chromiumd` or Chromium,
+Nushell or Reedline files; roamari is a cask dependency and NuTorch a formula
+dependency, each released separately.
 
 Gate before publish: `scripts/check-release-legal-notices.nu` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -211,7 +212,8 @@ accepted by scripts).
 The human release operator runs one command from the clean private monorepo:
 
 ```nu
-scripts/release-termsurf.nu
+use scripts/ah.nu *
+ah release termsurf
 ```
 
 With no option it selects the next patch version after the greatest strict
@@ -219,8 +221,12 @@ version found across public releases, public tags, and the remote cask. To
 select a higher unused version:
 
 ```nu
-scripts/release-termsurf.nu --version 0.4.0
+ah release termsurf --version 0.4.0
 ```
+
+PWD selects the checkout's canonical publisher, including from linked branches.
+Existing options, confirmations and recovery remain unchanged. See
+[Homebrew release commands](homebrew-release-commands.md) for all six products.
 
 #### Build cache preservation
 
@@ -231,7 +237,6 @@ tracking rebuilds only the inputs that changed.
 
 Preserve valid outputs and caches for every shipped project, especially:
 
-- Chromium `forks/chromium/src/out/Default`;
 - Ghostty Zig and Xcode outputs under `forks/ghostty`;
 - Rust/Cargo target directories; and
 
@@ -249,16 +254,18 @@ version explicitly. It never invents another recovery version.
 Before confirmation the command performs read-only version, repository, tool,
 and credential discovery. After the operator types the exact confirmation, it:
 
-1. sets first-party product Cargo package versions to the selected release
+1. proves or reconstructs the shipped fork inputs, Ghostty and Nexus, from
+   the tracked cumulative patch manifest, before editing any file (the version
+   bump runs `cargo metadata`, which needs `forks/nexus`). It automatically
+   upgrades clean checkouts at an exact older prefix of the selected
+   cumulative series. Chromium, Nushell and Reedline are neither prepared nor
+   built;
+2. sets first-party product Cargo package versions to the selected release
    version (`ahnexus`), refreshes their `Cargo.lock`
    files, commits that bump on private `main` when needed, and pushes it so
    the monorepo stays aligned with `origin/main`. This step never rewrites
    anything under `forks/` (fork trees are out of scope; `ahterm` still gets
    the release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
-2. proves or reconstructs all released fork inputs from the tracked cumulative
-   patch manifest (Ghostty, Nushell, Reedline, Chromium; WebKit/Gecko historical
-   archives are excluded from ship; editor fork excluded), automatically upgrading
-   clean checkouts at an exact older prefix of the selected cumulative series;
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
 4. packages one archive and freezes its SHA-256;
@@ -350,8 +357,9 @@ normal operator interface.
 2. **Land product changes** in private monorepo; push tap **content** changes
    (not version/sha) if needed so the tap is clean for publish.
 
-3. **Full release build** (`scripts/build.nu termsurf` ships Terminal components
-   only — no editor; preserve all valid incremental build outputs):
+3. **Full release build** (`scripts/build.nu termsurf` builds only what the
+   archive ships: ahcalc, ahebx, ahnexus, ahterm; preserve all valid
+   incremental build outputs):
 
    ```sh
    TERMSURF_VERSION=<version> \
@@ -452,6 +460,11 @@ ASTROHACKER_TERMINAL_SMOKE_VERSION=<version> \
 - Dirty tap or public repo aborts publish mode.
 - The canonical command packages once and requires the identical archive SHA in
   publish-existing mode. A direct lower-level publish may repackage instead.
+- Ghostty's Zig comes from `forks/ghostty/build.zig.zon`, not `PATH`.
+  `scripts/build.nu` selects the keg-only `zig@<major>.<minor>` matching its
+  `minimum_zig_version`, or a plain `zig` that already matches. If none
+  matches, it stops before compiling and names the formula to install with
+  `brew install`. Do not `brew link` the keg over `zig`.
 - Partial publish: inspect tag/asset/tap; rerun same version; do not invent a
   new version just to recover.
   incremental dependency graph. Do not use `--clean` for a routine release.

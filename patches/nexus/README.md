@@ -19,7 +19,8 @@ Preparation preserves original branches and caches and refuses divergent state.
 Linked checkouts use their own local forks, with no fallback to main.
 For new committed work, see `ah patch export --help` and `patches/AGENTS.md`:
 export verifies a new issue archive and proposes pins; README, manifest and
-experiment updates remain explicit. Existing archive directories refuse.
+experiment updates remain explicit. Use `--append` for a later experiment in
+the same issue and `--base <commit>` for a rebased series; see `ah patch help`.
 Older pin recipes below are historical reconstruction context; the manifest
 and these commands select current inputs.
 

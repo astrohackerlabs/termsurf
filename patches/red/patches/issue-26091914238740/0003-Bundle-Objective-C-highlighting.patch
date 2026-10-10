@@ -1,0 +1,741 @@
+From c8687f2069b3a0a3bd0f997e20cfddaa3a870a20 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 09:59:46 -0500
+Subject: [PATCH] Bundle Objective-C highlighting
+
+Methods send messages across the tree,
+While headers keep their home in C.
+Self gains a color, fields their due;
+Old queries learn a trick or two.
+---
+ Cargo.lock                             |  11 ++
+ Cargo.toml                             |   1 +
+ docs/BUNDLED_LANGUAGES.md              |  25 ++-
+ docs/languages-provenance.json         |  20 +++
+ docs/licenses/tree-sitter-objc.txt     |  21 +++
+ examples/check_objc_files.rs           |  66 ++++++++
+ src/config.rs                          |   1 +
+ src/editor.rs                          |  57 +++++++
+ src/highlighter.rs                     |  19 +++
+ src/highlighter/bundled_checks.rs      | 224 ++++++++++++++++++++++++-
+ src/queries/highlights/objc.scm        |   1 +
+ src/queries/highlights/smoke/example.m |  31 ++++
+ src/theme/mod.rs                       |   5 +-
+ tests/self_check.rs                    |   2 +-
+ 14 files changed, 479 insertions(+), 5 deletions(-)
+ create mode 100644 docs/licenses/tree-sitter-objc.txt
+ create mode 100644 examples/check_objc_files.rs
+ create mode 100644 src/queries/highlights/objc.scm
+ create mode 100644 src/queries/highlights/smoke/example.m
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 59dbac5..e0389bb 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -2377,6 +2377,7 @@ dependencies = [
+  "tree-sitter-make",
+  "tree-sitter-md",
+  "tree-sitter-nu",
++ "tree-sitter-objc",
+  "tree-sitter-powershell",
+  "tree-sitter-python",
+  "tree-sitter-ruby",
+@@ -3316,6 +3317,16 @@ dependencies = [
+  "tree-sitter-language",
+ ]
+ 
++[[package]]
++name = "tree-sitter-objc"
++version = "3.0.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9ca8bb556423fc176f0535e79d525f783a6684d3c9da81bf9d905303c129e1d2"
++dependencies = [
++ "cc",
++ "tree-sitter-language",
++]
++
+ [[package]]
+ name = "tree-sitter-powershell"
+ version = "0.26.4"
+diff --git a/Cargo.toml b/Cargo.toml
+index 909b692..9c7245d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -140,6 +140,7 @@ tree-sitter-zig = "=1.1.2"
+ tree-sitter-swift = "=0.7.3"
+ tree-sitter-xml = "=0.7.0"
+ tree-sitter-make = "=1.1.1"
++tree-sitter-objc = "=3.0.2"
+ 
+ [target.'cfg(target_os = "macos")'.dependencies]
+ base64 = "0.22.1"
+diff --git a/docs/BUNDLED_LANGUAGES.md b/docs/BUNDLED_LANGUAGES.md
+index cc42487..6de5179 100644
+--- a/docs/BUNDLED_LANGUAGES.md
++++ b/docs/BUNDLED_LANGUAGES.md
+@@ -1,6 +1,6 @@
+ # Bundled language expansion
+ 
+-RedVim compiles Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
++RedVim compiles Objective-C, Terraform/HCL, SQL, C, C++, Python, HTML, CSS, Ruby, Zig, Swift, XML/SVG and Make
+ parsers into the executable and embeds their highlighting queries. Existing
+ languages, including Nushell, remain available. No Neovim installation, external
+ parser/query files, trust command or runtime download is needed.
+@@ -8,6 +8,7 @@ parser/query files, trust command or runtime download is needed.
+ | Language | Files | Default indentation |
+ | --- | --- | --- |
+ | C | .c, .h | 4 spaces |
++| Objective-C | .m (case-insensitive); objc/objective-c syntax and fences | 4 spaces |
+ | Terraform/HCL | .tf, .tfvars, .hcl; hcl/terraform syntax and fences | 2 spaces |
+ | SQL | .sql (case-insensitive), explicit sql syntax, Markdown sql fences | 4 spaces |
+ | C++ | .cc, .cpp, .cxx, .hpp, .hxx, .hh | 4 spaces |
+@@ -78,6 +79,28 @@ Standalone `.tftpl` templates, embedded shell/JSON grammars, Terraform execution
+ LSP and formatting are outside this integration. All tracked infrastructure
+ HCL is checked as text; no provider or infrastructure operations are required.
+ 
++## Objective-C boundary
++
++Objective-C uses the exact `tree-sitter-objc =3.0.2` crate and its published
++query, combined with the existing tree-sitter-c 0.24.2 query. The C null-node
++pattern becomes the Objective-C grammar's `NULL` token. Query inheritance is
++flattened; editor-specific captures are translated, and the unsupported ancestor
++predicate becomes structural field-declarator patterns. Additional rules cover
++protocol declaration names, pointer properties and no-argument selectors.
++The parser crate omits its license notice; the retained MIT notice comes from
++the exact upstream revision recorded in provenance.
++
++Specific method, type, field, built-in-variable and parameter captures retain
++their colors over generic identifiers. Missing built-in-variable and parameter
++theme scopes fall back to keyword and ordinary-variable styles respectively;
++explicit theme scopes remain authoritative. Comments use `//`.
++
++`.h` remains C unless explicitly configured or manually set to `objc`.
++`.mm` is not registered: the mixed C++ probe (std::vector and a C++ initializer)
++produces parser errors with this Objective-C grammar. This integration does not
++claim Objective-C++. The repository's WebKitHostingProof.m parses error-free;
++its token colors and the full synthetic fixture are checked without execution.
++
+ ## SQL dialect boundary
+ 
+ SQL uses the checksummed `tree-sitter-sequel =0.3.11` crate. Its published VCS
+diff --git a/docs/languages-provenance.json b/docs/languages-provenance.json
+index a0e82f5..00072aa 100644
+--- a/docs/languages-provenance.json
++++ b/docs/languages-provenance.json
+@@ -171,5 +171,25 @@
+     "license_sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+     "license_source": "published crate LICENSE",
+     "query_license_file": "nvim-treesitter.txt"
++  },
++  {
++    "name": "tree-sitter-objc",
++    "version": "3.0.2",
++    "crate_sha256": "9ca8bb556423fc176f0535e79d525f783a6684d3c9da81bf9d905303c129e1d2",
++    "repository": "https://github.com/tree-sitter-grammars/tree-sitter-objc",
++    "revision": "18802acf31d0b5c1c1d50bdbc9eb0e1636cab9ed",
++    "query": "queries/highlights.scm",
++    "upstream_query_sha256": "ce7e30b5aab3d659a096812d8c227e83cd9bbb60470eb44def45bd5cb7737386",
++    "bundled_query_sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
++    "inherited_query": {
++      "crate": "tree-sitter-c",
++      "version": "0.24.2",
++      "path": "queries/highlights.scm",
++      "sha256": "3378d854dda695b2b282b9468247524ed4271ef74af691033d2e36883379409c"
++    },
++    "license": "MIT",
++    "license_file": "tree-sitter-objc.txt",
++    "license_sha256": "099c44248f8cf353123211318680e93465587c005a4b3730ce8cb5334de043d6",
++    "license_source": "https://raw.githubusercontent.com/tree-sitter-grammars/tree-sitter-objc/18802acf31d0b5c1c1d50bdbc9eb0e1636cab9ed/LICENSE"
+   }
+ ]
+\ No newline at end of file
+diff --git a/docs/licenses/tree-sitter-objc.txt b/docs/licenses/tree-sitter-objc.txt
+new file mode 100644
+index 0000000..5af5363
+--- /dev/null
++++ b/docs/licenses/tree-sitter-objc.txt
+@@ -0,0 +1,21 @@
++The MIT License (MIT)
++
++Copyright (c) 2023 Amaan Qureshi <amaanq12@gmail.com>
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff --git a/examples/check_objc_files.rs b/examples/check_objc_files.rs
+new file mode 100644
+index 0000000..481e2b6
+--- /dev/null
++++ b/examples/check_objc_files.rs
+@@ -0,0 +1,66 @@
++//! Check the repository's WebKit Objective-C proof as text, without executing it.
++use anyhow::Context;
++use red::{highlighter::Highlighter, theme::parse_vscode_theme_contents};
++
++fn main() -> anyhow::Result<()> {
++    let files = std::env::args().skip(1).collect::<Vec<_>>();
++    anyhow::ensure!(!files.is_empty(), "supply WebKitHostingProof.m");
++    let theme = parse_vscode_theme_contents(include_str!("../themes/mocha.json"))?;
++    let mut highlighter = Highlighter::new(&theme)?;
++    let mut parser = tree_sitter::Parser::new();
++    parser.set_language(&tree_sitter_objc::LANGUAGE.into())?;
++    for file in files {
++        let source = std::fs::read_to_string(&file)?;
++        anyhow::ensure!(
++            highlighter.language_id_for_file(Some(&file)) == Some("objc"),
++            "wrong detection"
++        );
++        let tree = parser.parse(&source, None).context("no tree")?;
++        anyhow::ensure!(
++            !tree.root_node().has_error(),
++            "{file}: {}",
++            tree.root_node().to_sexp()
++        );
++        let spans = highlighter.highlight("objc", &source)?;
++        let mut checked = 0;
++        for (token, scope) in [
++            ("#import", "keyword.directive"),
++            ("CAContext", "type"),
++            ("remoteContextWithOptions", "function.method"),
++            ("contextId", "property"),
++            ("NSObject", "type"),
++            ("proofDirectory", "function"),
++            ("test-content/index.html", "string"),
++            ("return", "keyword"),
++            ("NSMakeRect", "function"),
++            (
++                "applicationShouldTerminateAfterLastWindowClosed",
++                "function.method",
++            ),
++            ("strtoul", "function"),
++            ("NULL", "constant"),
++            ("--stress", "string"),
++            ("NSLog", "function"),
++            ("420", "number"),
++        ] {
++            let start = source
++                .find(token)
++                .with_context(|| format!("missing {token}"))?;
++            let expected = theme.get_style(scope).context("missing scope")?;
++            for byte in start..start + token.len() {
++                let actual = spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style);
++                anyhow::ensure!(
++                    actual == Some(&expected),
++                    "{token} byte {byte}: expected {scope}, got {actual:?}"
++                );
++            }
++            checked += 1;
++        }
++        println!("{file}: error-free, {checked} exact token-color checks; no comments present");
++    }
++    Ok(())
++}
+diff --git a/src/config.rs b/src/config.rs
+index 4660635..95a895d 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -737,6 +737,7 @@ fn default_comment_templates() -> HashMap<String, String> {
+         ("markdown", "<!-- %s -->"),
+         ("nu", "# %s"),
+         ("hcl", "# %s"),
++        ("objc", "// %s"),
+         ("powershell", "# %s"),
+         ("python", "# %s"),
+         ("ruby", "# %s"),
+diff --git a/src/editor.rs b/src/editor.rs
+index 14d58cc..9a29eb7 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -6659,6 +6659,7 @@ impl Editor {
+                 ("swift", 4),
+                 ("sql", 4),
+                 ("hcl", 2),
++                ("objc", 4),
+                 ("xml", 2),
+             ]
+             .map(|(file_type, shift_width)| {
+@@ -34508,6 +34509,7 @@ builtin = "rust"
+             ("example.zig", 4, "//"),
+             ("example.swift", 4, "//"),
+             ("example.sql", 4, "--"),
++            ("example.m", 4, "//"),
+             ("example.tf", 2, "#"),
+             ("example.svg", 2, "<!--"),
+             ("Makefile", 8, "#"),
+@@ -34640,6 +34642,61 @@ builtin = "rust"
+             .starts_with("# custom value ="));
+     }
+ 
++    #[tokio::test]
++    async fn objc_manual_syntax_overrides_and_undo_refresh_colors() {
++        let mut editor = rust_test_editor(100, 120, 22);
++        let source = "NSString *value = @\"café\";\n";
++        editor.buffer_manager[0] = Buffer::new(Some("notes.h".into()), source.into());
++        editor
++            .current_buffer_mut()
++            .set_syntax_selection(SyntaxSelection::Language("objc".into()));
++        assert_eq!(editor.current_language_id().as_deref(), Some("objc"));
++        let shape = |spans: Vec<HighlightSpan>| {
++            spans
++                .into_iter()
++                .map(|s| (s.start, s.end, s.style))
++                .collect::<Vec<_>>()
++        };
++        let before = shape(editor.viewport_highlight_spans(0, 0, 10).unwrap());
++        assert!(!before.is_empty());
++        for action in [
++            Action::EnterMode(Mode::Insert),
++            Action::InsertCharAtCursorPos('/'),
++            Action::InsertCharAtCursorPos('/'),
++            Action::EnterMode(Mode::Normal),
++        ] {
++            editor.test_execute_production_action(action).await.unwrap();
++        }
++        assert_ne!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        editor
++            .test_execute_production_action(Action::Undo)
++            .await
++            .unwrap();
++        assert_eq!(editor.current_buffer().contents(), source);
++        assert_eq!(
++            shape(editor.viewport_highlight_spans(0, 0, 10).unwrap()),
++            before
++        );
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("config.toml");
++        std::fs::write(
++            &path,
++            "[languages.objc]\nindent_width = 2\ncomment = '// custom %s'\n",
++        )
++        .unwrap();
++        editor.set_language_reload_source(path, Vec::new());
++        editor.reload_languages().await.unwrap();
++        assert_eq!(editor.indentation().shift_width, 2);
++        assert!(editor.toggle_comment_lines(0, 0));
++        assert!(editor
++            .current_buffer()
++            .contents()
++            .starts_with("// custom NSString"));
++    }
++
+     #[test]
+     fn nu_viewport_refreshes_after_edit_and_manual_syntax_selection() {
+         let mut editor = rust_test_editor(100, 120, 22);
+diff --git a/src/highlighter.rs b/src/highlighter.rs
+index d0dd2ba..aebeb0b 100644
+--- a/src/highlighter.rs
++++ b/src/highlighter.rs
+@@ -152,6 +152,7 @@ impl LanguageRegistry {
+                         | "make"
+                         | "sql"
+                         | "hcl"
++                        | "objc"
+                 ),
+             });
+         }
+@@ -603,6 +604,8 @@ const MAX_CACHED_HIGHLIGHT_SPANS: usize = 4_096;
+ 
+ const LANGUAGE_NAMES: &[(&str, &str)] = &[
+     ("hcl", "hcl"),
++    ("objc", "objc"),
++    ("objective-c", "objc"),
+     ("terraform", "hcl"),
+     ("sql", "sql"),
+     ("c", "c"),
+@@ -1460,6 +1463,11 @@ impl Highlighter {
+                                 style: style.clone(),
+                             };
+                             if capture_refines_equal_range(capture_name)
++                                || (definition.semantic_refinements
++                                    && matches!(
++                                        capture_name,
++                                        "variable.builtin" | "variable.parameter"
++                                    ))
+                                 || (definition.semantic_refinements
+                                     && matches!(
+                                         capture_name.split('.').next(),
+@@ -2300,6 +2308,16 @@ fn file_extension(file: &str) -> Option<String> {
+ 
+ fn language_definitions() -> Vec<BundledLanguageDefinition> {
+     vec![
++        BundledLanguageDefinition {
++            id: "objc",
++            extensions: &["m"],
++            filenames: &[],
++            language: Some(|| tree_sitter_objc::LANGUAGE.into()),
++            highlight_queries: &[include_str!("queries/highlights/objc.scm")],
++            textobject_queries: &[],
++            injection_query: None,
++            specialized: None,
++        },
+         BundledLanguageDefinition {
+             id: "hcl",
+             extensions: &["tf", "tfvars", "hcl"],
+@@ -5343,6 +5361,7 @@ mod tests {
+                 "make",
+                 "markdown",
+                 "nu",
++                "objc",
+                 "powershell",
+                 "python",
+                 "ruby",
+diff --git a/src/highlighter/bundled_checks.rs b/src/highlighter/bundled_checks.rs
+index 745767b..f23d485 100644
+--- a/src/highlighter/bundled_checks.rs
++++ b/src/highlighter/bundled_checks.rs
+@@ -9,6 +9,51 @@ struct Fixture {
+ }
+ 
+ const FIXTURES: &[Fixture] = &[
++    Fixture {
++        language: "objc",
++        filename: "example.M",
++        source: include_str!("../queries/highlights/smoke/example.m"),
++        tokens: &[
++            ("// café", "comment"),
++            ("#import", "keyword.directive"),
++            ("Foundation/Foundation.h", "string"),
++            ("field", "property"),
++            ("twice", "function"),
++            ("ordinary", "variable"),
++            ("return", "keyword"),
++            ("@protocol", "keyword"),
++            ("Greeting", "type"),
++            ("@interface", "keyword"),
++            ("Example", "type"),
++            ("NSObject", "type"),
++            ("@property", "keyword"),
++            ("title", "property"),
++            ("self", "variable.builtin"),
++            ("super", "variable.builtin"),
++            ("^callback", "operator"),
++            ("if (ordinary", "keyword"),
++            ("@implementation", "keyword"),
++            ("@synthesize", "keyword"),
++            ("greet", "function.method"),
++            ("shared", "function.method"),
++            ("alloc", "function.method.call"),
++            ("init", "constructor"),
++            ("42", "number"),
++            ("17", "number"),
++            ("hello", "string"),
++            ("key", "string"),
++            ("NSLog", "function"),
++            ("@selector", "keyword"),
++            ("@try", "keyword.exception"),
++            ("@catch", "keyword.exception"),
++            ("@throw", "keyword.exception"),
++            ("@finally", "keyword.exception"),
++            ("/* a block", "comment"),
++            ("uppercaseString", "function.method.call"),
++            ("after", "function"),
++            ("99", "number"),
++        ],
++    },
+     Fixture {
+         language: "hcl",
+         filename: "example.auto.tfvars",
+@@ -245,6 +290,39 @@ pub fn check_bundled_languages(theme: &Theme) -> anyhow::Result<Vec<&'static str
+                 );
+             }
+         }
++        if id == "objc" {
++            for (anchor, offset, length, scope) in [
++                ("ordinary = 42", 0, 8, "variable"),
++                ("@\"hello\"", 2, 5, "string"),
++                ("@\"key\"", 2, 3, "string"),
++                ("@\"café\"", 2, 5, "string"),
++                ("^{ NSLog", 0, 1, "operator"),
++                ("@selector(description)", 10, 11, "function.method"),
++                ("[super description]", 1, 5, "variable.builtin"),
++                ("[super description]", 7, 11, "function.method.call"),
++                ("NSString *title", 10, 5, "property"),
++            ] {
++                let start = fixture
++                    .source
++                    .find(anchor)
++                    .context("missing Objective-C anchor")?
++                    + offset;
++                let expected = theme
++                    .get_style(scope)
++                    .context("missing Objective-C scope")?;
++                for byte in start..start + length {
++                    let actual = styles
++                        .iter()
++                        .rev()
++                        .find(|s| s.start <= byte && byte < s.end)
++                        .map(|s| &s.style);
++                    anyhow::ensure!(
++                        actual == Some(&expected),
++                        "objc: {anchor:?} byte {byte}: expected {scope}, got {actual:?}"
++                    );
++                }
++            }
++        }
+         if id == "hcl" && fixture.filename == "example.TF" {
+             // Anchors disambiguate repeated keywords and identifiers. Check every
+             // byte of each target, including expression tokens inside templates.
+@@ -299,6 +377,148 @@ mod tests {
+     use super::*;
+     use crate::theme::parse_vscode_theme_contents;
+ 
++    #[test]
++    fn objc_routing_predicates_overrides_and_incremental_edits() {
++        let mut theme =
++            parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let query = Query::new(
++            &tree_sitter_objc::LANGUAGE.into(),
++            include_str!("../queries/highlights/objc.scm"),
++        )
++        .unwrap();
++        for pattern in 0..query.pattern_count() {
++            assert!(
++                query.general_predicates(pattern).is_empty(),
++                "unsupported predicate at pattern {pattern}"
++            );
++        }
++        let mut highlighter = Highlighter::new(&theme).unwrap();
++        for file in ["main.m", "main.M"] {
++            assert_eq!(highlighter.language_id_for_file(Some(file)), Some("objc"));
++        }
++        assert_eq!(highlighter.language_id_for_file(Some("main.h")), Some("c"));
++        assert_eq!(highlighter.language_id_for_file(Some("main.mm")), None);
++        for alias in ["objc", "objective-c"] {
++            assert_eq!(highlighter.language_id_for_name(alias), Some("objc"));
++            let source = format!("```{alias}\nint value = 42;\n```\n");
++            let spans = highlighter.highlight("markdown", &source).unwrap();
++            let byte = source.find("42").unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                theme.get_style("number").as_ref()
++            );
++        }
++        for source in [
++            "NSString *value = @\"café\";\n",
++            "@interface A : NSObject\n",
++            "int value = 42;\n",
++        ] {
++            let shape = |spans: Vec<StyleInfo>| {
++                spans
++                    .into_iter()
++                    .map(|s| (s.start, s.end, s.style))
++                    .collect::<Vec<_>>()
++            };
++            assert_eq!(
++                shape(highlighter.highlight("objc", source).unwrap()),
++                shape(
++                    Highlighter::new(&theme)
++                        .unwrap()
++                        .highlight("objc", source)
++                        .unwrap()
++                )
++            );
++        }
++        let directory = tempfile::tempdir().unwrap();
++        let config = HashMap::from([(
++            "objc".into(),
++            LanguageConfig {
++                extensions: vec!["h".into()],
++                ..LanguageConfig::default()
++            },
++        )]);
++        let registry = LanguageRegistry::from_config(&config, directory.path()).unwrap();
++        assert_eq!(
++            Highlighter::with_registry(&theme, Arc::new(registry))
++                .unwrap()
++                .language_id_for_file(Some("custom.h")),
++            Some("objc")
++        );
++        let mut custom = theme.get_style("function").unwrap();
++        custom.bold = !custom.bold;
++        theme.token_styles.insert(
++            0,
++            crate::theme::TokenStyle {
++                name: None,
++                scope: vec!["function.method".into()],
++                style: custom.clone(),
++            },
++        );
++        let source = "void f(void) { [object greet]; }";
++        let spans = Highlighter::new(&theme)
++            .unwrap()
++            .highlight("objc", source)
++            .unwrap();
++        let byte = source.find("greet").unwrap();
++        assert_eq!(
++            spans
++                .iter()
++                .rev()
++                .find(|s| s.start <= byte && byte < s.end)
++                .map(|s| &s.style),
++            Some(&custom)
++        );
++    }
++
++    #[test]
++    fn objc_builtin_and_parameter_theme_overrides_remain_authoritative() {
++        let mut theme =
++            parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
++        let source = "@implementation A\n- (void)greet:(id)person { [self greet:person]; }\n@end\n";
++        for (scope, token) in [
++            ("variable.builtin", "self"),
++            ("variable.parameter", "person"),
++        ] {
++            let mut custom = theme.get_style("variable").unwrap();
++            custom.bold = !custom.bold;
++            theme.token_styles.insert(
++                0,
++                crate::theme::TokenStyle {
++                    name: None,
++                    scope: vec![scope.into()],
++                    style: custom.clone(),
++                },
++            );
++            let spans = Highlighter::new(&theme)
++                .unwrap()
++                .highlight("objc", source)
++                .unwrap();
++            let byte = source.find(token).unwrap();
++            assert_eq!(
++                spans
++                    .iter()
++                    .rev()
++                    .find(|s| s.start <= byte && byte < s.end)
++                    .map(|s| &s.style),
++                Some(&custom)
++            );
++        }
++    }
++
++    #[test]
++    fn objc_cpp_is_not_claimed_without_a_cpp_grammar() {
++        let source = "#include <vector>\n@interface A : NSObject\n@end\nvoid f() { std::vector<int> values{1, 2}; [A new]; }\n";
++        let mut parser = Parser::new();
++        parser
++            .set_language(&tree_sitter_objc::LANGUAGE.into())
++            .unwrap();
++        assert!(parser.parse(source, None).unwrap().root_node().has_error());
++    }
++
+     #[test]
+     fn hcl_routing_fences_and_incremental_edits() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+@@ -357,7 +577,7 @@ mod tests {
+     fn common_languages_parse_and_render_with_embedded_mocha() {
+         let theme = parse_vscode_theme_contents(include_str!("../../themes/mocha.json")).unwrap();
+         let checked = check_bundled_languages(&theme).unwrap();
+-        assert_eq!(checked.len(), 13);
++        assert_eq!(checked.len(), 14);
+     }
+ 
+     #[test]
+@@ -367,7 +587,7 @@ mod tests {
+             LanguageRegistry::from_config(&HashMap::new(), directory.path()).unwrap();
+         let theme = Theme::default();
+         let highlighter = Highlighter::with_registry(&theme, Arc::new(registry.clone())).unwrap();
+-        for definition in language_definitions().iter().take(12) {
++        for definition in language_definitions().iter().take(13) {
+             for extension in definition.extensions {
+                 assert_eq!(
+                     highlighter.language_id_for_file(Some(&format!("example.{extension}"))),
+diff --git a/src/queries/highlights/objc.scm b/src/queries/highlights/objc.scm
+new file mode 100644
+index 0000000..8b13789
+--- /dev/null
++++ b/src/queries/highlights/objc.scm
+@@ -0,0 +1 @@
++
+diff --git a/src/queries/highlights/smoke/example.m b/src/queries/highlights/smoke/example.m
+new file mode 100644
+index 0000000..8933b79
+--- /dev/null
++++ b/src/queries/highlights/smoke/example.m
+@@ -0,0 +1,31 @@
++// café: Objective-C is highlighted, never executed
++#import <Foundation/Foundation.h>
++struct Pair { int field; };
++static int twice(int ordinary) { return ordinary * 2; }
++@protocol Greeting
++- (NSString *)greet:(NSString *)person;
++@end
++@interface Example : NSObject <Greeting>
++@property(nonatomic, strong) NSString *title;
+++ (instancetype)shared;
++@end
++@implementation Example
++@synthesize title;
+++ (instancetype)shared { return [[self alloc] init]; }
++- (NSString *)greet:(NSString *)person {
++    int ordinary = 42;
++    NSNumber *boxed = @17;
++    NSArray *items = @[@"hello", boxed];
++    NSDictionary *mapping = @{@"key": items};
++    void (^callback)(void) = ^{ NSLog(@"café"); };
++    SEL selector = @selector(description);
++    @try {
++        if (ordinary > 0) { [super description]; callback(); }
++    } @catch (NSException *exception) {
++        @throw exception;
++    } @finally { ordinary = twice(ordinary); }
++    /* a block comment */
++    return [person uppercaseString];
++}
++@end
++int after(void) { return 99; }
+diff --git a/src/theme/mod.rs b/src/theme/mod.rs
+index e1d1c51..c2f7966 100644
+--- a/src/theme/mod.rs
++++ b/src/theme/mod.rs
+@@ -535,7 +535,10 @@ fn compatible_scopes(scope: &str) -> Vec<String> {
+         "conditional" | "repeat" | "include" | "exception" => {
+             push_scope_with_parents(&mut scopes, "keyword");
+         }
+-        "variable" => push_scope_with_parents(&mut scopes, "variable.other.readwrite"),
++        "variable" | "variable.parameter" => {
++            push_scope_with_parents(&mut scopes, "variable.other.readwrite");
++        }
++        "variable.builtin" => push_scope_with_parents(&mut scopes, "keyword"),
+         _ => {}
+     }
+ 
+diff --git a/tests/self_check.rs b/tests/self_check.rs
+index 3e40b6e..cbf78a1 100644
+--- a/tests/self_check.rs
++++ b/tests/self_check.rs
+@@ -60,7 +60,7 @@ fn assert_self_check_report(output: Output) {
+     assert_eq!(lines.last(), Some(&"redvim self-check ok"), "{stdout}");
+     for language in [
+         "nu", "c", "cpp", "python", "html", "css", "ruby", "zig", "swift", "xml", "make", "sql",
+-        "hcl",
++        "hcl", "objc",
+     ] {
+         assert!(
+             lines.contains(&format!("language {language}: bundled highlighting ok").as_str()),
+-- 
+2.54.0 (Apple Git-157)
+

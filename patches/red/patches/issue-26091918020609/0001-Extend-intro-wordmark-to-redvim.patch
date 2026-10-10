@@ -1,0 +1,216 @@
+From 3629fcd361352e6ee9021bf5d7f840ebdc3d729f Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 19 Sep 2026 13:10:26 -0500
+Subject: [PATCH] Extend intro wordmark to redvim
+
+Three letters found a seat beside red,
+The dot stayed put, as Ryan said.
+The compact card made room to sit;
+The smaller panes politely quit.
+---
+ docs/SPLASH.md | 34 ++++++++++++++++----------
+ src/editor.rs  | 10 ++++++--
+ src/splash.rs  | 65 ++++++++++++++++++++++++++++++++++++++++++++------
+ 3 files changed, 87 insertions(+), 22 deletions(-)
+
+diff --git a/docs/SPLASH.md b/docs/SPLASH.md
+index 5427ed0226b7907b13ec077dc9b20883c4b547df..42132f7cddb70917ffe4f294741911c5d741b490 100644
+--- a/docs/SPLASH.md
++++ b/docs/SPLASH.md
+@@ -4,8 +4,8 @@ Status: implemented (`src/splash.rs`, `render_splash` in
+ `src/editor/rendering.rs`); companion theme at `themes/red.json`
+ Date: 2026-07-19
+ 
+-The intro screen shown when red starts with no file arguments — the same slot
+-Neovim's `:intro` occupies, carrying red's own identity: a rounded lowercase
++The intro screen shown when RedVim starts with no file arguments — the same slot
++Neovim's `:intro` occupies, carrying a rounded lowercase RedVim
+ wordmark, a single point of color (the dot, always the theme's red), six
+ verified keystrokes, and a batteries-included epigraph.
+ 
+@@ -16,10 +16,10 @@ window's viewport. Render-only overlay: the buffer stays empty, the cursor
+ stays at 1:1, line number 1 renders normally.
+ 
+ ```
+-                                    ╷
+-                   ╭──╮   ╭──╮   ╭──┤
+-                   │      ├──╯   │  │
+-                   ╵      ╰──╴   ╰──╯  ●
++                         ╷            •
++        ╭──╮   ╭──╮   ╭──┤   ╲    ╱   ╷   ╭──┬──╮
++        │      ├──╯   │  │    ╲  ╱    │   │  │  │
++        ╵      ╰──╴   ╰──╯     ╲╱     ╵   ╵  ╵  ╵  ●
+ 
+                          red v0.1.1
+         the editor that respects your muscle memory
+@@ -48,7 +48,7 @@ the command palette is the discovery surface, so it leads the list.
+ - **Rounded where Neovim is angular.** The wordmark is single-stroke box
+   drawing with rounded corners (`╭ ╮ ╰ ╯`), lowercase and small — the opposite
+   temperament of nvim's thin, doubled, angular N.
+-- **The dot is the brand.** The wordmark reads "red●"; the dot is the only
++- **The dot is the brand.** The wordmark reads "redvim●"; the dot is the only
+   saturated element on screen.
+ - **The epigraph completes the promise.** The tagline establishes familiarity;
+   the closing line pairs it with red's batteries-included philosophy in the
+@@ -80,18 +80,26 @@ other surface.
+ - **Config:** `splash = false` in `config.toml` (flat key, matching `wrap` /
+   `scrolloff` style; default `true`).
+ - **Degrade:** below 60×20 content cells, a compact variant — wordmark,
+-  `red v0.1.1`, and `press Space ? for commands`. Below 26×7, nothing.
++  `red v0.1.1`, and `press Space ? for commands`. Below 49×7, nothing.
++  The complete wordmark occupies 44 columns, including the two spaces and red
++  period. Compact layout reserves five additional columns; full layout remains
++  60×20. Both variants center the complete mark, including its period. Artwork
++  rows reserve the full layout width so renderer-level centering stays balanced.
++  Dimensions refer to content cells after editor chrome and gutters.
+ 
+ ```
+-                 ╷
+-╭──╮   ╭──╮   ╭──┤
+-│      ├──╯   │  │
+-╵      ╰──╴   ╰──╯  ●
++                   ╷            •
++  ╭──╮   ╭──╮   ╭──┤   ╲    ╱   ╷   ╭──┬──╮
++  │      ├──╯   │  │    ╲  ╱    │   │  │  │
++  ╵      ╰──╴   ╰──╯     ╲╱     ╵   ╵  ╵  ╵  ●
+ 
+-     red v0.1.1
++                   red v0.1.1
+ press Space ? for commands
+ ```
+ 
++The wordmark update preserves the existing small copy, hints and palette.
++Other product-branding and theme changes are separate work.
++
+ ## Implementation
+ 
+ Belongs in the core empty-buffer render path (like Neovim's intro), not a Husk
+diff --git a/src/editor.rs b/src/editor.rs
+index 96ed2615e24601cf172f625218d51433693a9ed6..a1a3f531b0f653e628aa7a355149e38783ede605 100644
+--- a/src/editor.rs
++++ b/src/editor.rs
+@@ -38137,10 +38137,16 @@ builtin = "rust"
+ 
+     #[test]
+     fn splash_degrades_to_compact_then_nothing() {
+-        let mut editor = splash_test_editor(50, 30, Config::default());
+-        let dump = rendered_dump(&mut editor, 50, 30);
++        // Terminal width includes the gutter; the longer mark needs 49
++        // content columns for the compact card.
++        let mut editor = splash_test_editor(60, 30, Config::default());
++        let dump = rendered_dump(&mut editor, 60, 30);
+         assert!(dump.contains("for commands"));
+         assert!(!dump.contains(":AgentHistory"));
++        assert!(dump.contains("╲╱     ╵   ╵  ╵  ╵  ●"));
++
++        let mut editor = splash_test_editor(50, 30, Config::default());
++        assert!(!rendered_dump(&mut editor, 50, 30).contains("red v"));
+ 
+         let mut editor = splash_test_editor(24, 6, Config::default());
+         assert!(!rendered_dump(&mut editor, 24, 6).contains("red v"));
+diff --git a/src/splash.rs b/src/splash.rs
+index 9f88898249cbd4ac58892227616c9ebcdd308b74..4861dcee598110c8a816fd70655dec21050d7646 100644
+--- a/src/splash.rs
++++ b/src/splash.rs
+@@ -12,7 +12,7 @@ use crate::unicode_utils::display_width;
+ pub const FULL_MIN_WIDTH: usize = 60;
+ pub const FULL_MIN_HEIGHT: usize = 20;
+ /// Content cells required for the compact wordmark-only variant.
+-pub const COMPACT_MIN_WIDTH: usize = 26;
++pub const COMPACT_MIN_WIDTH: usize = MARK_WIDTH + 5;
+ pub const COMPACT_MIN_HEIGHT: usize = 7;
+ 
+ /// Visual role of a splash span; each maps to one theme-derived style.
+@@ -69,14 +69,14 @@ fn span(text: impl Into<String>, role: Role) -> Span {
+     }
+ }
+ 
+-/// The wordmark rows without the trailing dot; 18 cells wide, 21 with it.
++/// Lowercase redvim; 41 cells wide, 44 with the trailing dot.
+ const MARK_ROWS: [&str; 4] = [
+-    "                 ╷",
+-    "╭──╮   ╭──╮   ╭──┤",
+-    "│      ├──╯   │  │",
+-    "╵      ╰──╴   ╰──╯",
++    "                 ╷            •",
++    "╭──╮   ╭──╮   ╭──┤   ╲    ╱   ╷   ╭──┬──╮",
++    "│      ├──╯   │  │    ╲  ╱    │   │  │  │",
++    "╵      ╰──╴   ╰──╯     ╲╱     ╵   ╵  ╵  ╵",
+ ];
+-const MARK_WIDTH: usize = 21;
++const MARK_WIDTH: usize = 44;
+ 
+ const HINTS: [(&str, &str, &str); 6] = [
+     ("press", "Space ?", "to discover every command"),
+@@ -103,6 +103,11 @@ fn mark_lines(width: usize) -> Vec<Line> {
+             spans.push(span("  ", Role::Mark));
+             spans.push(span("●", Role::Dot));
+         }
++        // The renderer centers the widest line of the block. Reserve the
++        // complete layout width even when compact copy is shorter than the
++        // mark, so it does not center our left padding a second time.
++        let used = spans.iter().map(|span| display_width(&span.text)).sum();
++        spans.push(span(" ".repeat(width.saturating_sub(used)), Role::Mark));
+         lines.push(Line::new(spans));
+     }
+     lines
+@@ -346,6 +351,51 @@ mod tests {
+         assert_eq!(dot_spans[0].text, "●");
+     }
+ 
++    #[test]
++    fn complete_wordmark_is_centered_in_both_layouts() {
++        assert_eq!(display_width(MARK_ROWS.last().unwrap()) + 3, MARK_WIDTH);
++        assert!(MARK_ROWS
++            .iter()
++            .all(|row| display_width(row) <= MARK_WIDTH - 3));
++        assert_eq!(COMPACT_MIN_WIDTH, 26.max(MARK_WIDTH + 5));
++        for width in [FULL_MIN_WIDTH, COMPACT_MIN_WIDTH] {
++            let lines = mark_lines(width);
++            assert_eq!(lines.len(), 4);
++            let left = (width - MARK_WIDTH) / 2;
++            let right = width - MARK_WIDTH - left;
++            assert!(right.abs_diff(left) <= 1);
++            for (index, line) in lines.iter().enumerate() {
++                assert_eq!(line.width(), width);
++                assert!(line
++                    .spans
++                    .iter()
++                    .all(|span| matches!(span.role, Role::Mark | Role::Dot)));
++                let dots: Vec<_> = line
++                    .spans
++                    .iter()
++                    .filter(|span| span.role == Role::Dot)
++                    .collect();
++                assert_eq!(dots.len(), usize::from(index == 3));
++            }
++            let last = lines.last().unwrap();
++            assert_eq!(display_width(&last.spans[0].text), left + MARK_WIDTH - 3);
++            assert_eq!(last.spans[1].text, "  ");
++            assert_eq!(last.spans[2].text, "●");
++            assert_eq!(display_width(&last.spans[3].text), right);
++        }
++    }
++
++    #[test]
++    fn exact_compact_bounds_and_wide_short_viewport_fit() {
++        for (width, height) in [(COMPACT_MIN_WIDTH, COMPACT_MIN_HEIGHT), (120, 7)] {
++            let lines = block(width, height, env!("CARGO_PKG_VERSION")).unwrap();
++            assert_eq!(lines.len(), COMPACT_MIN_HEIGHT);
++            assert_eq!(lines.iter().map(Line::width).max(), Some(COMPACT_MIN_WIDTH));
++            assert!(lines.iter().all(|line| line.width() <= width));
++        }
++        assert!(block(120, COMPACT_MIN_HEIGHT - 1, "0.7.5").is_none());
++    }
++
+     #[test]
+     fn palette_falls_back_to_brand_red_without_theme_colors() {
+         let palette = palette(&Theme::default());
+@@ -372,6 +422,7 @@ mod tests {
+         theme.colors.insert("descriptionForeground".into(), muted);
+         let palette = palette(&theme);
+         assert_eq!(palette.style(Role::Key).fg, Some(red));
++        assert_eq!(palette.style(Role::Dot).fg, Some(red));
+         assert_eq!(palette.style(Role::Muted).fg, Some(muted));
+     }
+ }

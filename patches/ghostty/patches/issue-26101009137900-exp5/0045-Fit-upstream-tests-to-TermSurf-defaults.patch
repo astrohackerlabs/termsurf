@@ -1,0 +1,63 @@
+From 7b42a3fc4f2aadcb4c166cb9b2b1456f00c06635 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 10 Oct 2026 04:59:27 -0500
+Subject: [PATCH 45/45] Fit upstream tests to TermSurf defaults
+
+Two upstream tests assumed upstream defaults. The BOM config test saw a
+diagnostic for TermSurf's bundled Austin Night theme, which unit tests
+cannot resolve, so it clears the theme before checking diagnostics. The
+menu unbind test now also unbinds TermSurf's super+l split binding and
+expects super+l, the product's Split Right shortcut, after reload.
+---
+ macos/Tests/Ghostty/MenuShortcutManagerTests.swift | 6 ++++--
+ src/config/Config.zig                              | 6 ++++++
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/macos/Tests/Ghostty/MenuShortcutManagerTests.swift b/macos/Tests/Ghostty/MenuShortcutManagerTests.swift
+index 5961498ffba922b825a16e67e092382425c66a36..723234840067c83292bd686cc508cca9e1a22495 100644
+--- a/macos/Tests/Ghostty/MenuShortcutManagerTests.swift
++++ b/macos/Tests/Ghostty/MenuShortcutManagerTests.swift
+@@ -6,7 +6,8 @@ import Testing
+ struct MenuShortcutManagerTests {
+     @Test(.bug("https://github.com/ghostty-org/ghostty/issues/779", id: 779))
+     func unbindShouldDiscardDefault() async throws {
+-        let config = try TemporaryConfig("keybind = super+d=unbind")
++        // TermSurf also binds super+l to new_split:right; unbind both defaults.
++        let config = try TemporaryConfig("keybind = super+d=unbind\nkeybind = super+l=unbind")
+ 
+         let item = NSMenuItem(title: "Split Right", action: #selector(BaseTerminalController.splitRight(_:)), keyEquivalent: "d")
+         item.keyEquivalentModifierMask = .command
+@@ -22,7 +23,8 @@ struct MenuShortcutManagerTests {
+         await manager.reset()
+         await manager.syncMenuShortcut(config, action: "new_split:right", menuItem: item)
+ 
+-        #expect(item.keyEquivalent == "d")
++        // TermSurf product keybinds make super+l the Split Right menu default.
++        #expect(item.keyEquivalent == "l")
+         #expect(item.keyEquivalentModifierMask == .command)
+     }
+ 
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 31f2a6862e6f2414a4dbf726319591e125991c41..38d6f0519796518ee5fcb0a387aaa109d8b34a71 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -4246,6 +4246,9 @@ test "handle bom in config files" {
+         var reader: std.Io.Reader = .fixed(data);
+         var cfg = try Config.default(alloc);
+         defer cfg.deinit();
++        // TermSurf defaults to the bundled Austin Night theme, which unit
++        // tests cannot resolve (no resources dir); keep BOM diagnostics pure.
++        cfg.theme = null;
+         try cfg.loadReader(
+             alloc,
+             &reader,
+@@ -4265,6 +4268,9 @@ test "handle bom in config files" {
+         var reader: std.Io.Reader = .fixed(data);
+         var cfg = try Config.default(alloc);
+         defer cfg.deinit();
++        // TermSurf defaults to the bundled Austin Night theme, which unit
++        // tests cannot resolve (no resources dir); keep BOM diagnostics pure.
++        cfg.theme = null;
+         try cfg.loadReader(
+             alloc,
+             &reader,

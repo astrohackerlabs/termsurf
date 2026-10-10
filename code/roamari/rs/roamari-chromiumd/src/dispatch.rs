@@ -810,8 +810,7 @@ pub fn handle_message(msg: &TermSurfMessage) {
                 } else {
                     m.phase.as_str()
                 };
-                let phase_c =
-                    CString::new(phase).unwrap_or_else(|_| CString::new("drop").unwrap());
+                let phase_c = CString::new(phase).unwrap_or_else(|_| CString::new("drop").unwrap());
                 let ok = unsafe {
                     ffi::ts_apply_external_file_drop(
                         t.handle,

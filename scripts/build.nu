@@ -1,6 +1,8 @@
 #!/usr/bin/env nu
 # Build ahterm / nutorch / roamari / engines and related components.
 
+use lib/zig-toolchain.nu [resolve-zig brew-prefix]
+
 def is-d [p: string] { (^test -d $p | complete).exit_code == 0 }
 def is-x [p: string] { (^test -x $p | complete).exit_code == 0 }
 def has-cmd [name: string] { not (which $name | is-empty) }
@@ -11,7 +13,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, roamari, ahcalc, termplot, ahebx, ahnexus, nutorch, chromium-fork, roamari-chromiumd, termsurf, all"
+  print "Components: ahterm, roamari, ahcalc, quikopen, termplot, ahebx, ahnexus, nutorch, chromium-fork, roamari-chromiumd, termsurf, all"
   print "Aliases: aht→ahterm, chromium→roamari-chromiumd"
 }
 
@@ -131,13 +133,16 @@ def build-ahterm [opts: record] {
     $zig_optimize = "ReleaseFast"
   }
 
+  # Ghostty's build.zig.zon names the Zig it accepts; never trust PATH zig.
+  let zig = (resolve-zig $opts.ghostty_dir (brew-prefix))
+  print $"==> Zig ($zig.version) at ($zig.path) \(Ghostty requires ($zig.required)\)"
   print $"==> Building GhosttyKit / libghostty \(($zig_optimize)\)..."
   cd $opts.ghostty_dir
   let ts_ver = ($env.TERMSURF_VERSION? | default "")
   if not ($ts_ver | is-empty) {
-    ^zig build -Demit-macos-app=false $"-Doptimize=($zig_optimize)" $"-Dversion-string=($ts_ver)"
+    ^$zig.path build -Demit-macos-app=false $"-Doptimize=($zig_optimize)" $"-Dversion-string=($ts_ver)"
   } else {
-    ^zig build -Demit-macos-app=false $"-Doptimize=($zig_optimize)"
+    ^$zig.path build -Demit-macos-app=false $"-Doptimize=($zig_optimize)"
   }
 
   cd ($opts.ghostty_dir | path join "macos")
@@ -159,6 +164,26 @@ def build-ahterm [opts: record] {
   let app = ($opts.ghostty_dir | path join "macos" "build" $configuration "Astrohacker TermSurf.app")
   print $"  ahterm: ($app)"
   print $"  ahterm executable: ($app)/Contents/MacOS/ahterm"
+}
+
+def build-quikopen [opts: record] {
+  let quikopen_dir = ($opts.repo_dir | path join "code/quikopen/ts/quik")
+  if not (is-d $quikopen_dir) {
+    print --stderr $"Error: quikopen package missing: ($quikopen_dir)"
+    exit 1
+  }
+  if not (has-cmd "bun") {
+    print --stderr "Error: bun is required to build quikopen (not found on PATH)"
+    exit 1
+  }
+  if $opts.clean {
+    print "==> Cleaning quikopen dist..."
+    ^rm -rf ($quikopen_dir | path join "dist")
+  }
+  let kind = (if $opts.release { "release" } else { "debug" })
+  print $"==> Building quikopen \(($kind)(version-extra)\)..."
+  bun-build $opts.repo_dir $quikopen_dir "build:quikopen"
+  print $"  quikopen: ($quikopen_dir)/dist/quikopen"
 }
 
 def build-ahcalc [opts: record] {
@@ -342,20 +367,25 @@ def --wrapped main [...args: string] {
     "chromium-fork" => { build-chromium-fork $opts }
     "roamari" => { build-roamari $opts }
     "ahcalc" => { build-ahcalc $opts }
+    "quikopen" => { build-quikopen $opts }
     "termplot" => { build-termplot $opts }
     "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
     "roamari-chromiumd" | "chromium" => { build-chromiumd $opts }
     "nutorch" => { build-nutorch $opts }
     "ahterm" | "aht" => { build-ahterm $opts }
+    # termsurf builds exactly what the TermSurf archive ships. Chromium, roamari
+    # and NuTorch are released separately, so only all builds them.
     "all" | "termsurf" => {
-      build-chromium-fork $opts
-      build-roamari $opts
-      if $component == "all" { build-nutorch $opts }
+      if $component == "all" {
+        build-chromium-fork $opts
+        build-roamari $opts
+        build-nutorch $opts
+      }
       build-ahcalc $opts
       build-ahebx $opts
       build-ahnexus $opts
-      build-chromiumd $opts
+      if $component == "all" { build-chromiumd $opts }
       build-ahterm $opts
       print ""
       print $"Done (($component))."

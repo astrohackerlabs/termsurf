@@ -1,0 +1,85 @@
+From ce23169e612fc16e76e9612926cab8c582928543 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 10 Oct 2026 04:46:55 -0500
+Subject: [PATCH] Port TermSurf tests to Zig 0.16
+
+The roamari helper tests still called std.fs.cwd(), removed in Zig 0.16,
+and browse_chrome named open_config without its payload, so no Ghostty
+unit test compiled. Use std.Io.Dir and the explicit action value.
+
+Tests that mutate the environment now move libc's environ off the
+startup envp array first. The Zig 0.16 test runner gives every test
+that array, and setenv on an existing variable left it pointing at a
+freed string, crashing a later DiskCache test.
+---
+ src/apprt/termsurf.zig      | 23 ++++++++++++++++++-----
+ src/input/browse_chrome.zig |  2 +-
+ 2 files changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/src/apprt/termsurf.zig b/src/apprt/termsurf.zig
+index c9db18ad088e5ce5e564cee6fc900295f32ab750..f909ad9d8d09e99055059c5c693c360a692d5fc2 100644
+--- a/src/apprt/termsurf.zig
++++ b/src/apprt/termsurf.zig
+@@ -6296,17 +6296,17 @@ fn testBrowserResolution() !void {
+     _ = c.unsetenv(installed_roamium_path_env);
+     const path_dir = "/tmp/roamari-chromiumd-path-test";
+     const path_helper = path_dir ++ "/roamari-chromiumd";
+-    std.fs.cwd().makeDir(path_dir) catch {};
++    std.Io.Dir.cwd().createDirPath(global.io(), path_dir) catch {};
+     defer removeTmpTree(path_dir);
+     {
+-        const file = try std.fs.cwd().createFile(path_helper, .{ .mode = 0o755 });
+-        file.close();
++        const file = try std.Io.Dir.cwd().createFile(global.io(), path_helper, .{ .permissions = .fromMode(0o755) });
++        file.close(global.io());
+     }
+     if (c.setenv("PATH", path_dir, 1) != 0) return error.SetenvFailed;
+     try testing.expectEqualStrings(installed_chromium_path, resolveBrowserExecutableForBuild(roamium, false).?);
+     {
+-        const dylib = try std.fs.cwd().createFile(path_dir ++ "/libtermsurf_chromium.dylib", .{});
+-        dylib.close();
++        const dylib = try std.Io.Dir.cwd().createFile(global.io(), path_dir ++ "/libtermsurf_chromium.dylib", .{});
++        dylib.close(global.io());
+     }
+     try testing.expectEqualStrings(path_helper, resolveBrowserExecutableForBuild(roamium, false).?);
+     if (c.setenv("PATH", isolated_path, 1) != 0) return error.SetenvFailed;
+@@ -6443,6 +6443,7 @@ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void)
+     else
+         false;
+ 
++    detachStartupEnvironForTest();
+     defer {
+         if (had_previous) {
+             const previous_z = previous_buf[0..previous_len :0];
+@@ -6455,6 +6456,18 @@ fn testWithRestoredEnv(name: [:0]const u8, callback: *const fn () anyerror!void)
+     try callback();
+ }
+ 
++/// The Zig 0.16 test runner hands every test the startup envp array as
++/// std.testing.environ and the std.testing.io environment. libc setenv on an
++/// existing variable rewrites that array in place with a heap string that a
++/// later setenv frees, so subsequent tests would read freed memory. Adding a
++/// new variable makes libc move environ to its own heap copy first; after
++/// that, mutations never touch the startup array.
++fn detachStartupEnvironForTest() void {
++    const key: [:0]const u8 = "ASTROHACKER_TEST_ENVIRON_DETACH";
++    _ = c.setenv(key, "1", 1);
++    _ = c.unsetenv(key);
++}
++
+ fn removeTmpTree(path: []const u8) void {
+     const prefix = "/tmp/";
+     if (!std.mem.startsWith(u8, path, prefix)) return;
+diff --git a/src/input/browse_chrome.zig b/src/input/browse_chrome.zig
+index 1b0a6ceb7078f42b9a64c19c9fd0e3ad1421506b..2003796a8dca6b4c0e10b829045f0bddca481222 100644
+--- a/src/input/browse_chrome.zig
++++ b/src/input/browse_chrome.zig
+@@ -69,7 +69,7 @@ test "non-chrome tags false" {
+     try testing.expect(!isBrowseChromeAction(.{ .copy_to_clipboard = .mixed }));
+     try testing.expect(!isBrowseChromeAction(.paste_from_clipboard));
+     try testing.expect(!isBrowseChromeAction(.{ .increase_font_size = 1 }));
+-    try testing.expect(!isBrowseChromeAction(.open_config));
++    try testing.expect(!isBrowseChromeAction(.{ .open_config = .os_open }));
+     try testing.expect(!isBrowseChromeAction(.clear_screen));
+     try testing.expect(!isBrowseChromeAction(.new_window));
+ }

@@ -17,44 +17,73 @@ not shipping products.
 
 NuTorch is also isolated at `code/nutorch/rs/`; run Cargo after changing into
 that directory to load its LibTorch configuration. Its React Router site is the
-root Bun workspace member `code/nutorch/ts/ntcom`. Tensor commands are built into
+root Bun workspace member `code/nutorch/ts/nutorch-com`. Tensor commands are built into
 the native shell and exposed through `use torch`; the former Nu client module and daemon are retired in Issue
 26091215074416 Experiment 3. Experiment 9 promotes the accepted port to this canonical
 path and the existing Cloudflare Pages publisher. Experiment 11 adopts shared
 UI, Austin Night and Space Rain; preserve content, interactions and the colorful
 3D homepage hero. The page is dark-only; PNG favicons follow OS preference.
-Issue 26090811168867 Experiment 2 makes `scripts/deploy-ntcom.nu` target AWS
+Issue 26090811168867 Experiment 2 makes `scripts/deploy-nutorch-com.nu` target AWS
 (--aws is equivalent). Domain provisioning and DNS cutover were separately
 approved and applied; human acceptance is recorded. Legacy Pages requires explicit --cloudflare and human
 confirmation. See infra guidance; routine publishing never changes DNS.
 
 ## Product boundaries
 
-Ryan's personal homepage and blog are at `code/rxc/ts/rxccom`, a root Bun
-workspace using shared UI and SpaceRain. `bun run dev:rxccom` serves port 3530.
-It retains Cloudflare Pages project `rxc`; `scripts/deploy-rxccom.nu` is its
+Ryan's personal homepage and blog are at `code/rxc/ts/ryanxcharles-com`, a root Bun
+workspace using shared UI and SpaceRain. `bun run dev:ryanxcharles-com` serves port 3530.
+It retains Cloudflare Pages project `rxc`; `scripts/deploy-ryanxcharles-com.nu` is its
 separate publisher. CV and personal agent skills were not imported.
 
 WebBuf is integrated at `code/webbuf/rs/` and `code/webbuf/ts/`, in the root
 Cargo and Bun workspaces. Public `@webbuf/*`, `webbuf` and `webbuf_*` names are
-preserved exceptions to internal naming. Its `ts/wbcom` site uses React Router 8
+preserved exceptions to internal naming. Its `ts/webbuf-com` site uses React Router 8
 with static prerendering and typed Link/href navigation. Experiment 12 adopts
 shared UI, Austin Night, persistent SpaceRain and canonical logo assets.
 See `code/webbuf/AGENTS.md` for commands.
 
-TermPlot's single-page installation site is `code/termplot/ts/tpcom`, a separate
-React Router SPA using shared UI. `bun run dev:tpcom` binds 127.0.0.1:3512.
+TermPlot's single-page installation site is `code/termplot/ts/termplot-com`, a separate
+React Router SPA using shared UI. `bun run dev:termplot-com` binds 127.0.0.1:3512.
 Experiment 5 qualified localhost. Experiment 6 adds static S3/CloudFront
-deployment via `scripts/deploy-tpcom.nu`, with separate infrastructure and DNS
+deployment via `scripts/deploy-termplot-com.nu`, with separate infrastructure and DNS
 approval gates. No executable release inclusion.
 
+RedVim's site is `code/redvim/ts/redvim-com`, a React Router SPA using shared
+UI, Austin Night and SpaceRain. Use `bun run dev:redvim-com` at 127.0.0.1:3518
+and `bun run build:redvim-com`. Local HTTPS is `https://redvim.test`. Its
+production preview uses port 3519. Issue 26091919387750 qualifies the page,
+AWS hosting at redvim.com, boxed logo and live astrohacker-com product card
+through Experiments 2–5.
+
+Compubutton's unpublished website is `code/compubutton/ts/compubutton-com`, a one-route
+React Router SPA using shared UI. `bun run dev:compubutton-com` binds 127.0.0.1:3516.
+Local HTTPS is `https://compubutton.test`. It is a test canvas for later 3D
+work; publication, DNS and analytics are not part of the current site.
+
+Sarcasmotron's unpublished website is `code/sarcasmotron/ts/sarcasmotron-com`, a one-route
+React Router SPA using shared UI. `bun run dev:sarcasmotron-com` binds 127.0.0.1:3520.
+Local HTTPS is `https://sarcasmotron.test`. Publication, DNS, analytics, product
+mark and classifier UI are not part of the current blank landing.
+
+Roamari's one-page installation site is `code/roamari/ts/roamari-com`, a React Router
+SPA using shared UI. `bun run dev:roamari-com` binds 127.0.0.1:3522. Local HTTPS is
+`https://roamari.test`. Production is S3/CloudFront via `scripts/deploy-roamari-com.nu`
+(`ah deploy roamari-com`).
+
+QuikOpen's one-page install site is `code/quikopen/ts/quikopen-com`, a React Router
+SPA using shared UI. `bun run dev:quikopen-com` / `ah dev quikopen-com` binds 127.0.0.1:3524.
+Local HTTPS is `https://quikopen.test`. Production is `https://quikopen.com`
+via `ah deploy quikopen-com`. The opener app remains `code/quikopen/ts/quik` on 3465.
+The astrohacker-com product catalog includes its image viewer card. Umami is not part of
+the current site.
+
 - `ahebx` is the TermSurf EBX1 pool client; `ebxmine` is the EBX2 validating
-  mine; `ebxcom` is the pool/app.
-- ahcom exposes oRPC `/api`; ebxcom exposes tRPC `/trpc`.
+  mine; `earthbucks-com` is the pool/app.
+- astrohacker-com exposes oRPC `/api`; earthbucks-com exposes tRPC `/trpc`.
   kpnode/kpcom/ahkey source is archived off HEAD.
 - ahnexus is a Vite SPA backed by Rust `ahnexus`; Nexus wire code stays in
   Rust. Other React apps use React Router framework mode as configured.
-- ahcom owns its MySQL schema with push-only Drizzle. ebxcom/ebxdb own the
+- astrohacker-com owns its MySQL schema with push-only Drizzle. earthbucks-com/ebxdb own the
   EarthBucks MySQL schema. TermSurf apps, UI, and static sites have no DB.
 - `roamari-chromiumd` consumes optional
   `--render-surface-service=<NAME>` before Chromium argument handling.
@@ -75,7 +104,7 @@ Framework-mode apps use their existing `@react-router/dev` configuration,
 typed route modules, and generated `+types`; never hand-edit `.react-router/`.
 Internal links use typed `href(...)`; external links use plain anchors.
 
-ahcom page reads use loaders backed by models, and writes use its browser
+astrohacker-com page reads use loaders backed by models, and writes use its browser
 oRPC client—never product route actions. Apps without an RPC mutation surface
 may use RR actions. Keep server-only dependencies and environment values out of
 browser graphs. Bun SSR uses `renderToReadableStream`.
@@ -110,7 +139,9 @@ little-endian encoding or protobuf LEB128. Keep TermSurf/protobuf varints separa
 ## TermSurf Bun binaries
 
 `ahcalc`, independent `termplot`, and `ahebx` use a dedicated server process for UDS
-and HTTP; foreground binaries are clients. `--version` and `--help` must exit
+and HTTP; foreground binaries are clients. Independent `quikopen` is one
+process per overlay: it binds its own loopback HTTP port and has no UDS.
+`--version` and `--help` must exit
 before requiring TermSurf. Compiled output is one `dist/<binary>`, not a
 separate server executable. Socket names and product-specific behavior live in
 package guidance.
@@ -148,5 +179,5 @@ classes, routes' arbitrary thrown values, or entire test trees. Verify scope wit
 
 Do not commit dependencies, generated Vite assets, or secrets. Do not recreate
 the deleted `code/website`; the company site is
-`code/astrohacker/ts/ahcom`, while `termsurf.com` and its public `/docs`
-live in `code/termsurf/ts/tscom`.
+`code/astrohacker/ts/astrohacker-com`, while `termsurf.com` and its public `/docs`
+live in `code/termsurf/ts/termsurf-com`.
