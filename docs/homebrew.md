@@ -32,7 +32,6 @@ Released PATH names (machine-readable for gates):
 <!-- released-wrappers -->
 termsurf
 ahcalc
-ahebx
 ahnexus
 <!-- /released-wrappers -->
 
@@ -41,7 +40,6 @@ paths in the release tarball besides bare CLI binaries):
 
 <!-- released-payload-roots -->
 ahcalc
-ahebx
 ahnexus
 <!-- /released-payload-roots -->
 
@@ -51,7 +49,6 @@ ahnexus
 | `nutorch` | NuTorch shell, supplied by the separate Homebrew dependency |
 | `roamari` | Open URLs / browser panes in Terminal |
 | `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
-| `ahebx` | EarthBucks miner TermSurf app (full-pane web UI) |
 | `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
@@ -120,7 +117,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `termsurf`, `roamari`, `ahcalc`, `ahebx`,
+- PATH: `termsurf`, `roamari`, `ahcalc`,
   `ahnexus`, engine helpers
 - Shell dependency: `/opt/homebrew/bin/nutorch`. With no explicit `command`,
   TermSurf selects that path (then `/usr/local/bin/nutorch`), even from a GUI
@@ -132,9 +129,6 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - ahcalc package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
   or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
-- ahebx package payload →
-  `/opt/homebrew/opt/astrohacker-terminal-ahebx/` (when installed as artifact)
-  or under Caskroom stage `ahebx/` (binary links `ahebx/dist/ahebx`)
 - ahnexus package payload →
   `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
   or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
@@ -150,7 +144,6 @@ Top-level contents:
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/`
 - `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
-- `ahebx/` (payload: `dist/ahebx`, `build/client/` SPA, `public/`)
 - `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 
 The archive never contains `roamari`, `roamari-chromiumd` or Chromium,
@@ -358,7 +351,7 @@ normal operator interface.
    (not version/sha) if needed so the tap is clean for publish.
 
 3. **Full release build** (`scripts/build.nu termsurf` builds only what the
-   archive ships: ahcalc, ahebx, ahnexus, termsurf; preserve all valid
+   archive ships: ahcalc, ahnexus, termsurf; preserve all valid
    incremental build outputs):
 
    ```sh
@@ -372,11 +365,10 @@ normal operator interface.
    - First-party product crate package versions under the monorepo root track the
      Homebrew release version (`ahnexus`). The
      canonical command rewrites and commits those manifests before building so
-     `CARGO_PKG_VERSION` matches the cask. It also rewrites `code/termsurf/ts/ahcalc`,
-     and `code/earthbucks/ts/ahebx` `package.json` `"version"` and
-     their `app/cli/embedded-version.ts` stamps to the same X.Y.Z so
+     `CARGO_PKG_VERSION` matches the cask. It also rewrites the `code/termsurf/ts/ahcalc`
+     `package.json` `"version"` and its `app/cli/embedded-version.ts` stamp to the same X.Y.Z so
      compile-time stamps match the cask and the post-build tree stays clean.
-     Do not leave those packages stuck at a placeholder such as `0.1.0` across
+     Do not leave that package stuck at a placeholder such as `0.1.0` across
      releases. Do not rewrite package versions under `forks/`.
    - `TERMSURF_VERSION=<version>` is the `termsurf` app/helper version input.
      `termsurf` is the only shipped wrapper that uses the terminal helper/action
@@ -391,7 +383,6 @@ normal operator interface.
      | --- | --- |
      | `roamari --version` | `Roamari <independent X.Y.Z>` |
      | `ahcalc --version` | `Astrohacker Calculator <version>` |
-     | `ahebx --version` | `Astrohacker EarthBucks <version>` |
      | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `roamari-chromiumd --version` | `Roamari Chromium Engine <independent X.Y.Z>` |
 

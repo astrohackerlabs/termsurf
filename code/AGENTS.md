@@ -88,7 +88,7 @@ Router, Express, oRPC at `/api/v1` and a local MySQL database `openspv` (`setup:
 `ah dev openspv-com` binds 127.0.0.1:3528, with Vite HMR on 3529. Local HTTPS is
 `https://openspv.test`. It is not deployed yet.
 
-- `ahebx` is the TermSurf EBX1 pool client; `ebxmine` is the EBX2 validating
+- Browser miners are EBX1 pool clients; `ebxmine` is the EBX2 validating
   mine; `earthbucks-com` is the pool/app.
 - astrohacker-com exposes oRPC `/api`; earthbucks-com exposes the EarthBucks
   v1 oRPC API at `/api/v1`. Its tRPC `/trpc` API was removed in Issue
@@ -151,7 +151,7 @@ little-endian encoding or protobuf LEB128. Keep TermSurf/protobuf varints separa
 
 ## TermSurf Bun binaries
 
-`ahcalc`, independent `termplot`, and `ahebx` use a dedicated server process for UDS
+`ahcalc` and independent `termplot` use a dedicated server process for UDS
 and HTTP; foreground binaries are clients. Independent `quikopen` is one
 process per overlay: it binds its own loopback HTTP port and has no UDS.
 `--version` and `--help` must exit

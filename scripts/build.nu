@@ -13,7 +13,7 @@ def script-path [] {
 
 def usage [] {
   print $"Usage: (script-path) <component> [--release] [--clean] [--open]"
-  print "Components: ahterm, roamari, ahcalc, quikopen, termplot, ahebx, ahnexus, nutorch, chromium-fork, roamari-chromiumd, termsurf, all"
+  print "Components: ahterm, roamari, ahcalc, quikopen, termplot, ahnexus, nutorch, chromium-fork, roamari-chromiumd, termsurf, all"
   print "Aliases: aht→ahterm, chromium→roamari-chromiumd"
 }
 
@@ -227,27 +227,6 @@ def build-termplot [opts: record] {
   print $"  termplot: ($termplot_dir)/dist/termplot"
 }
 
-def build-ahebx [opts: record] {
-  let ahebx_dir = ($opts.repo_dir | path join "code/earthbucks/ts/ahebx")
-  if not (is-d $ahebx_dir) {
-    print --stderr $"Error: ahebx package missing: ($ahebx_dir)"
-    exit 1
-  }
-  if not (has-cmd "bun") {
-    print --stderr "Error: bun is required to build ahebx (not found on PATH)"
-    exit 1
-  }
-  if $opts.clean {
-    print "==> Cleaning ahebx dist..."
-    ^rm -rf ($ahebx_dir | path join "dist")
-  }
-  maybe-termsurf-version
-  let kind = (if $opts.release { "release" } else { "debug" })
-  print $"==> Building ahebx \(($kind)(version-extra)\)..."
-  bun-build $opts.repo_dir $ahebx_dir "build:ahebx"
-  print $"  ahebx: ($ahebx_dir)/dist/ahebx"
-}
-
 def build-ahnexus [opts: record] {
   let ahnexus_spa = ($opts.repo_dir | path join "code/termsurf/ts/ahnexus")
   if not (is-d $ahnexus_spa) {
@@ -369,7 +348,6 @@ def --wrapped main [...args: string] {
     "ahcalc" => { build-ahcalc $opts }
     "quikopen" => { build-quikopen $opts }
     "termplot" => { build-termplot $opts }
-    "ahebx" => { build-ahebx $opts }
     "ahnexus" => { build-ahnexus $opts }
     "roamari-chromiumd" | "chromium" => { build-chromiumd $opts }
     "nutorch" => { build-nutorch $opts }
@@ -383,7 +361,6 @@ def --wrapped main [...args: string] {
         build-nutorch $opts
       }
       build-ahcalc $opts
-      build-ahebx $opts
       build-ahnexus $opts
       if $component == "all" { build-chromiumd $opts }
       build-ahterm $opts
