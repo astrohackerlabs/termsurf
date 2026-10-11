@@ -29,7 +29,26 @@ working tree is local-only under `forks/nushell`; this directory tracks the
 patch archive needed to reconstruct NuTorch's Nushell changes without
 importing Nushell history into the company repo.
 
-## Current State (Issue 26091523132966 Exp 1)
+## Current State (Issue 26101014540995 Exp 1)
+
+Rebase onto the upstream `main` commit selected on 2026-10-10. Preserve NuTorch
+mode dispatch and the host callback before prompt hooks. Adapt startup timing
+and Vi visual-mode keybindings to the upstream APIs. The older lockfile refresh
+is replaced by a lockfile generated for this base. No product behavior is
+intentionally removed. Release qualification remains pending in Experiment 1.
+
+- Upstream base: `251b39276970c015fb6d97d9ee750fe14788f62c`
+- Product branch: `issue-26101014540995-exp1-upstream-update`
+- Product HEAD: `6e615d022235279bc4a020219626c94858ce9907`
+- Product tree: `953cc2efe910d7c19c79c24203cc99d1890c15b2`
+- Cumulative archive: `patches/nushell/patches/issue-26101014540995/`
+- Patch count: **20**
+- Aggregate SHA-256:
+  `b8baae5999f6ca85d8b3b590ac9b0f255a53654d138bee78b1db9ddfc9687d33`
+- `ah patch export` reconstructed this tree successfully. The shipping authority
+  is `patches/release-manifest.json`. Historical archives remain unchanged.
+
+## Prior State (Issue 26091523132966 Exp 1)
 
 Adds the default no-op `ModeDispatcher::before_prompt` host callback after
 environment merging/signal reset and before prompt hooks. NuTorch uses it to

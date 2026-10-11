@@ -187,7 +187,7 @@ def build-quikopen [opts: record] {
 }
 
 def build-ahcalc [opts: record] {
-  let ahcalc_dir = ($opts.repo_dir | path join "code/termsurf/ts/ahcalc")
+  let ahcalc_dir = ($opts.repo_dir | path join "code/ahcalc/ts/ahcalc")
   if not (is-d $ahcalc_dir) {
     print --stderr $"Error: ahcalc package missing: ($ahcalc_dir)"
     exit 1
@@ -200,9 +200,8 @@ def build-ahcalc [opts: record] {
     print "==> Cleaning ahcalc dist..."
     ^rm -rf ($ahcalc_dir | path join "dist")
   }
-  maybe-termsurf-version
   let kind = (if $opts.release { "release" } else { "debug" })
-  print $"==> Building ahcalc \(($kind)(version-extra)\)..."
+  print $"==> Building ahcalc \(($kind), independent package version\)..."
   bun-build $opts.repo_dir $ahcalc_dir "build:ahcalc"
   print $"  ahcalc: ($ahcalc_dir)/dist/ahcalc"
 }
@@ -228,7 +227,9 @@ def build-termplot [opts: record] {
 }
 
 def build-ahnexus [opts: record] {
-  let ahnexus_spa = ($opts.repo_dir | path join "code/termsurf/ts/ahnexus")
+  let ahnexus_spa = ($opts.repo_dir | path join "code/ahnexus/ts/ahnexus")
+  # ahnexus has its own excluded Cargo workspace and independent version.
+  let ahnexus_rust = ($opts.repo_dir | path join "code/ahnexus/rs")
   if not (is-d $ahnexus_spa) {
     print --stderr $"Error: ahnexus SPA package missing: ($ahnexus_spa)"
     exit 1
@@ -242,14 +243,13 @@ def build-ahnexus [opts: record] {
     ^rm -rf ($ahnexus_spa | path join "dist")
     if $opts.release {
       do {
-        cd $opts.rust_dir
+        cd $ahnexus_rust
         ^cargo clean -p ahnexus
       } | complete
     }
   }
-  maybe-termsurf-version
   let kind = (if $opts.release { "release" } else { "debug" })
-  print $"==> Building ahnexus SPA \(($kind)(version-extra)\)..."
+  print $"==> Building ahnexus SPA \(($kind), independent crate version\)..."
   do {
     cd $opts.repo_dir
     if not (is-d ($ahnexus_spa | path join "node_modules")) and not (is-d ($opts.repo_dir | path join "node_modules")) {
@@ -258,15 +258,15 @@ def build-ahnexus [opts: record] {
     ^bun run build:ahnexus
   }
   print $"  ahnexus SPA: ($ahnexus_spa)/dist"
-  cd $opts.rust_dir
+  cd $ahnexus_rust
   if $opts.release {
     print "==> Building ahnexus binary (release)..."
     ^cargo build --release -p ahnexus
-    print $"  ahnexus: ($opts.rust_dir)/target/release/ahnexus"
+    print $"  ahnexus: ($ahnexus_rust)/target/release/ahnexus"
   } else {
     print "==> Building ahnexus binary (debug)..."
     ^cargo build -p ahnexus
-    print $"  ahnexus: ($opts.rust_dir)/target/debug/ahnexus"
+    print $"  ahnexus: ($ahnexus_rust)/target/debug/ahnexus"
   }
 }
 
@@ -352,17 +352,18 @@ def --wrapped main [...args: string] {
     "roamari-chromiumd" | "chromium" => { build-chromiumd $opts }
     "nutorch" => { build-nutorch $opts }
     "ahterm" | "aht" => { build-ahterm $opts }
-    # termsurf builds exactly what the TermSurf archive ships. Chromium, roamari
-    # and NuTorch are released separately, so only all builds them.
+    # termsurf builds exactly what the TermSurf archive ships: the app. Chromium,
+    # roamari, NuTorch, ahcalc and ahnexus are released separately, so only all
+    # builds them.
     "all" | "termsurf" => {
       if $component == "all" {
         build-chromium-fork $opts
         build-roamari $opts
         build-nutorch $opts
+        build-ahcalc $opts
+        build-ahnexus $opts
+        build-chromiumd $opts
       }
-      build-ahcalc $opts
-      build-ahnexus $opts
-      if $component == "all" { build-chromiumd $opts }
       build-ahterm $opts
       print ""
       print $"Done (($component))."

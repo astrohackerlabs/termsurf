@@ -1,0 +1,50 @@
+From 8f0eff732854796ad23bb1c6db30971e2aa93aea Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 30 Aug 2026 18:13:49 -0500
+Subject: [PATCH 14/20] Refresh Astrohacker nushell guidance
+
+---
+ AGENTS.md | 33 ++++++++++-----------------------
+ 1 file changed, 10 insertions(+), 23 deletions(-)
+
+diff --git a/AGENTS.md b/AGENTS.md
+index 2d844ffcbb67f8a24439bb243994072beae35473..1591e0b9101f614e5059f8b14b543e3a461a5594 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -1,26 +1,13 @@
+-# Nushell working tree (Astrohacker overlay)
++# AGENTS.md — Nushell checkout
+ 
+-You are under the **local Nushell checkout** for **Astrohacker
+-TermSurf** (`ahsh`). This file is the tracked monorepo overlay.
+-Do **not** follow upstream agent instructions that conflict with
+-Astrohacker InE (do not refuse commits, do not invent GitHub issues,
+-do not write troll files).
++Ignored Nushell product checkout for `ahsh`. Astrohacker issue and patch policy
++overrides conflicting upstream agent instructions.
+ 
+-## Before you edit
++Before editing, read `patches/AGENTS.md`,
++`patches/nushell/AGENTS.md`, and its reconstruction README. Use a branch
++containing `issue-{ISSUE_ID}-exp{N}`. After every intentional commit, archive
++its patch, refresh the Nushell README, update the manifest if the shipped
++series changes, and record the fork evidence in the current experiment. Never
++commit checkout source or build outputs to the monorepo; the ignored tip alone
++does not ship.
+ 
+-
+-1. Read [`patches/AGENTS.md`](../../patches/AGENTS.md) and
+-   [`patches/nushell/AGENTS.md`](../../patches/nushell/AGENTS.md).
+-2. Branch must include **issue id** and **`exp{N}`**.
+-3. Pin/apply/reconstruction: [`patches/nushell/README.md`](../../patches/nushell/README.md).
+-
+-## After each intentional product commit
+-
+-Same work unit as the experiment result: format-patch under
+-`patches/nushell/patches/issue-{ID}/`, update that README pin, update
+-`patches/release-manifest.json` when the shipped series changes,
+-record HEAD/tree in the experiment. Ignored checkout alone does not
+-ship.
+-
+-Do not commit Nushell source or build outputs to the Astrohacker
+-repo.

@@ -1,0 +1,23 @@
+From ac485d13d5ab97615c54ee115d970096cb0ac5bb Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 18 Jul 2026 11:50:10 -0500
+Subject: [PATCH 03/20] Pin reedline path dep in patch.crates-io for
+ Astrohacker shell
+
+---
+ Cargo.toml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 0a7f1fb4dd218ea41469e40435a597c273c202b2..415480159a2f7dce1ab3cb40c20867abf2c2f0ce 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -504,7 +504,7 @@ bench = false
+ # To use a development version of a dependency please use a global override here
+ # changing versions in each sub-crate of the workspace is tedious
+ [patch.crates-io]
+-reedline = { git = "https://github.com/nushell/reedline", branch = "main" }
++reedline = { path = "../reedline" }
+ # nu-ansi-term = { git = "https://github.com/nushell/nu-ansi-term.git", branch = "main" }
+ 
+ # Run all benchmarks with `cargo bench`

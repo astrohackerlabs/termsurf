@@ -28,7 +28,25 @@ NuTorch uses a Reedline checkout under `forks/reedline` that
 Nushell and `code/nutorch/rs/shell` share via path dependency. Issue 26082214188331
 adds a product `AGENTS.md` overlay (one patch on the upstream tip).
 
-## Current State (Issue 26091316465368 Exp 1)
+## Current State (Issue 26101014540995 Exp 1)
+
+Rebase all four product patches onto the upstream `main` commit selected on
+2026-10-10. Keep the live-buffer prompt callback in both upstream hint-rendering
+paths. Preserve upstream prompt-height tests and the product buffer test.
+Release qualification remains pending in Experiment 1.
+
+- Upstream base: `b5d93522d1a6db3909313944d9cf7fd70773ff79`
+- Product branch: `issue-26101014540995-exp1-upstream-update`
+- Product HEAD: `ab8626403cd9dc8d2211818e2050910c25044b75`
+- Product tree: `e5c7db940c4d6b11a5a61fd535418db67b7edd98`
+- Cumulative archive: `patches/reedline/patches/issue-26101014540995/`
+- Patch count: **4**
+- Aggregate SHA-256:
+  `4a953e25464b121e2673dfe32269bbcc3901e2a6854d3704499631665f39f284`
+- `ah patch export` reconstructed this tree successfully. The shipping authority
+  is `patches/release-manifest.json`. Historical archives remain unchanged.
+
+## Prior State (Issue 26091316465368 Exp 1)
 
 Both forks are rebased onto upstream main frozen on 2026-09-13. Version: 0.51.0.
 All prior product patches are retained; the new archive is cumulative.

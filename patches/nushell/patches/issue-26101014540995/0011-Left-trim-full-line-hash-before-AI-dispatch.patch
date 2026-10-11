@@ -1,0 +1,58 @@
+From a102bed190b7622066b25901416c6d2d10129eed Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 23 Aug 2026 06:07:47 -0500
+Subject: [PATCH 11/20] Left-trim full-line hash before AI dispatch
+
+Indented REPL comments (`  # query`) are no-ops in nu/zsh; treat
+them as AI. Inline `#` after tokens stays a language comment.
+---
+ crates/nu-cli/src/mode_dispatcher.rs | 10 ++++++----
+ crates/nu-cli/src/repl.rs            |  5 +++--
+ 2 files changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+index 0e740c3edac4e879699ddd4a29436b0ac8d178e5..73b74c96620fd4e8c45bf90cd81ef445ef778c69 100644
+--- a/crates/nu-cli/src/mode_dispatcher.rs
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -57,11 +57,12 @@ pub struct ModeResult {
+     pub exit_code: i32,
+ }
+ 
+-/// Column-0 `#` lines are product AI input (Issue 26082310413946).
++/// Full-line `#` comments are product AI input (Issue 26082310413946).
+ ///
+-/// No trim: a leading space is a language comment, not AI.
++/// Leading whitespace is ignored so `  # query` is AI. A `#` after
++/// other tokens (`echo hi # note`) is still a language comment.
+ pub fn is_shannon_ai_line(command: &str) -> bool {
+-    command.starts_with('#')
++    command.trim_start().starts_with('#')
+ }
+ 
+ #[cfg(test)]
+@@ -76,7 +77,8 @@ mod tests {
+             ("# my query", true),
+             ("## foo", true),
+             ("echo hi # note", false),
+-            ("  # note", false),
++            ("  # note", true),
++            ("\t# note", true),
+             ("", false),
+             ("__shannon_switch", false),
+         ];
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index f047ff79eb718486cec693e0046f0ecb4c03734a..d75a8b9e0b3fd2b08d28e2c057061bc50b6b56d6 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -522,8 +522,9 @@ fn run_command(ctx: RunContext) -> Reedline {
+             .get_env_var(engine_state, "SHANNON_MODE")
+             .and_then(|v| v.as_str().ok().map(str::to_string))
+             .unwrap_or_else(|| "nu".to_string());
+-        // Column-0 `#` is AI even in zsh (Issue 26082310413946). Stock `nu`
+-        // without a dispatcher still treats `#` as a comment.
++        // Full-line `#` (after left-trim) is AI even in zsh
++        // (Issue 26082310413946). Stock `nu` without a dispatcher still
++        // treats `#` as a comment.
+         let dispatch_mode: Option<&str> = if crate::is_shannon_ai_line(&command) {
+             Some("ai")
+         } else if mode != "nu" {

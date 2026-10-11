@@ -1,0 +1,23 @@
+From 76465b881784671ddf424a44976a721c43725383 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 13 Sep 2026 12:23:21 -0500
+Subject: [PATCH 18/20] Keep standalone Nu launcher compatible
+
+Nu needs no dispatcher to enter the room.
+One None lets its tests resume.
+---
+ src/run.rs | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/run.rs b/src/run.rs
+index e06058b5a98b9e89f32c23e1be79766d001dbbeb..f7aa1aa90ebffe6053abaed097b9a937d96ef277 100644
+--- a/src/run.rs
++++ b/src/run.rs
+@@ -252,6 +252,7 @@ pub(crate) fn run_repl(
+         stack,
+         parsed_nu_cli_args.execute,
+         parsed_nu_cli_args.no_std_lib,
++        None,
+     );
+     perf!("evaluate_repl", start_time, use_color);
+ 

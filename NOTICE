@@ -16,30 +16,7 @@ Package legal layout (Homebrew / release tarball):
 <!-- legal-manifest
 # kind|id|section|license
 wrapper|termsurf|ghostty|MIT
-wrapper|ahcalc|first-party|MIT
-wrapper|ahnexus|first-party|MIT
-payload|ahcalc|first-party|MIT
-payload|ahnexus|first-party|MIT
 -->
-
-================================================================================
-## first-party — ahcalc
-
-Astrohacker-owned product code for ahcalc (scientific calculator TermSurf app,
-including the compiled product binary and package static assets) is licensed
-under the MIT License in LICENSE (Copyright (c) 2026 Astrohacker Inc.). The
-distributed binary is produced with the Bun toolchain and embeds third-party
-runtime components under their respective licenses as used by Bun/Remix at
-build time; Astrohacker first-party source remains MIT as above.
-
-================================================================================
-## first-party — ahnexus
-
-Astrohacker-owned product code for ahnexus (Nexus TermSurf chat shell: Rust
-binary and staged Vite SPA under `ui/`) is licensed under the MIT License in
-LICENSE (Copyright (c) 2026 Astrohacker Inc.). The SPA build embeds third-party
-runtime components under their respective licenses as used by the frontend
-toolchain at build time; Astrohacker first-party source remains MIT as above.
 
 ================================================================================
 ## ghostty — termsurf

@@ -1,0 +1,139 @@
+From 0f227bbce500e85c350726c3466b4f561a4ca678 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sun, 23 Aug 2026 06:17:00 -0500
+Subject: [PATCH 2/4] Pass the live buffer into left prompt render
+
+Prompt::render_prompt_left_with_buffer lets a prompt overlay on
+the current line. PromptLines::new uses it; default ignores the
+buffer. Issue 26082310413946 Exp 2.
+---
+ src/engine.rs                |  3 +++
+ src/painting/painter.rs      |  2 +-
+ src/painting/prompt_lines.rs | 49 +++++++++++++++++++++++++++++++++++-
+ src/prompt/base.rs           |  6 +++++
+ 4 files changed, 58 insertions(+), 2 deletions(-)
+
+diff --git a/src/engine.rs b/src/engine.rs
+index 983a9637c0eac3cd4aa6656943551a955c863680..80f4cd78f1052a0a703939214fce76e919bb4f56 100644
+--- a/src/engine.rs
++++ b/src/engine.rs
+@@ -3125,6 +3125,7 @@ impl Reedline {
+                 &res_string,
+                 "",
+                 "",
++                "",
+             );
+ 
+             self.painter.repaint_buffer(
+@@ -3233,6 +3234,7 @@ impl Reedline {
+                 &before_cursor,
+                 "",
+                 &hint,
++                buffer_to_paint,
+             )
+             .with_exit_after_cursor(&after_cursor)
+         } else {
+@@ -3243,6 +3245,7 @@ impl Reedline {
+                 &before_cursor,
+                 &after_cursor,
+                 &hint,
++                buffer_to_paint,
+             )
+         };
+ 
+diff --git a/src/painting/painter.rs b/src/painting/painter.rs
+index 29af46f37edff6f71d41bdbe41db668bb2ebeeff..4446ad47e73225302858f0e441560bbfbc182b30 100644
+--- a/src/painting/painter.rs
++++ b/src/painting/painter.rs
+@@ -3208,7 +3208,7 @@ mod tests {
+         painter.set_semantic_markers(Some(Box::new(markers)));
+ 
+         let prompt = TestPrompt;
+-        let lines = PromptLines::new(&prompt, PromptEditMode::Default, None, "", "", "");
++        let lines = PromptLines::new(&prompt, PromptEditMode::Default, None, "", "", "", "");
+         let layout = painter.compute_layout(&lines, None);
+ 
+         painter
+diff --git a/src/painting/prompt_lines.rs b/src/painting/prompt_lines.rs
+index f44aeae82a6507442d744c868c45c9de2b755a2d..48d8020ea4f09fc3005ccc004f43c596e54c7df7 100644
+--- a/src/painting/prompt_lines.rs
++++ b/src/painting/prompt_lines.rs
+@@ -34,8 +34,9 @@ impl<'prompt> PromptLines<'prompt> {
+         before_cursor: &'prompt str,
+         after_cursor: &'prompt str,
+         hint: &'prompt str,
++        buffer: &str,
+     ) -> Self {
+-        let prompt_str_left = prompt.render_prompt_left();
++        let prompt_str_left = prompt.render_prompt_left_with_buffer(buffer);
+         let prompt_str_right = prompt.render_prompt_right();
+ 
+         let prompt_indicator = match history_indicator {
+@@ -436,4 +437,50 @@ mod tests {
+ 
+         assert_eq!(prompt_lines.prompt_height(20), expected);
+     }
++
++    struct BufferEchoPrompt;
++
++    impl Prompt for BufferEchoPrompt {
++        fn render_prompt_left(&self) -> Cow<'_, str> {
++            "LEFT".into()
++        }
++
++        fn render_prompt_left_with_buffer(&self, buffer: &str) -> Cow<'_, str> {
++            format!("LEFT:{buffer}").into()
++        }
++
++        fn render_prompt_right(&self) -> Cow<'_, str> {
++            "".into()
++        }
++
++        fn render_prompt_indicator(&self, _prompt_mode: PromptEditMode) -> Cow<'_, str> {
++            "> ".into()
++        }
++
++        fn render_prompt_multiline_indicator(&self) -> Cow<'_, str> {
++            "".into()
++        }
++
++        fn render_prompt_history_search_indicator(
++            &self,
++            _history_search: crate::PromptHistorySearch,
++        ) -> Cow<'_, str> {
++            "".into()
++        }
++    }
++
++    #[test]
++    fn prompt_lines_new_passes_buffer_to_left_prompt() {
++        let prompt = BufferEchoPrompt;
++        let lines = PromptLines::new(
++            &prompt,
++            PromptEditMode::Default,
++            None,
++            "",
++            "",
++            "",
++            "# hello",
++        );
++        assert_eq!(lines.prompt_str_left.as_ref(), "LEFT:# hello");
++    }
+ }
+diff --git a/src/prompt/base.rs b/src/prompt/base.rs
+index 7a480103f101f3e06b112f9a51f4690abb8a4dda..0b38ef7aba8732d16f103f6b7c855ae9509b676b 100644
+--- a/src/prompt/base.rs
++++ b/src/prompt/base.rs
+@@ -268,6 +268,12 @@ impl IntoDiscriminant for PromptEditMode {
+ pub trait Prompt: Send {
+     /// Provide content of the left full prompt
+     fn render_prompt_left(&self) -> Cow<'_, str>;
++    /// Left prompt that may depend on the live line buffer.
++    ///
++    /// Reedline calls this on every repaint. Default ignores the buffer.
++    fn render_prompt_left_with_buffer(&self, _buffer: &str) -> Cow<'_, str> {
++        self.render_prompt_left()
++    }
+     /// Provide content of the right full prompt
+     fn render_prompt_right(&self) -> Cow<'_, str>;
+     /// Render the prompt indicator (Last part of the prompt that changes based on the editor mode)

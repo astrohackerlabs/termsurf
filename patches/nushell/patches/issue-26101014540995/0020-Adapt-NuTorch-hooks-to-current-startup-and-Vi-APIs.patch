@@ -1,0 +1,294 @@
+From 6e615d022235279bc4a020219626c94858ce9907 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Sat, 10 Oct 2026 10:06:09 -0500
+Subject: [PATCH 20/20] Adapt NuTorch hooks to current startup and Vi APIs
+
+---
+ Cargo.lock                | 149 +++++++++++++++++++-------------------
+ crates/nu-cli/src/repl.rs |  15 +++-
+ 2 files changed, 87 insertions(+), 77 deletions(-)
+
+diff --git a/Cargo.lock b/Cargo.lock
+index ce4a01910df54fe1d4229067cca1d7326c70b932..467c6ae8fcaf5d970b8d3a1898822181224de3be 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -4751,7 +4751,6 @@ dependencies = [
+  "miette 7.6.0",
+  "multipart-rs",
+  "nix 0.31.3",
+- "nu-cli",
+  "nu-cmd-base",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+@@ -4762,7 +4761,6 @@ dependencies = [
+  "nu-engine",
+  "nu-experimental",
+  "nu-explore",
+- "nu-lsp",
+  "nu-mcp",
+  "nu-parser",
+  "nu-path",
+@@ -4782,6 +4780,8 @@ dependencies = [
+  "rstest",
+  "same-file",
+  "serde_json",
++ "shannon-nu-cli",
++ "shannon-nu-lsp",
+  "simplelog",
+  "tango-bench",
+  "tempfile",
+@@ -4798,47 +4798,6 @@ dependencies = [
+  "windows-sys 0.61.2",
+ ]
+ 
+-[[package]]
+-name = "nu-cli"
+-version = "0.116.2"
+-dependencies = [
+- "chrono",
+- "crossterm",
+- "fancy-regex",
+- "is_executable",
+- "log",
+- "lru",
+- "lscolors",
+- "miette 7.6.0",
+- "nu-ansi-term",
+- "nu-cmd-base",
+- "nu-cmd-lang",
+- "nu-color-config",
+- "nu-command",
+- "nu-config",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-path",
+- "nu-plugin-engine",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "parking_lot",
+- "percent-encoding",
+- "reedline",
+- "rstest",
+- "strum",
+- "sysinfo",
+- "tempfile",
+- "unicode-segmentation",
+- "uuid",
+- "which 8.0.6",
+-]
+-
+ [[package]]
+ name = "nu-cmd-base"
+ version = "0.116.2"
+@@ -5208,36 +5167,6 @@ dependencies = [
+  "serde_json",
+ ]
+ 
+-[[package]]
+-name = "nu-lsp"
+-version = "0.116.2"
+-dependencies = [
+- "assert-json-diff",
+- "crossbeam-channel",
+- "fancy-regex",
+- "lsp-server",
+- "lsp-textdocument",
+- "lsp-types",
+- "memchr",
+- "miette 7.6.0",
+- "nu-cli",
+- "nu-cmd-lang",
+- "nu-command",
+- "nu-engine",
+- "nu-experimental",
+- "nu-glob",
+- "nu-parser",
+- "nu-protocol",
+- "nu-std",
+- "nu-test-support",
+- "nu-utils",
+- "nucleo-matcher",
+- "rstest",
+- "serde",
+- "serde_json",
+- "url",
+-]
+-
+ [[package]]
+ name = "nu-mcp"
+ version = "0.116.2"
+@@ -5498,7 +5427,6 @@ dependencies = [
+  "linkme",
+  "miette 7.6.0",
+  "nu-ansi-term",
+- "nu-cli",
+  "nu-cmd-base",
+  "nu-cmd-extra",
+  "nu-cmd-lang",
+@@ -5521,6 +5449,7 @@ dependencies = [
+  "pastey",
+  "rstest",
+  "serde_json",
++ "shannon-nu-cli",
+  "tempfile",
+  "thiserror 2.0.20",
+  "which 8.0.6",
+@@ -7859,7 +7788,6 @@ dependencies = [
+ [[package]]
+ name = "reedline"
+ version = "0.52.1"
+-source = "git+https://github.com/nushell/reedline?branch=main#d704744fcb2ba2b38c3d73598f5df96e9b020114"
+ dependencies = [
+  "arboard",
+  "chrono",
+@@ -8644,6 +8572,77 @@ dependencies = [
+  "jiff",
+ ]
+ 
++[[package]]
++name = "shannon-nu-cli"
++version = "0.116.2"
++dependencies = [
++ "chrono",
++ "crossterm",
++ "fancy-regex",
++ "is_executable",
++ "log",
++ "lru",
++ "lscolors",
++ "miette 7.6.0",
++ "nu-ansi-term",
++ "nu-cmd-base",
++ "nu-cmd-lang",
++ "nu-color-config",
++ "nu-command",
++ "nu-config",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-path",
++ "nu-plugin-engine",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "parking_lot",
++ "percent-encoding",
++ "reedline",
++ "rstest",
++ "strum",
++ "sysinfo",
++ "tempfile",
++ "unicode-segmentation",
++ "uuid",
++ "which 8.0.6",
++]
++
++[[package]]
++name = "shannon-nu-lsp"
++version = "0.116.2"
++dependencies = [
++ "assert-json-diff",
++ "crossbeam-channel",
++ "fancy-regex",
++ "lsp-server",
++ "lsp-textdocument",
++ "lsp-types",
++ "memchr",
++ "miette 7.6.0",
++ "nu-cmd-lang",
++ "nu-command",
++ "nu-engine",
++ "nu-experimental",
++ "nu-glob",
++ "nu-parser",
++ "nu-protocol",
++ "nu-std",
++ "nu-test-support",
++ "nu-utils",
++ "nucleo-matcher",
++ "rstest",
++ "serde",
++ "serde_json",
++ "shannon-nu-cli",
++ "url",
++]
++
+ [[package]]
+ name = "sharded-slab"
+ version = "0.1.7"
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index f1f0ab952028d496b17d29171a169d9e73254563..a4e8f8cb2971cf72b64b1678cc1205ba3f1bd938 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -106,7 +106,6 @@ pub fn evaluate_repl(
+     stack: Stack,
+     prerun_command: Option<Spanned<String>>,
+     load_std_lib: Option<Spanned<String>>,
+-    entire_start_time: Instant,
+     mode_dispatcher: Option<std::sync::Arc<std::sync::Mutex<Box<dyn crate::ModeDispatcher>>>>,
+ ) -> Result<()> {
+     // throughout this code, we hold this stack uniquely.
+@@ -1550,12 +1549,15 @@ pub(crate) fn build_product_keybindings(config: &Config) -> Result<KeybindingsMo
+         KeybindingsMode::Vi {
+             mut insert_keybindings,
+             mut normal_keybindings,
++            mut visual_keybindings,
+         } => {
+             apply_astrohacker_product_keybinding_overrides(&mut insert_keybindings);
+             apply_astrohacker_product_keybinding_overrides(&mut normal_keybindings);
++            apply_astrohacker_product_keybinding_overrides(&mut visual_keybindings);
+             Ok(KeybindingsMode::Vi {
+                 insert_keybindings,
+                 normal_keybindings,
++                visual_keybindings,
+             })
+         }
+         KeybindingsMode::Helix {
+@@ -1590,7 +1592,11 @@ fn setup_keybindings(engine_state: &EngineState, line_editor: Reedline) -> Reedl
+                 normal_keybindings,
+                 visual_keybindings,
+             } => {
+-                let edit_mode = Box::new(Vi::new(insert_keybindings, normal_keybindings, visual_keybindings));
++                let edit_mode = Box::new(Vi::new(
++                    insert_keybindings,
++                    normal_keybindings,
++                    visual_keybindings,
++                ));
+                 line_editor.with_edit_mode(edit_mode)
+             }
+             KeybindingsMode::Helix {
+@@ -2347,9 +2353,11 @@ mod product_keybinding_tests {
+             KeybindingsMode::Vi {
+                 insert_keybindings,
+                 normal_keybindings,
++                visual_keybindings,
+             } => {
+                 assert_baseline_has_clear_screen(&insert_keybindings, "vi insert baseline");
+                 assert_baseline_has_clear_screen(&normal_keybindings, "vi normal baseline");
++                assert_baseline_has_clear_screen(&visual_keybindings, "vi visual baseline");
+             }
+             _other => panic!("expected vi baseline"),
+         }
+@@ -2358,11 +2366,14 @@ mod product_keybinding_tests {
+             KeybindingsMode::Vi {
+                 insert_keybindings,
+                 normal_keybindings,
++                visual_keybindings,
+             } => {
+                 assert_ctrl_l_unbound(&insert_keybindings, "vi insert product");
+                 assert_ctrl_l_unbound(&normal_keybindings, "vi normal product");
++                assert_ctrl_l_unbound(&visual_keybindings, "vi visual product");
+                 assert_hash_not_host_command(&insert_keybindings, "vi insert product");
+                 assert_hash_not_host_command(&normal_keybindings, "vi normal product");
++                assert_hash_not_host_command(&visual_keybindings, "vi visual product");
+             }
+             _other => panic!("expected vi product maps"),
+         }

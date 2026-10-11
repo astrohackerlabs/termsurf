@@ -31,16 +31,12 @@ Released PATH names (machine-readable for gates):
 
 <!-- released-wrappers -->
 termsurf
-ahcalc
-ahnexus
 <!-- /released-wrappers -->
 
 Released payload roots (machine-readable for legal/notice gates; top-level
 paths in the release tarball besides bare CLI binaries):
 
 <!-- released-payload-roots -->
-ahcalc
-ahnexus
 <!-- /released-payload-roots -->
 
 | Command | Role |
@@ -48,8 +44,6 @@ ahnexus
 | `termsurf` | Astrohacker TermSurf (app executable + PATH launcher; named `ahterm` through 0.3.30) |
 | `nutorch` | NuTorch shell, supplied by the separate Homebrew dependency |
 | `roamari` | Open URLs / browser panes in Terminal |
-| `ahcalc` | Scientific calculator TermSurf app (full-pane web UI) |
-| `ahnexus` | Nexus TermSurf chat shell (full-pane web UI + Rust server) |
 
 Reserved (not shipping until the product ships): `ahwallet`.
 
@@ -117,8 +111,7 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - **Legal (authoritative for installed users):**
   `/Applications/Astrohacker TermSurf.app/Contents/Resources/legal/`
   (`LICENSE`, `NOTICE`, `TRADEMARKS.md`, `third_party/...`)
-- PATH: `termsurf`, `roamari`, `ahcalc`,
-  `ahnexus`, engine helpers
+- PATH: `termsurf`, `roamari`, engine helpers
 - Shell dependency: `/opt/homebrew/bin/nutorch`. With no explicit `command`,
   TermSurf selects that path (then `/usr/local/bin/nutorch`), even from a GUI
   launch without Homebrew on PATH. An explicit shell setting takes precedence;
@@ -126,13 +119,12 @@ require `sudo` (helpers are Homebrew `artifact`s).
 - Chromium tree →
   `/opt/homebrew/opt/roamari-chromiumd/`
   (TermSurf may still stage a copy until cask `depends_on`)
-- ahcalc package payload →
-  `/opt/homebrew/opt/astrohacker-terminal-ahcalc/` (when installed as artifact)
-  or under Caskroom stage `ahcalc/` (binary links `ahcalc/dist/ahcalc`)
-- ahnexus package payload →
-  `/opt/homebrew/opt/astrohacker-terminal-ahnexus/` (when installed as artifact)
-  or under Caskroom stage `ahnexus/` (binary links `ahnexus/ahnexus`; SPA in
-  `ahnexus/ui/`)
+- `ahcalc` and `ahnexus` are separate formulas (`brew install ahcalc`,
+  `brew install ahnexus`). TermSurf 0.4.2 was the last release that bundled
+  them; upgrading the cask removes the old `opt/astrohacker-terminal-ahcalc`
+  and `opt/astrohacker-terminal-ahnexus` payloads and links. Upgrade TermSurf
+  before installing the formulas, or their links conflict with the old cask.
+  See [ahcalc release](ahcalc/release.md) and [ahnexus release](ahnexus/release.md).
 ## Release tarball contract
 
 Asset name: `astrohacker-<version>-aarch64-apple-darwin.tar.gz`
@@ -143,12 +135,11 @@ Top-level contents:
   `Contents/Resources/legal/`)
 - `LICENSE`, `NOTICE`, `TRADEMARKS.md` (tarball root mirror of product legal)
 - `legal/`
-- `ahcalc/` (payload: `dist/ahcalc`, `build/client/` SPA, `public/`)
-- `ahnexus/` (payload: `ahnexus` binary + `ui/` Vite SPA)
 
 The archive never contains `roamari`, `roamari-chromiumd` or Chromium,
 Nushell or Reedline files; roamari is a cask dependency and NuTorch a formula
-dependency, each released separately.
+dependency, each released separately. It never contains `ahcalc`, `ahnexus`
+or the retired `ahebx`; ahcalc and ahnexus are independent formulas.
 
 Gate before publish: `scripts/check-release-legal-notices.nu` (NOTICE
 legal-manifest vs released wrappers + payload roots).
@@ -247,18 +238,15 @@ version explicitly. It never invents another recovery version.
 Before confirmation the command performs read-only version, repository, tool,
 and credential discovery. After the operator types the exact confirmation, it:
 
-1. proves or reconstructs the shipped fork inputs, Ghostty and Nexus, from
-   the tracked cumulative patch manifest, before editing any file (the version
-   bump runs `cargo metadata`, which needs `forks/nexus`). It automatically
+1. proves or reconstructs the shipped fork input, Ghostty, from the tracked
+   cumulative patch manifest, before editing any file. It automatically
    upgrades clean checkouts at an exact older prefix of the selected
-   cumulative series. Chromium, Nushell and Reedline are neither prepared nor
-   built;
-2. sets first-party product Cargo package versions to the selected release
-   version (`ahnexus`), refreshes their `Cargo.lock`
-   files, commits that bump on private `main` when needed, and pushes it so
-   the monorepo stays aligned with `origin/main`. This step never rewrites
-   anything under `forks/` (fork trees are out of scope; `termsurf` still gets
-   the release stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`);
+   cumulative series. Nexus (for the separate ahnexus), Chromium, Nushell and
+   Reedline are neither prepared nor built;
+2. refreshes the root `Cargo.lock`. TermSurf has no first-party package
+   versions to stamp, so this commits nothing unless the lock changed. This
+   step never rewrites anything under `forks/`; `termsurf` gets the release
+   stamp from `ASTROHACKER_VERSION` / `TERMSURF_VERSION`;
 3. incrementally builds every shipped component in release mode with one
    version while preserving valid build outputs and caches;
 4. packages one archive and freezes its SHA-256;
@@ -351,7 +339,7 @@ normal operator interface.
    (not version/sha) if needed so the tap is clean for publish.
 
 3. **Full release build** (`scripts/build.nu termsurf` builds only what the
-   archive ships: ahcalc, ahnexus, termsurf; preserve all valid
+   archive ships: the termsurf app; preserve all valid
    incremental build outputs):
 
    ```sh
@@ -362,14 +350,8 @@ normal operator interface.
 
    Version contract:
 
-   - First-party product crate package versions under the monorepo root track the
-     Homebrew release version (`ahnexus`). The
-     canonical command rewrites and commits those manifests before building so
-     `CARGO_PKG_VERSION` matches the cask. It also rewrites the `code/termsurf/ts/ahcalc`
-     `package.json` `"version"` and its `app/cli/embedded-version.ts` stamp to the same X.Y.Z so
-     compile-time stamps match the cask and the post-build tree stays clean.
-     Do not leave that package stuck at a placeholder such as `0.1.0` across
-     releases. Do not rewrite package versions under `forks/`.
+   - TermSurf releases do not change the independent ahcalc and ahnexus
+     versions. Do not rewrite package versions under `forks/`.
    - `TERMSURF_VERSION=<version>` is the `termsurf` app/helper version input.
      `termsurf` is the only shipped wrapper that uses the terminal helper/action
      convention: `termsurf +version` and `termsurf +help`.
@@ -382,8 +364,6 @@ normal operator interface.
      | Wrapper | Expected first line |
      | --- | --- |
      | `roamari --version` | `Roamari <independent X.Y.Z>` |
-     | `ahcalc --version` | `Astrohacker Calculator <version>` |
-     | `ahnexus --version` | `Astrohacker Nexus <version>` |
      | `roamari-chromiumd --version` | `Roamari Chromium Engine <independent X.Y.Z>` |
 
      Runtime/component versions, such as Nushell or browser ABI versions, may be

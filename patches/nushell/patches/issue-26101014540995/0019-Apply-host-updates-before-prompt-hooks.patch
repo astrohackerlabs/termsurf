@@ -1,0 +1,48 @@
+From 1045f6e02209545ef652b9658579e4286697e4b5 Mon Sep 17 00:00:00 2001
+From: "Ryan X. Charles" <ryan@ryanxcharles.com>
+Date: Tue, 15 Sep 2026 18:40:05 -0500
+Subject: [PATCH 19/20] Apply host updates before prompt hooks
+
+---
+ crates/nu-cli/src/mode_dispatcher.rs | 9 +++++++++
+ crates/nu-cli/src/repl.rs            | 7 +++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/crates/nu-cli/src/mode_dispatcher.rs b/crates/nu-cli/src/mode_dispatcher.rs
+index 0734d91389f07bd079effa2342061e4e61e99c8a..40d204a03220a26fb015b82b1b4ca42280c37ce8 100644
+--- a/crates/nu-cli/src/mode_dispatcher.rs
++++ b/crates/nu-cli/src/mode_dispatcher.rs
+@@ -13,6 +13,15 @@ use std::path::PathBuf;
+ /// typed Values) and returns strings. The REPL handles conversion back to
+ /// nushell Values.
+ pub trait ModeDispatcher: Send {
++    /// Apply host-owned updates between evaluations, before user prompt hooks.
++    /// Called only on the REPL thread; default hosts have no pending updates.
++    fn before_prompt(
++        &mut self,
++        _engine: &mut nu_protocol::engine::EngineState,
++        _stack: &mut nu_protocol::engine::Stack,
++    ) {
++    }
++
+     /// Execute a command in the given mode.
+     ///
+     /// - `mode`: the active mode name (e.g., "brush", "ai")
+diff --git a/crates/nu-cli/src/repl.rs b/crates/nu-cli/src/repl.rs
+index 12e1ecefc43d5ff10669b89fa7b216fc178f0cee..f1f0ab952028d496b17d29171a169d9e73254563 100644
+--- a/crates/nu-cli/src/repl.rs
++++ b/crates/nu-cli/src/repl.rs
+@@ -678,6 +678,13 @@ fn loop_iteration(ctx: LoopContext) -> (bool, Stack, Reedline) {
+     engine_state.reset_signals();
+     perf!("reset signals", start_time, use_color);
+ 
++    if let Some(ref dispatcher) = mode_dispatcher {
++        dispatcher
++            .lock()
++            .expect("mode dispatcher mutex")
++            .before_prompt(engine_state, &mut stack);
++    }
++
+     start_time = Instant::now();
+ 
+     // Juhan said to do this :)
